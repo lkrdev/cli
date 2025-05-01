@@ -1,0 +1,306 @@
+import os
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from types import FunctionType
+from typing import List, Self, Tuple
+
+from looker_sdk.rtl import serialize
+from looker_sdk.rtl.api_settings import ApiSettings, SettingsConfig
+from looker_sdk.rtl.auth_session import CryptoHash, OAuthSession
+from looker_sdk.rtl.auth_token import AccessToken
+from looker_sdk.rtl.requests_transport import RequestsTransport
+from looker_sdk.sdk.api40.methods import Looker40SDK
+from pydantic import BaseModel, Field, computed_field
+
+from lkr.constants import OAUTH_CLIENT_ID, OAUTH_REDIRECT_URI
+
+
+class SdkApiSettings(ApiSettings):
+    def __init__(self, base_url: str):
+        self.base_url = base_url
+        super().__init__()
+
+    def read_config(self) -> SettingsConfig:
+        sg = SettingsConfig(
+            base_url=self.base_url,
+            looker_url=self.base_url,
+            client_id=OAUTH_CLIENT_ID,
+            redirect_uri=OAUTH_REDIRECT_URI,
+        )
+        return sg
+
+
+class DbOAuthSession(OAuthSession):
+    def __init__(self, *args, new_token_callback: FunctionType, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.new_token_callback = new_token_callback
+
+    def _login(self, *args, **kwargs):
+        super()._login(*args, **kwargs)
+        self.new_token_callback(self.token)
+
+    def redeem_auth_code(self, *args, **kwargs):
+        super().redeem_auth_code(*args, **kwargs)
+        self.new_token_callback(self.token)
+
+
+def get_auth_session(
+    base_url: str,
+    new_token_callback: FunctionType,
+    *,
+    access_token: AccessToken | None = None,
+) -> OAuthSession:
+    settings = SdkApiSettings(base_url)
+    transport = RequestsTransport.configure(settings)
+    auth = DbOAuthSession(
+        settings=settings,
+        transport=transport,
+        deserialize=serialize.deserialize40,
+        serialize=serialize.serialize40,
+        crypto=CryptoHash(),
+        version="4.0",
+        new_token_callback=new_token_callback,
+    )
+    if access_token:
+        auth.token.set_token(access_token)
+    return auth
+
+
+def init_sdk(
+    base_url: str,
+    new_token_callback: FunctionType,
+    *,
+    access_token: AccessToken | None = None,
+) -> Looker40SDK:
+    """Default dependency configuration"""
+    settings = SdkApiSettings(base_url)
+    settings.is_configured()
+    transport = RequestsTransport.configure(settings)
+    auth = get_auth_session(base_url, new_token_callback, access_token=access_token)
+
+    return Looker40SDK(
+        auth,
+        serialize.deserialize40,
+        serialize.serialize40,
+        transport,
+        "4.0",
+    )
+
+
+class CurrentAuth(BaseModel):
+    instance_name: str
+    access_token: str
+    refresh_token: str
+    refresh_expires_at: str = Field(default_factory=lambda: (datetime.now(timezone.utc) + timedelta(days=30)).isoformat())
+    token_type: str
+    expires_in: int
+    base_url: str
+    from_db: bool = False
+
+    @property
+    def valid_refresh_token(self) -> bool:
+        if not self.refresh_expires_at:
+            return False
+        return datetime.fromisoformat(self.refresh_expires_at).replace(tzinfo=timezone.utc) > (datetime.now(timezone.utc) + timedelta(hours=24))
+
+    @computed_field
+    @property
+    def expires_at(self) -> str:
+        return (datetime.now() + timedelta(seconds=self.expires_in)).isoformat()
+    
+    def __add__(self, other: AccessToken) -> Self:
+        self.access_token = other.access_token
+        self.refresh_token = other.refresh_token
+        self.token_type = other.token_type
+        self.expires_in = other.expires_in
+        self.refresh_expires_at = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+        return self
+
+    @classmethod
+    def from_access_token(
+        cls, *, access_token: AccessToken, instance_name: str, base_url: str
+    ) -> "CurrentAuth":
+        return cls(
+            instance_name=instance_name,
+            access_token=access_token.access_token,
+            refresh_token=access_token.refresh_token,
+            token_type=access_token.token_type,
+            expires_in=access_token.expires_in,
+            base_url=base_url,
+            from_db=False,
+        )
+
+    @classmethod
+    def from_db_row(cls, row: sqlite3.Row) -> "CurrentAuth":
+        expires_in = int(
+            (datetime.fromisoformat(row["expires_at"]) - datetime.now()).total_seconds()
+        )
+        return cls(
+            instance_name=row["instance_name"],
+            access_token=row["access_token"],
+            refresh_token=row["refresh_token"],
+            token_type=row["token_type"],
+            expires_in=max(1, expires_in),
+            refresh_expires_at=row["refresh_expires_at"],
+            base_url=row["base_url"],
+            from_db=True,
+        )
+
+    def to_access_token(self) -> AccessToken:
+        return AccessToken(
+            access_token=self.access_token,
+            refresh_token=self.refresh_token,
+            token_type=self.token_type,
+            expires_in=self.expires_in,
+        )
+
+    def update_refresh_expires_at(self, connection: sqlite3.Connection, commit: bool = True):
+        connection.execute(
+            "UPDATE auth SET refresh_expires_at = ? WHERE instance_name = ?",
+            (self.refresh_expires_at, self.instance_name),
+        )
+        if commit:
+            connection.commit()
+
+    def set_token(
+        self, connection: sqlite3.Connection, *, new_token: AccessToken | None = None, commit: bool = True
+    ):
+        expires_at = (
+            datetime.now() + timedelta(seconds=new_token.expires_in)
+        ).isoformat()
+        refresh_expires_at = (
+            datetime.fromisoformat(expires_at) + timedelta(days=30)
+        ).isoformat()
+        if self.from_db and new_token:
+            connection.execute(
+                "UPDATE auth SET access_token = ?, token_type = ?, expires_at = ? WHERE current_instance = 1",
+                (
+                    new_token.access_token,
+                    new_token.token_type,
+                    expires_at,
+                ),
+            )
+        else:
+            connection.execute(
+                "INSERT INTO auth (instance_name, access_token, refresh_token, refresh_expires_at, token_type, expires_at, current_instance, base_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    self.instance_name,
+                    self.access_token,
+                    self.refresh_token,
+                    refresh_expires_at,
+                    self.token_type,
+                    expires_at,
+                    1,
+                    self.base_url,
+                ),
+            )
+        if commit:
+            connection.commit()
+
+
+class SqlLiteAuth:
+    def __init__(self, db_path: str = "~/.lkr/auth.db"):
+        self.db_path = os.path.expanduser(db_path)
+        # Ensure the directory exists
+        db_dir = os.path.dirname(self.db_path)
+        os.makedirs(db_dir, exist_ok=True)
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS auth (id INTEGER PRIMARY KEY AUTOINCREMENT, instance_name TEXT, access_token TEXT, refresh_token TEXT, refresh_expires_at TEXT, token_type TEXT, expires_at TEXT, current_instance BOOLEAN, base_url TEXT)"
+        )
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_instance_name ON auth(instance_name)"
+        )
+        self.conn.commit()
+        self.auth_session: OAuthSession | None = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        pass
+
+    def add_auth(self, instance_name: str, base_url: str, access_token: AccessToken):
+        self.conn.execute("UPDATE auth SET current_instance = 0")
+        CurrentAuth.from_access_token(
+            access_token=access_token, instance_name=instance_name, base_url=base_url
+        ).set_token(self.conn, commit=False, new_token=access_token)
+        self.conn.commit()
+
+    def set_current_instance(self, instance_name: str):
+        self.conn.execute(
+            "UPDATE auth SET current_instance = CASE WHEN instance_name = ? THEN 1 ELSE 0 END",
+            (instance_name,),
+        )
+        self.conn.commit()
+
+    def get_current_auth(self) -> CurrentAuth | None:
+        cursor = self.conn.execute(
+            "SELECT instance_name, access_token, refresh_token, refresh_expires_at, token_type, expires_at, base_url FROM auth WHERE current_instance = 1"
+        )
+        row = cursor.fetchone()
+        if row:
+            return CurrentAuth.from_db_row(row)
+        return None
+    
+    def check_refresh_token(self) -> bool:
+        current_auth = self.get_current_auth()
+        if current_auth and current_auth.valid_refresh_token:
+            return True
+        return False
+
+    def get_current_sdk(self, prompt_refresh_invalid_token: bool = False) -> Looker40SDK | None:
+        current_auth = self.get_current_auth()
+        if current_auth:
+            if not current_auth.valid_refresh_token:
+                from lkr.exceptions import InvalidRefreshTokenError
+                if prompt_refresh_invalid_token:
+                    self._cli_confirm_refresh_token(current_auth)
+                else:
+                    raise InvalidRefreshTokenError(current_auth.instance_name)
+            def refresh_current_token(token: AccessToken):
+                current_auth.set_token(self.conn, new_token=token, commit=True)
+            return init_sdk(
+                current_auth.base_url, 
+                new_token_callback=refresh_current_token,
+                access_token=current_auth.to_access_token()
+            )
+        return None
+
+    def delete_auth(self, instance_name: str):
+        self.conn.execute("DELETE FROM auth WHERE instance_name = ?", (instance_name,))
+        self.conn.commit()
+
+    def list_auth(self) -> List[Tuple[str, str, bool]]:
+        cursor = self.conn.execute(
+            "SELECT instance_name, base_url, current_instance FROM auth ORDER BY instance_name ASC"
+        )
+        rows = cursor.fetchall()
+        return [
+            (row["instance_name"], row["base_url"], row["current_instance"])
+            for row in rows
+        ]
+    
+    def _cli_confirm_refresh_token(self, current_auth: CurrentAuth):
+        import typer
+        from typer import confirm
+
+        from lkr.auth.oauth import OAuth2PKCE
+        from lkr.exceptions import InvalidRefreshTokenError
+        if confirm(f"Press enter to refresh the token for {current_auth.instance_name}", default=True):
+            def add_auth(token: AccessToken):
+                current_auth + token
+                current_auth.update_refresh_expires_at(self.conn, commit=False)
+                current_auth.set_token(self.conn, commit=True, new_token=token)
+            # Initialize OAuth2 PKCE flow
+            oauth = OAuth2PKCE(new_token_callback=add_auth)
+            login_response = oauth.initiate_login(current_auth.base_url)
+            oauth.auth_code = login_response["auth_code"]
+            token = oauth.exchange_code_for_token()
+            if not token:
+                raise InvalidRefreshTokenError(current_auth.instance_name)
+            else:
+                typer.echo("Successfully refreshed token!")
+                return self.get_current_sdk(prompt_refresh_invalid_token=False)
+
