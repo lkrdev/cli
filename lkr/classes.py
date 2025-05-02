@@ -23,10 +23,13 @@ class LookerApiKey(BaseModel):
         
 class LkrCtxObj(BaseModel):
     api_key: LookerApiKey | None
-
+    force_oauth: bool = False
+    
     @property
     def use_sdk(self) -> Literal["oauth", "api_key"]:
-        return "oauth" if not self.api_key else "api_key"
+        if self.force_oauth:
+            return "oauth"
+        return "api_key" if self.api_key else None
     
     def __init__(self, api_key: LookerApiKey | None = None, *args, **kwargs):
         super().__init__(api_key=api_key, *args, **kwargs)

@@ -16,6 +16,7 @@ from pydash import get
 
 from lkr.classes import LkrCtxObj, LookerApiKey
 from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID, OAUTH_REDIRECT_URI
+from lkr.logging import logger
 
 __all__ = ["get_auth"]
 
@@ -24,7 +25,7 @@ def get_auth(ctx: typer.Context) -> Union["SqlLiteAuth", "ApiKeyAuth"]:
     if not lkr_ctx:
         raise typer.Exit("No Looker context found")
     elif lkr_ctx.use_sdk == "api_key":
-        typer.echo("Using API key authentication")
+        logger.info("Using API key authentication")
         return ApiKeyAuth(lkr_ctx.api_key)
     else:
         return SqlLiteAuth(lkr_ctx)
@@ -320,7 +321,6 @@ class SqlLiteAuth:
         ]
     
     def _cli_confirm_refresh_token(self, current_auth: CurrentAuth):
-        import typer
         from typer import confirm
 
         from lkr.auth.oauth import OAuth2PKCE
@@ -338,7 +338,8 @@ class SqlLiteAuth:
             if not token:
                 raise InvalidRefreshTokenError(current_auth.instance_name)
             else:
-                typer.echo("Successfully refreshed token!")
+                from lkr.logging import logger
+                logger.info(f"Successfully refreshed token for {current_auth.instance_name}")
                 return self.get_current_sdk(prompt_refresh_invalid_token=False)
 
 

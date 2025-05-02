@@ -15,6 +15,7 @@ dependencies = [
     "cryptography>=42.0.0",
     "pick>=2.4.0",
     "pydash>=8.0.5",
+    "structlog>=25.3.0",
 ]
 
 [project.scripts]

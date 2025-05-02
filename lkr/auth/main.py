@@ -9,6 +9,7 @@ from rich.table import Table
 
 from lkr.auth.oauth import OAuth2PKCE
 from lkr.auth_service import get_auth
+from lkr.logging import logger
 
 __all__ = ["group"]
 
@@ -45,28 +46,26 @@ def login(ctx: typer.Context):
     oauth = OAuth2PKCE(new_token_callback=add_auth)
 
     # Open browser for authentication and wait for callback
-    typer.echo(f"Opening browser for authentication at {origin + '/auth'}...")
+    logger.info(f"Opening browser for authentication at {origin + '/auth'}...")
 
     login_response = oauth.initiate_login(origin)
     if login_response["auth_code"]:
-        typer.echo("Successfully received authorization code!")
+        logger.info("Successfully received authorization code!")
         try:
             # Store the auth code in the OAuth instance
             oauth.auth_code = login_response["auth_code"]
             # Exchange the code for tokens
             token = oauth.exchange_code_for_token()
             if token:
-                typer.echo("Successfully authenticated!")
+                logger.info("Successfully authenticated!")
             else:
-                typer.echo("Failed to exchange authorization code for tokens", err=True)
+                logger.error("Failed to exchange authorization code for tokens")
                 raise typer.Exit(1)
         except Exception as e:
-            typer.echo(
-                f"Failed to exchange authorization code for tokens: {str(e)}", err=True
-            )
+            logger.error(f"Failed to exchange authorization code for tokens: {str(e)}")
             raise typer.Exit(1)
     else:
-        typer.echo("Failed to receive authorization code", err=True)
+        logger.error("Failed to receive authorization code")
         raise typer.Exit(1)
 
 
@@ -97,24 +96,24 @@ def logout(
     else:
         instance_name = auth.get_current_instance()
         if not instance_name:
-            typer.echo("No instance currently authenticated", err=True)
+            logger.error("No instance currently authenticated")
             raise typer.Exit(1)
         message = f"Are you sure you want to logout from instance '{instance_name}'?"
 
     if not typer.confirm(message, default=False):
-        typer.echo("Logout cancelled")
+        logger.info("Logout cancelled")
         raise typer.Exit()
 
     if instance_name:   
-        typer.echo(f"Logging out from instance: {instance_name}")
+        logger.info(f"Logging out from instance: {instance_name}")
         auth.delete_auth(instance_name)
     else:
-        typer.echo("Logging out from all instances...")
+        logger.info("Logging out from all instances...")
         all_instances = auth.list_auth()
         for instance in all_instances:
             auth.delete_auth(instance[0])
     # TODO: Implement actual logout logic
-    typer.echo("Logged out successfully!")
+    logger.info("Logged out successfully!")
 
 
 @group.command()
@@ -125,13 +124,12 @@ def whoami(ctx: typer.Context):
     auth = get_auth(ctx)
     sdk = auth.get_current_sdk(prompt_refresh_invalid_token=True)
     if not sdk:
-        typer.echo(
-            "Not currently authenticated - use `lkr auth login` or `lkr auth switch` to authenticate",
-            err=True,
+        logger.error(
+            "Not currently authenticated - use `lkr auth login` or `lkr auth switch` to authenticate"
         )
         raise typer.Exit(1)
     user = sdk.me()
-    typer.echo(
+    logger.info(
         f"Currently authenticated as {user.first_name} {user.last_name} ({user.email}) to {sdk.auth.settings.base_url}"
     )
 
@@ -152,14 +150,14 @@ def switch(
     auth = get_auth(ctx)
     all_instances = auth.list_auth()
     if not all_instances:
-        typer.echo("No authenticated instances found", err=True)
+        logger.error("No authenticated instances found")
         raise typer.Exit(1)
 
     if instance_name:
         # If instance name provided, verify it exists
         instance_names = [name for name, url, current in all_instances]
         if instance_name not in instance_names:
-            typer.echo(f"Instance '{instance_name}' not found", err=True)
+            logger.error(f"Instance '{instance_name}' not found")
             raise typer.Exit(1)
     else:
         # If no instance name provided, show selection menu
@@ -189,7 +187,7 @@ def switch(
     auth.set_current_instance(instance_name)
     sdk = auth.get_current_sdk()
     user = sdk.me()
-    typer.echo(
+    logger.info(
         f"Successfully switched to {instance_name} ({sdk.auth.settings.base_url}) as {user.first_name} {user.last_name} ({user.email})"
     )
 
@@ -203,7 +201,7 @@ def list(ctx: typer.Context):
     auth = get_auth(ctx)
     all_instances = auth.list_auth()
     if not all_instances:
-        typer.echo("No authenticated instances found", err=True)
+        logger.error("No authenticated instances found")
         raise typer.Exit(1)
     table = Table(" ", "Instance", "URL")
     for instance in all_instances:
