@@ -2,6 +2,7 @@ import logging
 import os
 from typing import Literal
 
+import structlog
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.theme import Theme
@@ -42,6 +43,7 @@ logging.basicConfig(
 
 # Create a logger for the application
 logger = logging.getLogger("lkr")
+structured_logger = structlog.get_logger("lkr.structured")
 
 # Configure the requests_transport logger to only show debug messages when LOG_LEVEL is DEBUG
 requests_logger = logging.getLogger("looker_sdk.rtl.requests_transport")
@@ -51,8 +53,6 @@ if log_level != "DEBUG":
 def set_log_level(level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]):
     """Set the logging level for the application."""
     logger.setLevel(getattr(logging, level))
+    structured_logger.setLevel(getattr(logging, level))
     # Update requests_transport logger level based on the new level
     requests_logger.setLevel(logging.DEBUG if level == "DEBUG" else logging.WARNING) 
-
-structured_logger = logging.getLogger("lkr.structured")
-structured_logger.setLevel(logging.DEBUG)

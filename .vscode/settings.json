@@ -6,5 +6,6 @@
             "name": "lookerauth",
             "database": "/Users/bryanweber/.lkr/auth.db"
         }
-    ]
+    ],
+    "python.analysis.typeCheckingMode": "basic"
 }

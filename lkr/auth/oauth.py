@@ -6,9 +6,10 @@ import socketserver
 import threading
 import urllib.parse
 import webbrowser
-from types import FunctionType
 from typing import Optional, TypedDict
 from urllib.parse import parse_qs
+
+from lkr.types import NewTokenCallback
 
 
 def kill_process_on_port(port: int) -> None:
@@ -39,7 +40,7 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
         
         # Store the code in the server instance
         if 'code' in query_components:
-            self.server.auth_code = query_components['code'][0]
+            self.auth_code = query_components['code'][0]
         
         # Display a success message to the user
         self.wfile.write(b"Authentication successful! You can close this window.")
@@ -61,11 +62,11 @@ class LoginResponse(TypedDict):
     code_verifier: Optional[str]
 
 class OAuth2PKCE:
-    def __init__(self, new_token_callback: FunctionType):
+    def __init__(self, new_token_callback: NewTokenCallback):
         from lkr.auth_service import DbOAuthSession
         self.auth_code: Optional[str] = None
         self.state = secrets.token_urlsafe(16)
-        self.new_token_callback: FunctionType = new_token_callback
+        self.new_token_callback: NewTokenCallback = new_token_callback
         self.auth_session: DbOAuthSession | None = None
         self.server_thread: threading.Thread | None = None
         self.server: OAuthCallbackServer | None = None
@@ -113,7 +114,7 @@ class OAuth2PKCE:
         
         
         # Get the authorization code
-        return dict(auth_code=self.server.auth_code, code_verifier=self.auth_session.code_verifier)
+        return LoginResponse(auth_code=self.server.auth_code, code_verifier=self.auth_session.code_verifier)
 
     def exchange_code_for_token(self):
         """
@@ -128,6 +129,8 @@ class OAuth2PKCE:
         """
         if not self.auth_code:
             raise ValueError("No authorization code available. Must call initiate_login first.")
+        if not self.auth_session:
+            raise ValueError("No auth session available. Must call initiate_login first.")
         self.auth_session.redeem_auth_code(self.auth_code, self.auth_session.code_verifier)
         self.cleanup()
         return self.auth_session.token

@@ -1,9 +1,10 @@
 import urllib.parse
-from typing import Annotated, List
+from typing import Annotated, List, Union, cast
 
 import typer
-from looker_sdk.sdk.api40.models import AccessToken
+from looker_sdk.rtl.auth_token import AccessToken, AuthToken
 from pick import Option, pick
+from pydash import get
 from rich.console import Console
 from rich.table import Table
 
@@ -20,7 +21,8 @@ def callback(ctx: typer.Context):
     if ctx.invoked_subcommand == "whoami":
         return
     if ctx.obj['ctx_lkr'].use_sdk == "api_key":
-        raise typer.Exit("API key authentication is not supported for auth commands")
+        logger.error("API key authentication is not supported for auth commands")
+        raise typer.Exit(1)
 
 @group.command()
 def login(ctx: typer.Context):
@@ -40,7 +42,7 @@ def login(ctx: typer.Context):
         "Enter a name for this Looker instance", default=parsed_url.netloc
     )
     auth = get_auth(ctx)
-    def add_auth(token: AccessToken):
+    def add_auth(token: Union[AuthToken, AccessToken]):
         auth.add_auth(instance_name, origin, token)
     # Initialize OAuth2 PKCE flow
     oauth = OAuth2PKCE(new_token_callback=add_auth)
@@ -106,13 +108,12 @@ def logout(
 
     if instance_name:   
         logger.info(f"Logging out from instance: {instance_name}")
-        auth.delete_auth(instance_name)
+        auth.delete_auth(instance_name=instance_name)
     else:
         logger.info("Logging out from all instances...")
         all_instances = auth.list_auth()
         for instance in all_instances:
-            auth.delete_auth(instance[0])
-    # TODO: Implement actual logout logic
+            auth.delete_auth(instance_name=instance[0])
     logger.info("Logged out successfully!")
 
 
@@ -152,7 +153,7 @@ def switch(
     if not all_instances:
         logger.error("No authenticated instances found")
         raise typer.Exit(1)
-
+    
     if instance_name:
         # If instance name provided, verify it exists
         instance_names = [name for name, url, current in all_instances]
@@ -182,10 +183,13 @@ def switch(
             default_index=current_index,
             clear_screen=False,
         )[0]
-        instance_name = picked.value
+        instance_name = cast(str, get(picked, "value"))
     # Switch to selected instance
     auth.set_current_instance(instance_name)
     sdk = auth.get_current_sdk()
+    if not sdk:
+        logger.error("No looker instance currently authenticated")
+        raise typer.Exit(1)
     user = sdk.me()
     logger.info(
         f"Successfully switched to {instance_name} ({sdk.auth.settings.base_url}) as {user.first_name} {user.last_name} ({user.email})"

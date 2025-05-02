@@ -1,14 +1,13 @@
 import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
-from types import FunctionType
 from typing import List, Self, Tuple, Union
 
 import typer
 from looker_sdk.rtl import serialize
 from looker_sdk.rtl.api_settings import ApiSettings, SettingsConfig
 from looker_sdk.rtl.auth_session import AuthSession, CryptoHash, OAuthSession
-from looker_sdk.rtl.auth_token import AccessToken
+from looker_sdk.rtl.auth_token import AccessToken, AuthToken
 from looker_sdk.rtl.requests_transport import RequestsTransport
 from looker_sdk.sdk.api40.methods import Looker40SDK
 from pydantic import BaseModel, Field, computed_field
@@ -17,13 +16,15 @@ from pydash import get
 from lkr.classes import LkrCtxObj, LookerApiKey
 from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID, OAUTH_REDIRECT_URI
 from lkr.logging import logger
+from lkr.types import NewTokenCallback
 
 __all__ = ["get_auth"]
 
 def get_auth(ctx: typer.Context) -> Union["SqlLiteAuth", "ApiKeyAuth"]:
     lkr_ctx = get(ctx, ["obj", "ctx_lkr"])
     if not lkr_ctx:
-        raise typer.Exit("No Looker context found")
+        logger.error("No Looker context found")
+        raise typer.Exit(1)
     elif lkr_ctx.use_sdk == "api_key":
         logger.info("Using API key authentication")
         return ApiKeyAuth(lkr_ctx.api_key)
@@ -32,7 +33,7 @@ def get_auth(ctx: typer.Context) -> Union["SqlLiteAuth", "ApiKeyAuth"]:
 
 
 class ApiKeyApiSettings(ApiSettings):
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: LookerApiKey):
         self.api_key = api_key
         super().__init__()
 
@@ -53,11 +54,12 @@ class OAuthApiSettings(ApiSettings):
             base_url=self.base_url,
             looker_url=self.base_url,
             client_id=OAUTH_CLIENT_ID,
-            redirect_uri=OAUTH_REDIRECT_URI,
+            client_secret="",  # PKCE doesn't need client secret
+            redirect_uri=OAUTH_REDIRECT_URI
         )
 
 class DbOAuthSession(OAuthSession):
-    def __init__(self, *args, new_token_callback: FunctionType, **kwargs):
+    def __init__(self, *args, new_token_callback: NewTokenCallback, **kwargs):
         super().__init__(*args, **kwargs)
         self.new_token_callback = new_token_callback
 
@@ -72,10 +74,10 @@ class DbOAuthSession(OAuthSession):
 
 def get_auth_session(
     base_url: str,
-    new_token_callback: FunctionType,
+    new_token_callback: NewTokenCallback,
     *,
     access_token: AccessToken | None = None,
-) -> OAuthSession:
+) -> DbOAuthSession:
     settings = OAuthApiSettings(base_url)
     transport = RequestsTransport.configure(settings)
     auth = DbOAuthSession(
@@ -92,21 +94,22 @@ def get_auth_session(
     return auth
 
 def init_api_key_sdk(api_key: LookerApiKey) -> Looker40SDK:
+    from looker_sdk.rtl import serialize
     settings = ApiKeyApiSettings(api_key)
     settings.is_configured()
     transport = RequestsTransport.configure(settings)
     return Looker40SDK(
-        AuthSession(settings, transport, serialize.deserialize40, LOOKER_API_VERSION),
-        serialize.deserialize40,
-        serialize.serialize40,
-        transport,
-        LOOKER_API_VERSION,
+        auth = AuthSession(settings, transport, serialize.deserialize40, LOOKER_API_VERSION), # type: ignore
+        deserialize = serialize.deserialize40, # type: ignore
+        serialize = serialize.serialize40, # type: ignore
+        transport = transport,
+        api_version = LOOKER_API_VERSION,
     )
 
 
 def init_oauth_sdk(
     base_url: str,
-    new_token_callback: FunctionType,
+    new_token_callback: NewTokenCallback,
     *,
     access_token: AccessToken | None = None,
 ) -> Looker40SDK:
@@ -117,11 +120,11 @@ def init_oauth_sdk(
     auth = get_auth_session(base_url, new_token_callback, access_token=access_token)
 
     return Looker40SDK(
-        auth,
-        serialize.deserialize40,
-        serialize.serialize40,
-        transport,
-        LOOKER_API_VERSION,
+        auth=auth,
+        deserialize=serialize.deserialize40, # type: ignore
+        serialize=serialize.serialize40, # type: ignore
+        transport=transport,
+        api_version=LOOKER_API_VERSION,
     )
 
 
@@ -146,24 +149,24 @@ class CurrentAuth(BaseModel):
     def expires_at(self) -> str:
         return (datetime.now() + timedelta(seconds=self.expires_in)).isoformat()
     
-    def __add__(self, other: AccessToken) -> Self:
-        self.access_token = other.access_token
-        self.refresh_token = other.refresh_token
-        self.token_type = other.token_type
-        self.expires_in = other.expires_in
+    def __add__(self, other: Union[AccessToken, AuthToken]) -> Self:
+        self.access_token = other.access_token or ""
+        self.refresh_token = other.refresh_token or ""
+        self.token_type = other.token_type or ""    
+        self.expires_in = other.expires_in or 0
         self.refresh_expires_at = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
         return self
 
     @classmethod
     def from_access_token(
-        cls, *, access_token: AccessToken, instance_name: str, base_url: str
+        cls, *, access_token: Union[AccessToken, AuthToken], instance_name: str, base_url: str
     ) -> "CurrentAuth":
         return cls(
             instance_name=instance_name,
-            access_token=access_token.access_token,
-            refresh_token=access_token.refresh_token,
-            token_type=access_token.token_type,
-            expires_in=access_token.expires_in,
+            access_token=access_token.access_token or "",
+            refresh_token=access_token.refresh_token or "",
+            token_type=access_token.token_type or "",
+            expires_in=access_token.expires_in or 0,
             base_url=base_url,
             from_db=False,
         )
@@ -201,10 +204,10 @@ class CurrentAuth(BaseModel):
             connection.commit()
 
     def set_token(
-        self, connection: sqlite3.Connection, *, new_token: AccessToken | None = None, commit: bool = True
+        self, connection: sqlite3.Connection, *, new_token: Union[AccessToken, AuthToken] | None = None, commit: bool = True
     ):
         expires_at = (
-            datetime.now() + timedelta(seconds=new_token.expires_in)
+            datetime.now() + timedelta(seconds=(new_token.expires_in or 0) if new_token else 0)
         ).isoformat()
         refresh_expires_at = (
             datetime.fromisoformat(expires_at) + timedelta(days=30)
@@ -259,7 +262,7 @@ class SqlLiteAuth:
     def __exit__(self, exc_type, exc_value, traceback):
         pass
 
-    def add_auth(self, instance_name: str, base_url: str, access_token: AccessToken):
+    def add_auth(self, instance_name: str, base_url: str, access_token: Union[AuthToken, AccessToken]):
         self.conn.execute("UPDATE auth SET current_instance = 0")
         CurrentAuth.from_access_token(
             access_token=access_token, instance_name=instance_name, base_url=base_url
@@ -297,7 +300,7 @@ class SqlLiteAuth:
                     self._cli_confirm_refresh_token(current_auth)
                 else:
                     raise InvalidRefreshTokenError(current_auth.instance_name)
-            def refresh_current_token(token: AccessToken):
+            def refresh_current_token(token: Union[AccessToken, AuthToken]):
                 current_auth.set_token(self.conn, new_token=token, commit=True)
             return init_oauth_sdk(
                 current_auth.base_url, 
@@ -326,7 +329,7 @@ class SqlLiteAuth:
         from lkr.auth.oauth import OAuth2PKCE
         from lkr.exceptions import InvalidRefreshTokenError
         if confirm(f"Press enter to refresh the token for {current_auth.instance_name}", default=True):
-            def add_auth(token: AccessToken):
+            def add_auth(token: Union[AccessToken, AuthToken]):
                 current_auth + token
                 current_auth.update_refresh_expires_at(self.conn, commit=False)
                 current_auth.set_token(self.conn, commit=True, new_token=token)
@@ -354,10 +357,10 @@ class ApiKeyAuth:
     def __exit__(self, exc_type, exc_value, traceback):
         pass
 
-    def add_auth(self, instance_name: str, base_url: str, access_token: AccessToken):
+    def add_auth(self, instance_name: str, base_url: str, access_token: Union[AuthToken, AccessToken]):
         raise NotImplementedError("ApiKeyAuth does not support adding auth")
 
-    def delete_auth(self):
+    def delete_auth(self, instance_name: str):
         raise NotImplementedError("ApiKeyAuth does not support deleting auth")
     
     def list_auth(self) -> List[Tuple[str, str, bool]]:
@@ -374,3 +377,6 @@ class ApiKeyAuth:
     
     def get_current_sdk(self, **kwargs) -> Looker40SDK:
         return init_api_key_sdk(self.api_key)
+    
+    def get_current_instance(self) -> str | None:
+        raise NotImplementedError("ApiKeyAuth does not support getting current instance")
