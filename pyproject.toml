@@ -1,7 +1,9 @@
 [project]
-name = "lkr"
+name = "lkrclidev"
 version = "0.0.0"
 description = "lkr: a command line interface for looker"
+readme = "README.md"
+license = "MIT"
 authors = [
     { name = "bwebs"}
 ]

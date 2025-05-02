@@ -9,6 +9,7 @@ env:
   SERVICE_NAME: cli
   APP_NAME: lkr-cli
   TAG: ${{ github.event.release.tag_name }}
+  UV_PUBLISH_TOKEN: ${{ secrets.UV_PUBLISH_TOKEN }}
 
 jobs:
   build-and-push:
