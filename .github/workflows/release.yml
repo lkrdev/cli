@@ -68,4 +68,4 @@ jobs:
         run: uv build
 
       - name: uv publish
-        run: uv publish --index lkrdevcli
+        run: uv publish
