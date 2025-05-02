@@ -32,7 +32,3 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["lkr"]
-
-[[tool.uv.index]]
-name = "lkrdevcli"
-explicit = true
