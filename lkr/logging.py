@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.theme import Theme
 
-from lkr.main import LogLevel
+from lkr.types import LogLevel
 
 # Define a custom theme for our logging
 theme = Theme({

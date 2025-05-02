@@ -1,5 +1,5 @@
 [project]
-name = "lkrclidev"
+name = "lkr-dev-cli"
 version = "0.0.0"
 description = "lkr: a command line interface for looker"
 readme = "README.md"
