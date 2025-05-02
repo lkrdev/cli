@@ -8,7 +8,7 @@ env:
   REGION: us-central1
   SERVICE_NAME: cli
   APP_NAME: lkr-cli
-  BUCKET_NAME: ${{ secrets.GCP_BUCKET_NAME }}
+  LOGS_BUCKET_NAME: ${{ secrets.GCP_LOGS_BUCKET_NAME }}
   TAG: ${{ github.event.release.tag_name }}
 
 jobs:
@@ -44,7 +44,7 @@ jobs:
           gcloud builds submit . \
             --project ${{ secrets.GCP_PROJECT_ID }} \
             --tag ${{ env.IMAGE_NAME }}:${{ env.TAG }} \
-            --gcs-log-dir=gs://${{ env.BUCKET_NAME }}/logs
+            --gcs-log-dir=gs://${{ env.LOGS_BUCKET_NAME }}/${{ env.APP_NAME }}
 
       - name: Add latest tag
         run: |
