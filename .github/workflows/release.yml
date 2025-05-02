@@ -29,10 +29,6 @@ jobs:
         run: |
           find . -name "pyproject.toml" -exec sed -i "s/^version = .*/version = \"${{ env.TAG }}\"/" {} +
 
-      - name: Replace version in __init__.py
-        run: |
-          find . -name "__init__.py" -exec sed -i "s/^__version__ = .*/__version__ = \"${{ env.TAG }}\"/" {} +
-
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
