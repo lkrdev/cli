@@ -27,6 +27,7 @@ jobs:
 
       - name: Replace version in pyproject.toml
         run: |
+          cd $GITHUB_WORKSPACE
           sed -i '' "s/^version = .*/version = \"${{ env.TAG }}\"/" pyproject.toml
 
       - name: Authenticate to Google Cloud
