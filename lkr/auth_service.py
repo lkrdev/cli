@@ -2,33 +2,58 @@ import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from types import FunctionType
-from typing import List, Self, Tuple
+from typing import List, Self, Tuple, Union
 
+import typer
 from looker_sdk.rtl import serialize
 from looker_sdk.rtl.api_settings import ApiSettings, SettingsConfig
-from looker_sdk.rtl.auth_session import CryptoHash, OAuthSession
+from looker_sdk.rtl.auth_session import AuthSession, CryptoHash, OAuthSession
 from looker_sdk.rtl.auth_token import AccessToken
 from looker_sdk.rtl.requests_transport import RequestsTransport
 from looker_sdk.sdk.api40.methods import Looker40SDK
 from pydantic import BaseModel, Field, computed_field
+from pydash import get
 
-from lkr.constants import OAUTH_CLIENT_ID, OAUTH_REDIRECT_URI
+from lkr.classes import LkrCtxObj, LookerApiKey
+from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID, OAUTH_REDIRECT_URI
+
+__all__ = ["get_auth"]
+
+def get_auth(ctx: typer.Context) -> Union["SqlLiteAuth", "ApiKeyAuth"]:
+    lkr_ctx = get(ctx, ["obj", "ctx_lkr"])
+    if not lkr_ctx:
+        raise typer.Exit("No Looker context found")
+    elif lkr_ctx.use_sdk == "api_key":
+        typer.echo("Using API key authentication")
+        return ApiKeyAuth(lkr_ctx.api_key)
+    else:
+        return SqlLiteAuth(lkr_ctx)
 
 
-class SdkApiSettings(ApiSettings):
+class ApiKeyApiSettings(ApiSettings):
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        super().__init__()
+
+    def read_config(self) -> SettingsConfig:
+        return SettingsConfig(
+            base_url=self.api_key.base_url,
+            client_id=self.api_key.client_id,
+            client_secret=self.api_key.client_secret,
+        )
+
+class OAuthApiSettings(ApiSettings):
     def __init__(self, base_url: str):
         self.base_url = base_url
         super().__init__()
 
     def read_config(self) -> SettingsConfig:
-        sg = SettingsConfig(
+        return SettingsConfig(
             base_url=self.base_url,
             looker_url=self.base_url,
             client_id=OAUTH_CLIENT_ID,
             redirect_uri=OAUTH_REDIRECT_URI,
         )
-        return sg
-
 
 class DbOAuthSession(OAuthSession):
     def __init__(self, *args, new_token_callback: FunctionType, **kwargs):
@@ -50,7 +75,7 @@ def get_auth_session(
     *,
     access_token: AccessToken | None = None,
 ) -> OAuthSession:
-    settings = SdkApiSettings(base_url)
+    settings = OAuthApiSettings(base_url)
     transport = RequestsTransport.configure(settings)
     auth = DbOAuthSession(
         settings=settings,
@@ -58,22 +83,34 @@ def get_auth_session(
         deserialize=serialize.deserialize40,
         serialize=serialize.serialize40,
         crypto=CryptoHash(),
-        version="4.0",
+        version=LOOKER_API_VERSION,
         new_token_callback=new_token_callback,
     )
     if access_token:
         auth.token.set_token(access_token)
     return auth
 
+def init_api_key_sdk(api_key: LookerApiKey) -> Looker40SDK:
+    settings = ApiKeyApiSettings(api_key)
+    settings.is_configured()
+    transport = RequestsTransport.configure(settings)
+    return Looker40SDK(
+        AuthSession(settings, transport, serialize.deserialize40, LOOKER_API_VERSION),
+        serialize.deserialize40,
+        serialize.serialize40,
+        transport,
+        LOOKER_API_VERSION,
+    )
 
-def init_sdk(
+
+def init_oauth_sdk(
     base_url: str,
     new_token_callback: FunctionType,
     *,
     access_token: AccessToken | None = None,
 ) -> Looker40SDK:
     """Default dependency configuration"""
-    settings = SdkApiSettings(base_url)
+    settings = OAuthApiSettings(base_url)
     settings.is_configured()
     transport = RequestsTransport.configure(settings)
     auth = get_auth_session(base_url, new_token_callback, access_token=access_token)
@@ -83,7 +120,7 @@ def init_sdk(
         serialize.deserialize40,
         serialize.serialize40,
         transport,
-        "4.0",
+        LOOKER_API_VERSION,
     )
 
 
@@ -198,8 +235,9 @@ class CurrentAuth(BaseModel):
             connection.commit()
 
 
+
 class SqlLiteAuth:
-    def __init__(self, db_path: str = "~/.lkr/auth.db"):
+    def __init__(self, ctx: LkrCtxObj, db_path: str = "~/.lkr/auth.db"):
         self.db_path = os.path.expanduser(db_path)
         # Ensure the directory exists
         db_dir = os.path.dirname(self.db_path)
@@ -213,7 +251,6 @@ class SqlLiteAuth:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_instance_name ON auth(instance_name)"
         )
         self.conn.commit()
-        self.auth_session: OAuthSession | None = None
 
     def __enter__(self):
         return self
@@ -235,7 +272,7 @@ class SqlLiteAuth:
         )
         self.conn.commit()
 
-    def get_current_auth(self) -> CurrentAuth | None:
+    def _get_current_auth(self) -> CurrentAuth | None:
         cursor = self.conn.execute(
             "SELECT instance_name, access_token, refresh_token, refresh_expires_at, token_type, expires_at, base_url FROM auth WHERE current_instance = 1"
         )
@@ -243,15 +280,15 @@ class SqlLiteAuth:
         if row:
             return CurrentAuth.from_db_row(row)
         return None
-    
-    def check_refresh_token(self) -> bool:
-        current_auth = self.get_current_auth()
-        if current_auth and current_auth.valid_refresh_token:
-            return True
-        return False
 
+    def get_current_instance(self) -> str | None:
+        current_auth = self._get_current_auth()
+        if current_auth:
+            return current_auth.instance_name
+        return None
+    
     def get_current_sdk(self, prompt_refresh_invalid_token: bool = False) -> Looker40SDK | None:
-        current_auth = self.get_current_auth()
+        current_auth = self._get_current_auth()
         if current_auth:
             if not current_auth.valid_refresh_token:
                 from lkr.exceptions import InvalidRefreshTokenError
@@ -261,7 +298,7 @@ class SqlLiteAuth:
                     raise InvalidRefreshTokenError(current_auth.instance_name)
             def refresh_current_token(token: AccessToken):
                 current_auth.set_token(self.conn, new_token=token, commit=True)
-            return init_sdk(
+            return init_oauth_sdk(
                 current_auth.base_url, 
                 new_token_callback=refresh_current_token,
                 access_token=current_auth.to_access_token()
@@ -304,3 +341,35 @@ class SqlLiteAuth:
                 typer.echo("Successfully refreshed token!")
                 return self.get_current_sdk(prompt_refresh_invalid_token=False)
 
+
+
+class ApiKeyAuth:
+    def __init__(self, api_key: LookerApiKey):
+        self.api_key = api_key
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        pass
+
+    def add_auth(self, instance_name: str, base_url: str, access_token: AccessToken):
+        raise NotImplementedError("ApiKeyAuth does not support adding auth")
+
+    def delete_auth(self):
+        raise NotImplementedError("ApiKeyAuth does not support deleting auth")
+    
+    def list_auth(self) -> List[Tuple[str, str, bool]]:
+        raise NotImplementedError("ApiKeyAuth does not support listing auth")
+    
+    def set_current_instance(self, instance_name: str):
+        raise NotImplementedError("ApiKeyAuth does not support setting current instance")
+
+    def _get_current_auth(self) -> CurrentAuth | None:
+        raise NotImplementedError("ApiKeyAuth does not support getting current auth")
+    
+    def _cli_confirm_refresh_token(self, current_auth: CurrentAuth):
+        raise NotImplementedError("ApiKeyAuth does not support confirming refresh token")
+    
+    def get_current_sdk(self, **kwargs) -> Looker40SDK:
+        return init_api_key_sdk(self.api_key)
