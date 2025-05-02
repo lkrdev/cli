@@ -6,6 +6,7 @@ import typer
 from lkr.auth.main import group as auth_group
 from lkr.classes import LkrCtxObj
 from lkr.logging import logger
+from lkr.types import LogLevel
 
 app = typer.Typer(
     name="lkr", help="LookML Repository CLI", add_completion=True, no_args_is_help=True
@@ -22,7 +23,7 @@ def callback(
         str | None, typer.Option(envvar="LOOKERSDK_CLIENT_SECRET")
     ] = None,
     base_url: Annotated[str | None, typer.Option(envvar="LOOKERSDK_BASE_URL")] = None,
-    log_level: Annotated[str | None, typer.Option(envvar="LOG_LEVEL")] = None,
+    log_level: Annotated[LogLevel | None, typer.Option(envvar="LOG_LEVEL")] = None,
     quiet: Annotated[bool, typer.Option("--quiet")] = False,
     force_oauth: Annotated[bool, typer.Option("--force-oauth")] = False,
 ):
@@ -44,7 +45,7 @@ def callback(
         set_log_level(log_level)
     if quiet:
         from lkr.logging import set_log_level
-        set_log_level("ERROR")
+        set_log_level(LogLevel.ERROR)
 
 
 if __name__ == "__main__":

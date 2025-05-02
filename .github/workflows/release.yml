@@ -1,0 +1,53 @@
+name: Release Docker Image
+
+on:
+  release:
+    types: [created]
+
+env:
+  REGION: us-central1
+  SERVICE_NAME: cli
+  APP_NAME: lkr-cli
+  BUCKET_NAME: ${{ secrets.GCP_BUCKET_NAME }}
+  TAG: ${{ github.event.release.tag_name }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: "read"
+      id-token: "write"
+
+    steps:
+      - name: Set IMAGE_NAME
+        run: echo "IMAGE_NAME=${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.APP_NAME }}/${{ env.SERVICE_NAME }}" >> $GITHUB_ENV
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Replace version in pyproject.toml
+        run: |
+          sed -i '' "s/^version = .*/version = \"${{ env.TAG }}\"/" pyproject.toml
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push Docker image
+        run: |
+          # Build and push the image with both the release tag and latest
+          gcloud builds submit . \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+            --tag ${{ env.IMAGE_NAME }}:${{ env.TAG }} \
+            --gcs-log-dir=gs://${{ env.BUCKET_NAME }}/logs
+
+      - name: Add latest tag
+        run: |
+          gcloud artifacts docker tags add ${{ env.IMAGE_NAME }}:${{ env.TAG }} \
+            ${{ env.IMAGE_NAME }}:latest \
+            --project ${{ secrets.GCP_PROJECT_ID }}

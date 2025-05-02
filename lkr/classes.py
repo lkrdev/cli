@@ -1,7 +1,18 @@
 import os
+from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+
+class LogLevel(str, Enum):
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    CRITICAL = "CRITICAL"
+
+
 
 
 class LookerApiKey(BaseModel):
@@ -13,9 +24,9 @@ class LookerApiKey(BaseModel):
     def from_env(cls):
         try:
             return cls(
-                client_id=os.getenv("LOOKERSDK_CLIENT_ID"),
-                client_secret=os.getenv("LOOKERSDK_CLIENT_SECRET"),
-                base_url=os.getenv("LOOKERSDK_BASE_URL"),
+                client_id=os.environ.get("LOOKERSDK_CLIENT_ID"), # type: ignore
+                client_secret=os.environ.get("LOOKERSDK_CLIENT_SECRET"), # type: ignore
+                base_url=os.environ.get("LOOKERSDK_BASE_URL"), # type: ignore
             )
         except Exception:
             return None
@@ -29,7 +40,7 @@ class LkrCtxObj(BaseModel):
     def use_sdk(self) -> Literal["oauth", "api_key"]:
         if self.force_oauth:
             return "oauth"
-        return "api_key" if self.api_key else None
+        return "api_key" if self.api_key else "oauth"
     
     def __init__(self, api_key: LookerApiKey | None = None, *args, **kwargs):
         super().__init__(api_key=api_key, *args, **kwargs)

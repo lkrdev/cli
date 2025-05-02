@@ -1,11 +1,12 @@
 import logging
 import os
-from typing import Literal
 
 import structlog
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.theme import Theme
+
+from lkr.main import LogLevel
 
 # Define a custom theme for our logging
 theme = Theme({
@@ -50,9 +51,9 @@ requests_logger = logging.getLogger("looker_sdk.rtl.requests_transport")
 if log_level != "DEBUG":
     requests_logger.setLevel(logging.WARNING)
 
-def set_log_level(level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]):
+def set_log_level(level: LogLevel):
     """Set the logging level for the application."""
-    logger.setLevel(getattr(logging, level))
-    structured_logger.setLevel(getattr(logging, level))
+    logger.setLevel(getattr(logging, level.value))
+    structured_logger.setLevel(getattr(logging, level.value))
     # Update requests_transport logger level based on the new level
-    requests_logger.setLevel(logging.DEBUG if level == "DEBUG" else logging.WARNING) 
+    requests_logger.setLevel(logging.DEBUG if level == LogLevel.DEBUG else logging.WARNING) 
