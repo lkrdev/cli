@@ -14,9 +14,9 @@ dependencies = [
     "typer>=0.15.2",
     "requests>=2.31.0",
     "cryptography>=42.0.0",
-    "pick>=2.4.0",
     "pydash>=8.0.5",
     "structlog>=25.3.0",
+    "questionary>=2.1.0",
 ]
 
 [project.scripts]
