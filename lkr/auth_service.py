@@ -23,16 +23,20 @@ from lkr.types import NewTokenCallback
 __all__ = ["get_auth"]
 
 
-def get_auth(ctx: typer.Context) -> Union["SqlLiteAuth", "ApiKeyAuth"]:
-    lkr_ctx = get(ctx, ["obj", "ctx_lkr"])
-    if not lkr_ctx:
-        logger.error("No Looker context found")
-        raise typer.Exit(1)
-    elif lkr_ctx.use_sdk == "api_key":
+def get_auth(ctx: typer.Context | LkrCtxObj) -> Union["SqlLiteAuth", "ApiKeyAuth"]:
+    if isinstance(ctx, LkrCtxObj):
+        lkr_ctx = ctx
+    else:
+        lkr_ctx: LkrCtxObj | None = get(ctx, ["obj", "ctx_lkr"])
+        if not lkr_ctx:
+            logger.error("No Looker context found")
+            raise typer.Exit(1)
+    if lkr_ctx.use_sdk == "api_key" and lkr_ctx.api_key:
         logger.info("Using API key authentication")
         return ApiKeyAuth(lkr_ctx.api_key)
     else:
         return SqlLiteAuth(lkr_ctx)
+
 
 
 class ApiKeyApiSettings(ApiSettings):
@@ -388,7 +392,7 @@ class SqlLiteAuth:
 
     def get_current_sdk(
         self, prompt_refresh_invalid_token: bool = False
-    ) -> Looker40SDK | None:
+    ) -> Looker40SDK:
         current_auth = self._get_current_auth()
         if current_auth:
             if not current_auth.valid_refresh_token:
@@ -399,6 +403,8 @@ class SqlLiteAuth:
                 else:
                     raise InvalidRefreshTokenError(current_auth.instance_name)
 
+
+
             def refresh_current_token(token: Union[AccessToken, AuthToken]):
                 current_auth.set_token(self.conn, new_token=token, commit=True)
 
@@ -407,7 +413,10 @@ class SqlLiteAuth:
                 new_token_callback=refresh_current_token,
                 access_token=current_auth.to_access_token(),
             )
-        return None
+        
+        else:
+            logger.error("No current instance found, please login")
+            raise typer.Exit(1)
 
     def delete_auth(self, instance_name: str):
         self.conn.execute("DELETE FROM auth WHERE instance_name = ?", (instance_name,))

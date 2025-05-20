@@ -62,6 +62,10 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
+      - name: Replace version in pyproject.toml
+        run: |
+          find . -name "pyproject.toml" -exec sed -i "s/^version = .*/version = \"${{ env.TAG }}\"/" {} +
+
       - name: uv sync
         run: uv sync --frozen --no-dev
 
