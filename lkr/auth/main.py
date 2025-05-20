@@ -1,10 +1,9 @@
 import urllib.parse
-from typing import Annotated, List, Union, cast
+from typing import Annotated, List, Union
 
+import questionary
 import typer
 from looker_sdk.rtl.auth_token import AccessToken, AuthToken
-from pick import Option, pick
-from pydash import get
 from rich.console import Console
 from rich.table import Table
 
@@ -25,51 +24,102 @@ def callback(ctx: typer.Context):
         raise typer.Exit(1)
 
 @group.command()
-def login(ctx: typer.Context):
+def login(
+    ctx: typer.Context,
+    instance_name: Annotated[
+        str | None,
+        typer.Option(
+            "-I", "--instance-name", help="Name of the Looker instance to login or switch to"
+        ),
+    ] = None,
+):
     """
-    Login to Looker instance using OAuth2 PKCE flow
+    Login to Looker instance using OAuth2 or switch to an existing authenticated instance
     """
-
-    base_url = typer.prompt("Enter your Looker instance base URL")
-    if not base_url.startswith("http"):
-        base_url = f"https://{base_url}"
-    # Parse the URL and reconstruct it to get the origin (scheme://hostname[:port])
-    parsed_url = urllib.parse.urlparse(base_url)
-    origin = urllib.parse.urlunparse(
-        (parsed_url.scheme, parsed_url.netloc, "", "", "", "")
-    )
-    instance_name = typer.prompt(
-        "Enter a name for this Looker instance", default=parsed_url.netloc
-    )
     auth = get_auth(ctx)
-    def add_auth(token: Union[AuthToken, AccessToken]):
-        auth.add_auth(instance_name, origin, token)
-    # Initialize OAuth2 PKCE flow
-    oauth = OAuth2PKCE(new_token_callback=add_auth)
+    all_instances = auth.list_auth()
+    
+    def do_switch(instance_name: str):
+        auth.set_current_instance(instance_name)
+        sdk = auth.get_current_sdk()
+        if not sdk:
+            logger.error("No looker instance currently authenticated")
+            raise typer.Exit(1)
+        user = sdk.me()
+        workspace = sdk.session()
+        logger.info(
+            f"Successfully switched to {instance_name} ({sdk.auth.settings.base_url}) as {user.first_name} {user.last_name} ({user.email}) in workspace {workspace.workspace_id}"
+        )
 
-    # Open browser for authentication and wait for callback
-    logger.info(f"Opening browser for authentication at {origin + '/auth'}...")
-
-    login_response = oauth.initiate_login(origin)
-    if login_response["auth_code"]:
-        logger.info("Successfully received authorization code!")
-        try:
-            # Store the auth code in the OAuth instance
-            oauth.auth_code = login_response["auth_code"]
-            # Exchange the code for tokens
-            token = oauth.exchange_code_for_token()
-            if token:
-                logger.info("Successfully authenticated!")
-            else:
-                logger.error("Failed to exchange authorization code for tokens")
-                raise typer.Exit(1)
-        except Exception as e:
-            logger.error(f"Failed to exchange authorization code for tokens: {str(e)}")
+    if instance_name:
+        if instance_name in [name for name, u, c, up in all_instances]:
+            do_switch(instance_name)
+            return
+        else:
+            logger.error(f"Instance '{instance_name}' not found")
             raise typer.Exit(1)
     else:
-        logger.error("Failed to receive authorization code")
-        raise typer.Exit(1)
+        options: List[questionary.Choice] = []
+        max_name_length = 0
+        for (name, url, current, up) in all_instances:
+            max_name_length = max(max_name_length, len(name))
+        options = [
+            questionary.Choice(title=f"{name:{max_name_length}} ({url})", value=name, checked=current)
+            for name, url, current, up in all_instances
+        ]
+        options.append(questionary.Choice(title="+ Add new instance", value="_add_new_instance"))
+        picked = questionary.select(
+            "Select instance to login/switch to",
+            choices=options,
+            pointer=">"
+        ).ask()
+        if picked != "_add_new_instance":
+            do_switch(picked)
+            return
+        else:
+            # Login flow for new instance
+            base_url = typer.prompt("Enter your Looker instance base URL")
+            base_url = (base_url or "").strip()
+            if not base_url.startswith("http"):
+                base_url = f"https://{base_url}"
+            parsed_url = urllib.parse.urlparse(base_url)
+            origin = urllib.parse.urlunparse(
+                (parsed_url.scheme, parsed_url.netloc, "", "", "", "")
+            )
+            use_production = typer.confirm("Use production mode?", default=False)
+            instance_name = typer.prompt(
+                "Enter a name for this Looker instance", default=f"{'dev' if not use_production else 'prod'}-{parsed_url.netloc}"
+            )
+            # Ensure instance_name is str, not None
+            assert instance_name is not None, "Instance name must be set before adding auth."
 
+            def auth_callback(token: Union[AuthToken, AccessToken]):
+                auth.add_auth(instance_name, origin, token, use_production)
+            
+            oauth = OAuth2PKCE(
+                new_token_callback=auth_callback,
+                use_production=use_production
+            )
+            logger.info(f"Opening browser for authentication at {origin + '/auth'}...")
+            login_response = oauth.initiate_login(origin)
+
+            if login_response["auth_code"]:
+                logger.info("Successfully received authorization code!")
+                try:
+                    oauth.auth_code = login_response["auth_code"]
+                    token = oauth.exchange_code_for_token()
+                    if token:
+                        logger.info("Successfully authenticated!")
+                    else:
+                        logger.error("Failed to exchange authorization code for tokens")
+                        raise typer.Exit(1)
+                except Exception as e:
+                    logger.error(f"Failed to exchange authorization code for tokens: {str(e)}")
+                    raise typer.Exit(1)
+            else:
+                logger.error("Failed to receive authorization code")
+                raise typer.Exit(1)
+            do_switch(instance_name)
 
 @group.command()
 def logout(
@@ -136,67 +186,6 @@ def whoami(ctx: typer.Context):
 
 
 @group.command()
-def switch(
-    ctx: typer.Context,
-    instance_name: Annotated[
-        str | None,
-        typer.Option(
-            "-I", "--instance-name", help="Name of the Looker instance to switch to"
-        ),
-    ] = None,
-):
-    """
-    Switch to a different authenticated Looker instance
-    """
-    auth = get_auth(ctx)
-    all_instances = auth.list_auth()
-    if not all_instances:
-        logger.error("No authenticated instances found")
-        raise typer.Exit(1)
-    
-    if instance_name:
-        # If instance name provided, verify it exists
-        instance_names = [name for name, url, current in all_instances]
-        if instance_name not in instance_names:
-            logger.error(f"Instance '{instance_name}' not found")
-            raise typer.Exit(1)
-    else:
-        # If no instance name provided, show selection menu
-        current_index = 0
-        instance_names = []
-        options: List[Option] = []
-        max_name_length = 0
-        for index, (name, _, current) in enumerate(all_instances):
-            if current:
-                current_index = index
-            max_name_length = max(max_name_length, len(name))
-            instance_names.append(name)
-        options = [
-            Option(label=f"{name:{max_name_length}} ({url})", value=name)
-            for name, url, _ in all_instances
-        ]
-
-        picked = pick(
-            options,
-            "Select instance to switch to",
-            min_selection_count=1,
-            default_index=current_index,
-            clear_screen=False,
-        )[0]
-        instance_name = cast(str, get(picked, "value"))
-    # Switch to selected instance
-    auth.set_current_instance(instance_name)
-    sdk = auth.get_current_sdk()
-    if not sdk:
-        logger.error("No looker instance currently authenticated")
-        raise typer.Exit(1)
-    user = sdk.me()
-    logger.info(
-        f"Successfully switched to {instance_name} ({sdk.auth.settings.base_url}) as {user.first_name} {user.last_name} ({user.email})"
-    )
-
-
-@group.command()
 def list(ctx: typer.Context):
     """
     List all authenticated Looker instances
@@ -207,9 +196,9 @@ def list(ctx: typer.Context):
     if not all_instances:
         logger.error("No authenticated instances found")
         raise typer.Exit(1)
-    table = Table(" ", "Instance", "URL")
+    table = Table(" ", "Instance", "URL", "Production")
     for instance in all_instances:
-        table.add_row("*" if instance[2] else " ", instance[0], instance[1])
+        table.add_row("*" if instance[2] else " ", instance[0], instance[1], "Yes" if instance[3] else "No")
     console.print(table)
 
 

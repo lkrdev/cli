@@ -4,6 +4,7 @@ import secrets
 import socket
 import socketserver
 import threading
+import time
 import urllib.parse
 import webbrowser
 from typing import Optional, TypedDict
@@ -12,11 +13,12 @@ from urllib.parse import parse_qs
 from lkr.types import NewTokenCallback
 
 
-def kill_process_on_port(port: int) -> None:
+def kill_process_on_port(port: int, retries: int = 5, delay: float = 1) -> None:
     """Kill any process currently using the specified port."""
     try:
         # Try to create a socket binding to check if port is in use
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(('localhost', port))
         sock.close()
         return  # Port is free, no need to kill anything
@@ -26,6 +28,17 @@ def kill_process_on_port(port: int) -> None:
             os.system(f'lsof -ti tcp:{port} | xargs kill -9 2>/dev/null')
         elif os.name == 'nt':  # Windows
             os.system(f'for /f "tokens=5" %a in (\'netstat -aon ^| find ":{port}"\') do taskkill /F /PID %a 2>nul')
+        # After killing, wait for the port to be free
+        for _ in range(retries):
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(('localhost', port))
+                sock.close()
+                return
+            except socket.error:
+                time.sleep(delay)
+        raise RuntimeError(f"Port {port} is still in use after killing process.")
 
 
 class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
@@ -40,7 +53,7 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
         
         # Store the code in the server instance
         if 'code' in query_components:
-            self.auth_code = query_components['code'][0]
+            self.server.auth_code = query_components['code'][0] # type: ignore
         
         # Display a success message to the user
         self.wfile.write(b"Authentication successful! You can close this window.")
@@ -55,14 +68,14 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
 class OAuthCallbackServer(socketserver.TCPServer):
     def __init__(self, server_address):
         super().__init__(server_address, OAuthCallbackHandler)
-        self.auth_code: Optional[str] = None
+        self.auth_code: str | None = None
 
 class LoginResponse(TypedDict):
     auth_code: Optional[str]
     code_verifier: Optional[str]
 
 class OAuth2PKCE:
-    def __init__(self, new_token_callback: NewTokenCallback):
+    def __init__(self, new_token_callback: NewTokenCallback, use_production: bool):
         from lkr.auth_service import DbOAuthSession
         self.auth_code: Optional[str] = None
         self.state = secrets.token_urlsafe(16)
@@ -71,6 +84,7 @@ class OAuth2PKCE:
         self.server_thread: threading.Thread | None = None
         self.server: OAuthCallbackServer | None = None
         self.port: int = 8000
+        self.use_production: bool = use_production
         
     def cleanup(self):
         """Clean up the server and its thread."""
@@ -102,16 +116,15 @@ class OAuth2PKCE:
         self.server_thread = threading.Thread(target=self.server.serve_forever)
         self.server_thread.daemon = True
         self.server_thread.start()
-        
+
         # Construct and open the OAuth URL
-        self.auth_session = get_auth_session(base_url, self.new_token_callback)
+        self.auth_session = get_auth_session(base_url, self.new_token_callback, use_production=self.use_production)
         oauth_url = self.auth_session.create_auth_code_request_url('cors_api', self.state)
         
         webbrowser.open(oauth_url)
         
         # Wait for the callback
         self.server_thread.join()
-        
         
         # Get the authorization code
         return LoginResponse(auth_code=self.server.auth_code, code_verifier=self.auth_session.code_verifier)

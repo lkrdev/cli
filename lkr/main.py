@@ -4,8 +4,9 @@ from typing import Annotated
 import typer
 
 from lkr.auth.main import group as auth_group
-from lkr.classes import LkrCtxObj, LogLevel
+from lkr.classes import LkrCtxObj
 from lkr.logging import logger
+from lkr.types import LogLevel
 
 app = typer.Typer(
     name="lkr", help="LookML Repository CLI", add_completion=True, no_args_is_help=True

@@ -1,18 +1,7 @@
 import os
-from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, Field
-
-
-class LogLevel(str, Enum):
-    DEBUG = "DEBUG"
-    INFO = "INFO"
-    WARNING = "WARNING"
-    ERROR = "ERROR"
-    CRITICAL = "CRITICAL"
-
-
 
 
 class LookerApiKey(BaseModel):
