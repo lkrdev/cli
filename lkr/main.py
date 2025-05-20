@@ -6,6 +6,7 @@ import typer
 from lkr.auth.main import group as auth_group
 from lkr.classes import LkrCtxObj
 from lkr.logging import logger
+from lkr.mcp.main import group as mcp_group
 from lkr.types import LogLevel
 
 app = typer.Typer(
@@ -13,7 +14,7 @@ app = typer.Typer(
 )
 
 app.add_typer(auth_group, name="auth")
-
+app.add_typer(mcp_group, name="mcp")
 
 @app.callback()
 def callback(

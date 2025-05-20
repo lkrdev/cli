@@ -54,6 +54,6 @@ if log_level != "DEBUG":
 def set_log_level(level: LogLevel):
     """Set the logging level for the application."""
     logger.setLevel(getattr(logging, level.value))
-    structured_logger.setLevel(getattr(logging, level.value))
+    logging.getLogger("lkr.structured").setLevel(getattr(logging, level.value))
     # Update requests_transport logger level based on the new level
     requests_logger.setLevel(logging.DEBUG if level == LogLevel.DEBUG else logging.WARNING) 

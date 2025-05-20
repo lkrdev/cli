@@ -17,6 +17,8 @@ dependencies = [
     "pydash>=8.0.5",
     "structlog>=25.3.0",
     "questionary>=2.1.0",
+    "duckdb>=1.2.2",
+    "fastmcp>=2.3.5",
 ]
 
 [project.scripts]
