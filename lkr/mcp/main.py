@@ -118,7 +118,6 @@ def get_spectacles(
     """
     run a spectacles query to validate the changes to the model
     """
-    return [{"test": "foo"}]
     req = SpectaclesRequest(model=model, explore=explore, fields=fields)
     global ctx_lkr
     if not ctx_lkr:
@@ -557,7 +556,6 @@ def search_fully_qualified_names(req: SearchFullyQualifiedNamesRequest) -> List[
     Use lkr to search fully qualified columns which include connection, database, schema, table, column names, and data types
     Returns a list of matching rows with their BM25 scores
     """
-    return [{"test": "foo"}]
     result = conn.execute(
         """
         SELECT 
