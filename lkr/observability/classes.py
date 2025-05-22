@@ -93,6 +93,9 @@ class EventCollector:
 
 
 class ObservabilityCtxObj(BaseModel):
+    event_prefix: str = Field(
+        default="lkr-observability", description="The prefix of the event", min_length=1
+    )
     model_config = ConfigDict(arbitrary_types_allowed=True)
     sdk: LookerSDK | None = Field(
         default=None, description="The SDK to use for the observability", exclude=True
@@ -108,7 +111,13 @@ class ObservabilityCtxObj(BaseModel):
     dashboard_id: str | None = None
 
     def initialize(
-        self, ctx: typer.Context, port: int, host: str, timeout: int | None = None
+        self,
+        ctx: typer.Context,
+        *,
+        event_prefix: str,
+        port: int,
+        host: str,
+        timeout: int | None = None,
     ):
         from lkr.auth_service import get_auth
 
@@ -122,6 +131,8 @@ class ObservabilityCtxObj(BaseModel):
         self.origin = f"http://{host}:{port}"
         if timeout:
             self.timeout = timeout
+        if event_prefix:
+            self.event_prefix = event_prefix
 
     def log_event(self, event: dict[str, Any], event_type: str, session_id: str):
         if session_id not in self.events:
@@ -129,7 +140,7 @@ class ObservabilityCtxObj(BaseModel):
             self.start_at[session_id] = now()
         event_at = now()
         e = LogEvent(
-            event_type=event_type,
+            event_type=":".join([self.event_prefix, event_type]),
             event_at=event_at,
             time_since_start=float(
                 (event_at - self.start_at[session_id]).total_seconds()
