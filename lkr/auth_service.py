@@ -38,11 +38,12 @@ def get_auth(ctx: typer.Context | LkrCtxObj) -> Union["SqlLiteAuth", "ApiKeyAuth
         return SqlLiteAuth(lkr_ctx)
 
 
-
 class ApiKeyApiSettings(ApiSettings):
     def __init__(self, api_key: LookerApiKey):
         self.api_key = api_key
         super().__init__()
+        self.agent_tag = "lkr-cli-api-key"
+        self.headers = {"X-Looker-AppId": "lkr-cli"}
 
     def read_config(self) -> SettingsConfig:
         return SettingsConfig(
@@ -56,6 +57,8 @@ class OAuthApiSettings(ApiSettings):
     def __init__(self, base_url: str):
         self.base_url = base_url
         super().__init__()
+        self.agent_tag = "lkr-cli-oauth"
+        self.headers = {"X-Looker-AppId": "lkr-cli"}
 
     def read_config(self) -> SettingsConfig:
         return SettingsConfig(
@@ -206,7 +209,9 @@ class CurrentAuth(BaseModel):
     @computed_field
     @property
     def expires_at(self) -> str:
-        return (datetime.now(timezone.utc) + timedelta(seconds=self.expires_in)).isoformat()
+        return (
+            datetime.now(timezone.utc) + timedelta(seconds=self.expires_in)
+        ).isoformat()
 
     def __add__(self, other: Union[AccessToken, AuthToken]) -> Self:
         self.access_token = other.access_token or ""
@@ -403,8 +408,6 @@ class SqlLiteAuth:
                 else:
                     raise InvalidRefreshTokenError(current_auth.instance_name)
 
-
-
             def refresh_current_token(token: Union[AccessToken, AuthToken]):
                 current_auth.set_token(self.conn, new_token=token, commit=True)
 
@@ -413,7 +416,7 @@ class SqlLiteAuth:
                 new_token_callback=refresh_current_token,
                 access_token=current_auth.to_access_token(),
             )
-        
+
         else:
             logger.error("No current instance found, please login")
             raise typer.Exit(1)
@@ -443,9 +446,13 @@ class SqlLiteAuth:
         from lkr.auth.oauth import OAuth2PKCE
         from lkr.exceptions import InvalidRefreshTokenError
 
-        confirmed = True if quiet else confirm(
-            f"Press enter to refresh the token for {current_auth.instance_name}",
-            default=True,
+        confirmed = (
+            True
+            if quiet
+            else confirm(
+                f"Press enter to refresh the token for {current_auth.instance_name}",
+                default=True,
+            )
         )
         if confirmed:
 

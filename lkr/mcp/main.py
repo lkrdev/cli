@@ -100,6 +100,12 @@ class SpectaclesRequest(BaseModel):
     ]
 
 
+def get_mcp_sdk(ctx: LkrCtxObj | typer.Context):
+    sdk = get_auth(ctx).get_current_sdk()
+    sdk.auth.settings.agent_tag += "-mcp"
+    return sdk
+
+
 @mcp.tool()
 def get_spectacles(
     model: Annotated[
@@ -129,7 +135,7 @@ def get_spectacles(
     if not ctx_lkr:
         # logger.error("No Looker context found")
         raise typer.Exit(1)
-    sdk = get_auth(ctx_lkr).get_current_sdk()
+    sdk = get_mcp_sdk(ctx_lkr)
     returned_sql = None
     share_url = None
     try:
@@ -160,9 +166,17 @@ SELECT * FROM (
         result = sdk.run_sql_query(
             slug=create_query.slug, result_format="json", download="true"
         )
-        return SpectaclesResponse(success=True, share_url=share_url)
+        return SpectaclesResponse(
+            success=True, share_url=share_url, sql=returned_sql, result=result
+        )
     except Exception as e:
-        return SpectaclesResponse(success=False, error=str(e), share_url=share_url)
+        return SpectaclesResponse(
+            success=False,
+            error=str(e),
+            share_url=share_url,
+            sql=returned_sql,
+            result=result,
+        )
 
 
 def now() -> datetime:
@@ -371,7 +385,7 @@ def populate_looker_connection_search_on_startup(ctx: typer.Context) -> None:
     """
     global current_instance
     # logger.debug("Populating looker connection search")
-    sdk = get_auth(ctx).get_current_sdk()
+    sdk = get_mcp_sdk(ctx)
     if not current_instance:
         # logger.error("No current instance found")
         raise typer.Abort()

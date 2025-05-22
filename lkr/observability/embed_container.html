@@ -40,7 +40,14 @@
 
         // Track which events we've received
         
-        const trackedEvents = new Set(['dashboard:loaded', 'dashboard:run:complete', 'dashboard:tile:complete', 'dashboard:run:start', 'dashboard:tile:start']);
+        const trackedEvents = new Set([
+            'dashboard:loaded', 
+            'dashboard:run:start', 
+            'dashboard:run:complete', 
+            'dashboard:tile:complete', 
+            'dashboard:run:start', 
+            'dashboard:tile:start'
+        ]);
 
         // Listen for Looker embed events
         window.addEventListener('message', function(event) {

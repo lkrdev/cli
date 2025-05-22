@@ -133,6 +133,27 @@ For example:
 ### Logging Events
 `lkr observability embed` will have structured logs to stdout as well as return a JSON object with the events at the end of the request. These can be turned off with the `--quiet` flag. `lkr --quiet observability embed` will not print anything to stdout but still return the logged events in the response body.
 
+- `lkr-observability:health_check_start`: The API has started
+- `lkr-observability:health_check_timeout`: The API has timed out
+- `lkr-observability:health_check_error`: The API has failed wuth an error
+- `lkr-observability:dashboard:loaded`: The dashboard has loaded, based on Looker's `dashboard:loaded` event
+- `lkr-observability:dashboard:run:start`: The dashboard has run started, based on Looker's `dashboard:run:start` event
+- `lkr-observability:dashboard:run:complete`: The dashboard has run complete, based on Looker's `dashboard:run:complete` event
+- `lkr-observability:dashboard:tile:start`: The dashboard tile has started, based on Looker's `dashboard:tile:start` event
+- `lkr-observability:dashboard:tile:complete`: The dashboard tile has completed, based on Looker's `dashboard:tile:complete` event
+
+*Payload*
+- `event_type`: The type of event
+- `event_at`: The time the event occurred
+- `time_since_start`: The time since the session started
+- `payload`: Additional data that may have been returned from the Javascript event
+- `session_id`: The session id, corresponds to a single API request to `GET /health`.
+- `last_event_type`: The type of the last event if there is one
+- `last_event_at`: The time the last event occurred, if there is one
+- `time_since_last_event`: The time since the last event, if there is one
+- `external_user_id`: The external user id of the user who is running the dashboard
+- `dashboard_id`: The id of the dashboard that was run
+
 ### Cloud Run + GCP Health Check example
 
 One of the simplest ways to launch the health check is the `lkr-cli` public docker image, Cloud Run, and the GCP health check service. Here's an example; make sure to change your region, models, user_attributes, and external_user_id.
