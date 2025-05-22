@@ -7,6 +7,7 @@ from lkr.auth.main import group as auth_group
 from lkr.classes import LkrCtxObj
 from lkr.logging import logger
 from lkr.mcp.main import group as mcp_group
+from lkr.observability.main import group as observability_group
 from lkr.types import LogLevel
 
 app = typer.Typer(
@@ -15,6 +16,8 @@ app = typer.Typer(
 
 app.add_typer(auth_group, name="auth")
 app.add_typer(mcp_group, name="mcp")
+app.add_typer(observability_group, name="observability")
+
 
 @app.callback()
 def callback(
@@ -43,9 +46,11 @@ def callback(
     ctx.obj["ctx_lkr"] = LkrCtxObj(force_oauth=force_oauth)
     if log_level:
         from lkr.logging import set_log_level
+
         set_log_level(log_level)
     if quiet:
         from lkr.logging import set_log_level
+
         set_log_level(LogLevel.ERROR)
 
 
