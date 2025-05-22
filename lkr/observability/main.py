@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Annotated
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -157,7 +158,6 @@ def health_check(
         else:
             quoted_url = quote(url.url, safe="")
             embed_url = f"{observability_ctx.origin}/?iframe_url={quoted_url}&session_id={session_id}"
-            print(embed_url)
             if True:
                 driver.get(embed_url)
                 WebDriverWait(driver, observability_ctx.timeout).until(
@@ -218,9 +218,14 @@ def embed(
     timeout: int = typer.Option(
         2 * 60, help="Timeout for the health check", envvar="TIMEOUT"
     ),
+    event_prefix: Annotated[
+        str, typer.Option(help="Event prefix", envvar="EVENT_PREFIX")
+    ] = "lkr-observability",
 ):
     """Start the observability FastAPI server."""
-    observability_ctx.initialize(ctx, port, host, timeout)
+    observability_ctx.initialize(
+        ctx, port=port, host=host, timeout=timeout, event_prefix=event_prefix
+    )
     uvicorn.run(
         "lkr.observability.main:app",
         host=host,

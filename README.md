@@ -8,6 +8,13 @@ The `lkr` cli is a tool for interacting with Looker. It combines Looker's SDK an
 
 Alternatively, you can install `lkr` with `pip install lkr-dev-cli` and use commands directly like `lkr <command>`.
 
+We also have a public docker image that you can use to run `lkr` commands.
+
+```bash
+docker run -it --rm us-central1-docker.pkg.dev/lkr-dev-production/lkr-cli/cli:latest lkr --help
+```
+
+
 ## Login
 
 ### Using OAuth2
@@ -75,6 +82,10 @@ Built into the `lkr` is an MCP server. Right now its tools are based on helping 
     "lkr-mcp": {
       "command": "uv",
       "args": ["run", "--with", "lkr-dev-cli", "lkr", "mcp", "run"]
+    },
+    "lkr-mcp-docker": {
+      "command": "docker",
+      "args": ["run", "--rm", "-it", "us-central1-docker.pkg.dev/lkr-dev-production/lkr-cli/cli:latest", "lkr", "mcp", "run"]
     }
   }
 }
@@ -130,6 +141,8 @@ One of the simplest ways to launch the health check is the `lkr-cli` public dock
 export REGION=<your region>
 export PROJECT=<your project id>
 
+export HEALTH_URL="/health?dashboard_id=1&external_user_id=embed-user-abc&models=thelook&user_attributes={\"store_id\":\"1\"}"
+
 gcloud run deploy lkr-observability \
   --image us-central1-docker.pkg.dev/lkr-dev-production/lkr-cli/cli:latest \
   --command lkr \
@@ -137,27 +150,10 @@ gcloud run deploy lkr-observability \
   --platform managed \
   --region $REGION \ 
   --project $PROJECT \
-  --cpu 1 \
-  --memory 2Gi \
-  --set-env-vars LOOKERSDK_CLIENT_ID=<your client id>,LOOKERSDK_CLIENT_SECRET=<your client secret>,LOOKERSDK_BASE_URL=<your instance url> \
-
-export HEALTH_URL="/health?dashboard_id=1&external_user_id=embed-user-abc&models=thelook&user_attributes={\"store_id\":\"1\"}"
-
-gcloud compute network-endpoint-groups create lkr-observability-neg \
-  --region $REGION \
-  --network-endpoint-type SERVERLESS \
-  --cloud-run-service lkr-observability \
-  --project $PROJECT
-
-gcloud compute health-checks create http lkr-observability-health-check \
-    --request-path $HEALTH_URL \
-    --port 80 \
-    --check-interval 5s \
-    --timeout 15s \
-    --unhealthy-threshold 2 \
-    --healthy-threshold 2 \
-    --project $PROJECT
-
+  --cpu 2 \
+  --memory 4Gi \
+  --liveness-probe httpGet.path=$HEALTH_URL,timeoutSeconds=20,periodSeconds=20 \
+  --set-env-vars LOOKERSDK_CLIENT_ID=<your client id>,LOOKERSDK_CLIENT_SECRET=<your client secret>,LOOKERSDK_BASE_URL=<your instance url> 
 
 
 ```

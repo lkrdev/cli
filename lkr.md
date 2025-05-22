@@ -165,4 +165,5 @@ $ lkr observability embed [OPTIONS]
 * `--host TEXT`: Host to bind to  [env var: HOST; default: 0.0.0.0]
 * `--port INTEGER`: Port to bind to  [env var: PORT; default: 8080]
 * `--timeout INTEGER`: Timeout for the health check  [env var: TIMEOUT; default: 120]
+* `--event-prefix TEXT`: Event prefix  [env var: EVENT_PREFIX; default: lkr-observability]
 * `--help`: Show this message and exit.
