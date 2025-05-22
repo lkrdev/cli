@@ -30,14 +30,20 @@ mcp = FastMCP("lkr:mcp")
 
 group = typer.Typer(name="spectacles")
 
+db_loc: Path | None = None
 
-db_path = os.path.expanduser("~/.lkr")
-db_loc = Path(db_path) / "mcp_search_db"
-db_loc.mkdir(exist_ok=True)
+
+def get_db_loc() -> Path:
+    global db_loc
+    if db_loc is None:
+        db_path = os.path.expanduser("~/.lkr")
+        db_loc = Path(db_path) / "mcp_search_db"
+        db_loc.mkdir(exist_ok=True, parents=True)
+    return db_loc
 
 
 def get_database_search_file(prefix: str = "") -> Path:
-    p = db_loc / f"{prefix + '.' if prefix else ''}looker_connection_search.jsonl"
+    p = get_db_loc() / f"{prefix + '.' if prefix else ''}looker_connection_search.jsonl"
     if not p.exists():
         p.touch()
     return p
@@ -47,7 +53,7 @@ def get_connection_registry_file(
     type: Literal["connection", "database", "schema", "table"], prefix: str = ""
 ) -> Path:
     return (
-        db_loc
+        get_db_loc()
         / f"{prefix + '.' if prefix else ''}looker_connection_registry.{type}.jsonl"
     )
 
@@ -154,13 +160,9 @@ SELECT * FROM (
         result = sdk.run_sql_query(
             slug=create_query.slug, result_format="json", download="true"
         )
-        return SpectaclesResponse(
-            success=True, share_url=share_url
-        )
+        return SpectaclesResponse(success=True, share_url=share_url)
     except Exception as e:
-        return SpectaclesResponse(
-            success=False, error=str(e), share_url=share_url
-        )
+        return SpectaclesResponse(success=False, error=str(e), share_url=share_url)
 
 
 def now() -> datetime:
@@ -630,6 +632,7 @@ def validate_current_instance_database_search_file(ctx: typer.Context) -> None:
         thread.start()
     else:
         pass
+
 
 if __name__ == "__main__":
     current_instance = "d7"

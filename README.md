@@ -1,10 +1,48 @@
 # lkr cli
 
+The `lkr` cli is a tool for interacting with Looker. It combines Looker's SDK and customer logic to interact with Looker in meaninful ways. For a full list of commands, see the full [cli docs](./lkr.md)
+
 ## Usage
 
-`uv` makes everyone's life easier. Go [install it](https://docs.astral.sh/uv/getting-started/installation/). For a full list of commands, see the full [cli docs](./lkr.md)
+`uv` makes everyone's life easier. Go [install it](https://docs.astral.sh/uv/getting-started/installation/). You can start using `lkr` by running `uv run --with lkr-dev-cli lkr --help`.
 
-## Prerequisites
+Alternatively, you can install `lkr` with `pip install lkr-dev-cli` and use commands directly like `lkr <command>`.
+
+## Login
+
+### Using OAuth2
+
+See the [prerequisites section](#prerequisites)
+
+Login to `lkr`
+
+```bash
+uv run --with lkr-dev-cli lkr auth login
+```
+
+- Select a new instance
+- Put the url of your Looker instance (e.g. https://acme.cloud.looker.com)
+- Choose whether you want this login to use production or development mode
+- Give it a name
+
+You will be redirected to the Looker OAuth authorization page, click Allow. If you do not see an allow button, the [prerequisites](#prerequisites) were not done properly.
+
+If everything is successful, you will see `Successfully authenticated!`. Test it with
+
+```bash
+uv run --with lkr-dev-cli lkr auth whoami
+```
+
+### Using API Key
+
+If you provide environment variables for `LOOKERSDK_CLIENT_ID`, `LOOKERSDK_CLIENT_SECRET`, and `LOOKERSDK_BASE_URL`, `lkr` will use the API key to authenticate and the commands.  We also support command line arguments to pass in the client id, client secret, and base url.
+
+```bash
+uv run --with lkr-dev-cli  lkr --client-id <your client id> --client-secret <your client secret> --base-url <your instance url> auth whoami
+```
+
+
+### OAuth2Prerequisites
 
 If this if the first time you're using the Language Server, you'll need to register a new OAuth client to communicate with `lkr` cli.
 
@@ -27,24 +65,6 @@ Go to the Looker API Explorer for Register OAuth App (https://your.looker.instan
 - Check the "I Understand" box and click the Run button
 - This only needs to be done once per instance
 
-## Login
-
-See the [prerequisites section](#prerequisites)
-
-Login to `lkr`
-
-```bash
-uv run --with lkr-dev-cli lkr auth login
-```
-
-- Select a new instance
-- Put the url of your Looker instance (e.g. https://acme.cloud.looker.com)
-- Choose whether you want this login to use production or development mode
-- Give it a name
-
-You will be redirected to the Looker OAuth authorization page, click Allow. If you do not see an allow button, the [prerequisites](#prerequisites) were not done properly.
-
-If everything is successful, you will see `Successfully authenticated!`
 
 ## MCP
 Built into the `lkr` is an MCP server. Right now its tools are based on helping you work within an IDE. To use it a tool like [Cursor](https://www.cursor.com/), add this to your mcp.json
