@@ -19,7 +19,7 @@ docker run -it --rm us-central1-docker.pkg.dev/lkr-dev-production/lkr-cli/cli:la
 
 ### Using OAuth2
 
-See the [prerequisites section](#prerequisites)
+See the [prerequisites section](#oauth2-prerequisites)
 
 Login to `lkr`
 
@@ -49,7 +49,7 @@ uv run --with lkr-dev-cli  lkr --client-id <your client id> --client-secret <you
 ```
 
 
-### OAuth2Prerequisites
+### OAuth2 Prerequisites
 
 If this if the first time you're using the Language Server, you'll need to register a new OAuth client to communicate with `lkr` cli.
 
