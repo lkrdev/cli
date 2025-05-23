@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import typer
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydash import get
 from selenium import webdriver
@@ -17,6 +17,7 @@ from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+from lkr.logging import structured_logger
 from lkr.observability.classes import (
     EmbedSDKObj,
     IframeRequestEvent,
@@ -52,7 +53,17 @@ def get_embed_sdk_obj(
     user_attributes: str = Query(default="{}"),
     secret_id: str = Query(default=None),
 ):
-    user_attributes_dict = json.loads(user_attributes)
+    try:
+        user_attributes_dict = json.loads(user_attributes)
+    except json.JSONDecodeError as e:
+        structured_logger.error(
+            "JSONDecodeError: Invalid user attributes",
+            error=str(e),
+            user_attributes=user_attributes,
+        )
+        return None
+    except Exception:
+        return None
     return EmbedSDKObj(
         dashboard_id=dashboard_id,
         external_user_id=external_user_id,
@@ -122,13 +133,19 @@ def settings():
 
 @app.get("/health")
 def health_check(
-    params: EmbedSDKObj = Depends(get_embed_sdk_obj),
+    request: Request,
+    params: EmbedSDKObj | None = Depends(get_embed_sdk_obj),
     open: bool = Query(default=False),
 ):
     """
     Launch a headless browser, open the embed container, and wait for the completion indicator.
     Returns health status and timing info.
     """
+    if not params:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid parameters: {str(request.query_params)}",
+        )
     session_id = str(uuid4())
     redirect = False
     observability_ctx.external_user_id = params.external_user_id
