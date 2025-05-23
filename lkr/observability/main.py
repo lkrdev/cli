@@ -1,12 +1,15 @@
 import json
 import os
+import sys
 from typing import Annotated
+
+from lkr.logging import structured_logger
 from urllib.parse import quote
 from uuid import uuid4
 
 import typer
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydash import get
 from selenium import webdriver
@@ -24,6 +27,15 @@ from lkr.observability.classes import (
 )
 
 app = FastAPI(title="observability")
+
+@app.exception_handler(ValueError)
+async def value_error_exception_handler(request: Request, exc: ValueError):
+    if str(exc).startswith("Invalid JSON format for user_attributes"):
+        return JSONResponse(
+            status_code=400,
+            content={"detail": str(exc)},
+        )
+    raise exc
 
 DEFAULT_PERMISSIONS = set(
     [
@@ -52,7 +64,11 @@ def get_embed_sdk_obj(
     user_attributes: str = Query(default="{}"),
     secret_id: str = Query(default=None),
 ):
-    user_attributes_dict = json.loads(user_attributes)
+    try:
+        user_attributes_dict = json.loads(user_attributes)
+    except json.JSONDecodeError as e:
+        structured_logger.error(f"Error decoding user_attributes JSON: {user_attributes}, error: {e}")
+        raise ValueError(f"Invalid JSON format for user_attributes: {user_attributes}")
     return EmbedSDKObj(
         dashboard_id=dashboard_id,
         external_user_id=external_user_id,
