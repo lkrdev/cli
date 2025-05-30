@@ -158,13 +158,29 @@ def health_check(
             params.model_dump(mode="json"), "health_check_start", session_id
         )
         chrome_options = Options()
+        chrome_options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
         chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--enable-logging")
+        chrome_options.add_argument("--v=1")
+
+        chrome_options.add_experimental_option(
+            "prefs",
+            {
+                "profile.default_content_settings.cookies": 1,
+                "profile.cookie_controls_mode": 0,
+            },
+        )
         driver = webdriver.Chrome(options=chrome_options)
         url = observability_ctx.sdk.create_sso_embed_url(
             body=params.to_embed_sso_params(
                 observability_ctx.origin, observability_ctx.base_url or ""
             )
+        )
+        observability_ctx.log_event(
+            {"sso_url": url.url}, "create_sso_embed_url", session_id
         )
 
         if not (url and url.url):
@@ -175,11 +191,16 @@ def health_check(
         else:
             quoted_url = quote(url.url, safe="")
             embed_url = f"{observability_ctx.origin}/?iframe_url={quoted_url}&session_id={session_id}"
-            if True:
-                driver.get(embed_url)
-                WebDriverWait(driver, observability_ctx.timeout).until(
-                    EC.presence_of_element_located((By.ID, "completion-indicator"))
-                )
+            driver.get(embed_url)
+            observability_ctx.log_event(
+                {"url": embed_url}, "chromium_driver_get", session_id
+            )
+            WebDriverWait(driver, observability_ctx.timeout).until(
+                EC.presence_of_element_located((By.ID, "completion-indicator"))
+            )
+            observability_ctx.log_event(
+                {"session_id": session_id}, "chromium_driver_get_complete", session_id
+            )
 
     except TimeoutException:
         observability_ctx.log_event(
@@ -209,6 +230,9 @@ def health_check(
             session_id,
         )
     finally:
+        observability_ctx.log_event(
+            {"session_id": session_id}, "health_check_complete", session_id
+        )
         if driver:
             driver.quit()
         if not redirect:

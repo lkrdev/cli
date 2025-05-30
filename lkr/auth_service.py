@@ -20,7 +20,7 @@ from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID, OAUTH_REDIRECT_UR
 from lkr.logging import logger
 from lkr.types import NewTokenCallback
 
-__all__ = ["get_auth"]
+__all__ = ["get_auth", "ApiKeyAuthSession", "DbOAuthSession"]
 
 
 def get_auth(ctx: typer.Context | LkrCtxObj) -> Union["SqlLiteAuth", "ApiKeyAuth"]:
@@ -33,7 +33,7 @@ def get_auth(ctx: typer.Context | LkrCtxObj) -> Union["SqlLiteAuth", "ApiKeyAuth
             raise typer.Exit(1)
     if lkr_ctx.use_sdk == "api_key" and lkr_ctx.api_key:
         logger.info("Using API key authentication")
-        return ApiKeyAuth(lkr_ctx.api_key)
+        return ApiKeyAuth(lkr_ctx.api_key, use_production=lkr_ctx.use_production)
     else:
         return SqlLiteAuth(lkr_ctx)
 
@@ -68,6 +68,36 @@ class OAuthApiSettings(ApiSettings):
             client_secret="",  # PKCE doesn't need client secret
             redirect_uri=OAUTH_REDIRECT_URI,
         )
+
+
+class ApiKeyAuthSession(AuthSession):
+    def __init__(self, *args, use_production: bool, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.use_production = use_production
+
+    def _login(self, *args, **kwargs):
+        super()._login(*args, **kwargs)
+        if not self.use_production:
+            self._switch_to_dev_mode()
+
+    def _switch_to_dev_mode(self):
+        logger.debug("Switching to dev mode")
+        config = self.settings.read_config()
+        if "base_url" in config:
+            url = f"{config['base_url']}/api/{LOOKER_API_VERSION}/session"
+            return self.transport.request(
+                method=HttpMethod.PATCH,
+                path=url,
+                body=json.dumps({"workspace_id": "dev"}).encode("utf-8"),
+                transport_options={
+                    "headers": {
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.token.access_token}",
+                    }
+                },
+            )
+        else:
+            raise ValueError("Base URL not found in settings")
 
 
 class DbOAuthSession(OAuthSession):
@@ -137,18 +167,19 @@ def get_auth_session(
     return auth
 
 
-def init_api_key_sdk(api_key: LookerApiKey) -> Looker40SDK:
+def init_api_key_sdk(api_key: LookerApiKey, use_production: bool) -> Looker40SDK:
     from looker_sdk.rtl import serialize
 
     settings = ApiKeyApiSettings(api_key)
     settings.is_configured()
     transport = RequestsTransport.configure(settings)
     return Looker40SDK(
-        auth=AuthSession(
+        auth=ApiKeyAuthSession(
             settings,
             transport,
             serialize.deserialize40,  # type: ignore
             LOOKER_API_VERSION,
+            use_production=use_production,
         ),
         deserialize=serialize.deserialize40,  # type: ignore
         serialize=serialize.serialize40,  # type: ignore
@@ -395,9 +426,7 @@ class SqlLiteAuth:
             return current_auth.instance_name
         return None
 
-    def get_current_sdk(
-        self, prompt_refresh_invalid_token: bool = False
-    ) -> Looker40SDK:
+    def get_current_sdk(self, prompt_refresh_invalid_token: bool = True) -> Looker40SDK:
         current_auth = self._get_current_auth()
         if current_auth:
             if not current_auth.valid_refresh_token:
@@ -480,8 +509,9 @@ class SqlLiteAuth:
 
 
 class ApiKeyAuth:
-    def __init__(self, api_key: LookerApiKey):
+    def __init__(self, api_key: LookerApiKey, use_production: bool):
         self.api_key = api_key
+        self.use_production = use_production
 
     def __enter__(self):
         return self
@@ -518,7 +548,7 @@ class ApiKeyAuth:
         )
 
     def get_current_sdk(self, **kwargs) -> Looker40SDK:
-        return init_api_key_sdk(self.api_key)
+        return init_api_key_sdk(self.api_key, self.use_production)
 
     def get_current_instance(self) -> str | None:
         raise NotImplementedError(
