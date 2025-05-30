@@ -1,5 +1,5 @@
 import os
-from typing import Annotated
+from typing import Annotated, Optional
 
 import typer
 
@@ -30,6 +30,7 @@ def callback(
     log_level: Annotated[LogLevel | None, typer.Option(envvar="LOG_LEVEL")] = None,
     quiet: Annotated[bool, typer.Option("--quiet")] = False,
     force_oauth: Annotated[bool, typer.Option("--force-oauth")] = False,
+    dev: Annotated[Optional[bool], typer.Option("--dev")] = None,
 ):
     if client_id:
         os.environ["LOOKERSDK_CLIENT_ID"] = client_id
@@ -43,7 +44,16 @@ def callback(
     # Initialize ctx.obj as a dictionary if it's None
     if ctx.obj is None:
         ctx.obj = {}
-    ctx.obj["ctx_lkr"] = LkrCtxObj(force_oauth=force_oauth)
+
+    ctx_obj = LkrCtxObj(
+        force_oauth=force_oauth,
+        use_production=not dev if dev is not None else True,
+    )
+    ctx.obj["ctx_lkr"] = ctx_obj
+    # if the user passes --dev, but lkrCtxObj.use_sdk is oauth, then we need to log a warning saying we're ignoring the --dev flag
+    if dev and ctx_obj.use_sdk == "oauth":
+        logger.warning("Ignoring --dev flag because OAuth token tracks dev/prod mode.")
+
     if log_level:
         from lkr.logging import set_log_level
 

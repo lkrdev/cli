@@ -101,7 +101,7 @@ class SpectaclesRequest(BaseModel):
 
 
 def get_mcp_sdk(ctx: LkrCtxObj | typer.Context):
-    sdk = get_auth(ctx).get_current_sdk()
+    sdk = get_auth(ctx).get_current_sdk(prompt_refresh_invalid_token=False)
     sdk.auth.settings.agent_tag += "-mcp"
     return sdk
 

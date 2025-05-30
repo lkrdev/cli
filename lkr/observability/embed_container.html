@@ -32,10 +32,12 @@
         const urlParams = new URLSearchParams(window.location.search);
         const iframeUrl = urlParams.get('iframe_url');
         const origin = new URL(iframeUrl).origin;
-        console.log(origin)
-        console.log(iframeUrl)
         const sessionId = urlParams.get('session_id');
+        const debug = urlParams.get('debug');
         // Set the iframe source
+        if (debug) {
+            console.log({debug, iframeUrl, origin, sessionId})
+        }
         document.getElementById('looker-iframe').src = iframeUrl;
 
         // Track which events we've received
@@ -55,7 +57,7 @@
                 return;
             }
             const {type, ...data} = JSON.parse(event.data)
-            if (!trackedEvents.has(type)) {
+            if (!trackedEvents.has(type) && !debug) {
                 return;
             }
             if (type) {
@@ -65,6 +67,9 @@
                     event_data: data,
                     timestamp: now.toISOString(),
                 };
+                if (debug) {
+                    console.log(eventData)
+                }
                 // Send event data to the server
                 fetch(`/log_event?session_id=${sessionId}`, {
                     method: 'POST',
