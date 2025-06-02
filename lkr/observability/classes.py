@@ -8,7 +8,7 @@ from looker_sdk.sdk.api40.methods import LookerSDK
 from looker_sdk.sdk.api40.models import EmbedSsoParams
 from pydantic import BaseModel, ConfigDict, Field
 
-from lkr.logging import structured_logger
+from lkr.logger import structured_logger
 
 DEFAULT_PERMISSIONS = [
     "access_data",
@@ -82,14 +82,6 @@ class LogEvent(BaseModel):
     time_since_last_event: float | None = None
     external_user_id: str
     dashboard_id: str
-
-
-class EventCollector:
-    def __init__(self):
-        self.events = []
-
-    def log_event(self, event: dict[str, Any], event_type: str):
-        self.events.append(LogEvent(**event, event_type=event_type))
 
 
 class ObservabilityCtxObj(BaseModel):

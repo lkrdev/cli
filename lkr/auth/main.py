@@ -9,19 +9,21 @@ from rich.table import Table
 
 from lkr.auth.oauth import OAuth2PKCE
 from lkr.auth_service import get_auth
-from lkr.logging import logger
+from lkr.logger import logger
 
 __all__ = ["group"]
 
 group = typer.Typer(name="auth", help="Authentication commands for LookML Repository")
 
+
 @group.callback()
 def callback(ctx: typer.Context):
     if ctx.invoked_subcommand == "whoami":
         return
-    if ctx.obj['ctx_lkr'].use_sdk == "api_key":
+    if ctx.obj["ctx_lkr"].use_sdk == "api_key":
         logger.error("API key authentication is not supported for auth commands")
         raise typer.Exit(1)
+
 
 @group.command()
 def login(
@@ -29,7 +31,9 @@ def login(
     instance_name: Annotated[
         str | None,
         typer.Option(
-            "-I", "--instance-name", help="Name of the Looker instance to login or switch to"
+            "-I",
+            "--instance-name",
+            help="Name of the Looker instance to login or switch to",
         ),
     ] = None,
 ):
@@ -38,7 +42,7 @@ def login(
     """
     auth = get_auth(ctx)
     all_instances = auth.list_auth()
-    
+
     def do_switch(instance_name: str):
         auth.set_current_instance(instance_name)
         sdk = auth.get_current_sdk()
@@ -61,17 +65,19 @@ def login(
     else:
         options: List[questionary.Choice] = []
         max_name_length = 0
-        for (name, url, current, up) in all_instances:
+        for name, url, current, up in all_instances:
             max_name_length = max(max_name_length, len(name))
         options = [
-            questionary.Choice(title=f"{name:{max_name_length}} ({url})", value=name, checked=current)
+            questionary.Choice(
+                title=f"{name:{max_name_length}} ({url})", value=name, checked=current
+            )
             for name, url, current, up in all_instances
         ]
-        options.append(questionary.Choice(title="+ Add new instance", value="_add_new_instance"))
+        options.append(
+            questionary.Choice(title="+ Add new instance", value="_add_new_instance")
+        )
         picked = questionary.select(
-            "Select instance to login/switch to",
-            choices=options,
-            pointer=">"
+            "Select instance to login/switch to", choices=options, pointer=">"
         ).ask()
         if picked != "_add_new_instance":
             do_switch(picked)
@@ -88,17 +94,19 @@ def login(
             )
             use_production = typer.confirm("Use production mode?", default=False)
             instance_name = typer.prompt(
-                "Enter a name for this Looker instance", default=f"{'dev' if not use_production else 'prod'}-{parsed_url.netloc}"
+                "Enter a name for this Looker instance",
+                default=f"{'dev' if not use_production else 'prod'}-{parsed_url.netloc}",
             )
             # Ensure instance_name is str, not None
-            assert instance_name is not None, "Instance name must be set before adding auth."
+            assert instance_name is not None, (
+                "Instance name must be set before adding auth."
+            )
 
             def auth_callback(token: Union[AuthToken, AccessToken]):
                 auth.add_auth(instance_name, origin, token, use_production)
-            
+
             oauth = OAuth2PKCE(
-                new_token_callback=auth_callback,
-                use_production=use_production
+                new_token_callback=auth_callback, use_production=use_production
             )
             logger.info(f"Opening browser for authentication at {origin + '/auth'}...")
             login_response = oauth.initiate_login(origin)
@@ -114,12 +122,15 @@ def login(
                         logger.error("Failed to exchange authorization code for tokens")
                         raise typer.Exit(1)
                 except Exception as e:
-                    logger.error(f"Failed to exchange authorization code for tokens: {str(e)}")
+                    logger.error(
+                        f"Failed to exchange authorization code for tokens: {str(e)}"
+                    )
                     raise typer.Exit(1)
             else:
                 logger.error("Failed to receive authorization code")
                 raise typer.Exit(1)
             do_switch(instance_name)
+
 
 @group.command()
 def logout(
@@ -132,9 +143,7 @@ def logout(
     ] = None,
     all: Annotated[
         bool,
-        typer.Option(
-            "--all", help="Logout from all instances"
-        ),
+        typer.Option("--all", help="Logout from all instances"),
     ] = False,
 ):
     """
@@ -156,7 +165,7 @@ def logout(
         logger.info("Logout cancelled")
         raise typer.Exit()
 
-    if instance_name:   
+    if instance_name:
         logger.info(f"Logging out from instance: {instance_name}")
         auth.delete_auth(instance_name=instance_name)
     else:
@@ -198,7 +207,12 @@ def list(ctx: typer.Context):
         raise typer.Exit(1)
     table = Table(" ", "Instance", "URL", "Production")
     for instance in all_instances:
-        table.add_row("*" if instance[2] else " ", instance[0], instance[1], "Yes" if instance[3] else "No")
+        table.add_row(
+            "*" if instance[2] else " ",
+            instance[0],
+            instance[1],
+            "Yes" if instance[3] else "No",
+        )
     console.print(table)
 
 

@@ -10,7 +10,7 @@ import webbrowser
 from typing import Optional, TypedDict
 from urllib.parse import parse_qs
 
-from lkr.types import NewTokenCallback
+from lkr.custom_types import NewTokenCallback
 
 
 def kill_process_on_port(port: int, retries: int = 5, delay: float = 1) -> None:
@@ -117,10 +117,35 @@ class OAuth2PKCE:
         # Kill any process using port 8000
         kill_process_on_port(self.port)
 
-        # Start the local server
-        self.server = OAuthCallbackServer(("localhost", self.port))
+        # Wait until the port is actually free and we can bind the real server (up to 20 seconds)
+        server_created = False
+        last_exception = None
+        for _ in range(20):  # 20 x 1s = 20s
+            try:
+                self.server = OAuthCallbackServer(("localhost", self.port))
+                server_created = True
+                break
+            except OSError as e:
+                if getattr(e, "errno", None) == 48 or "Address already in use" in str(
+                    e
+                ):
+                    last_exception = e
+                    time.sleep(1)
+                else:
+                    raise
+        if not server_created:
+            import logging
+
+            logging.error(
+                f"Failed to bind to port {self.port} after waiting: {last_exception}"
+            )
+            raise RuntimeError(
+                f"Failed to bind to port {self.port} after waiting: {last_exception}"
+            )
 
         # Start the server in a separate thread
+        if self.server is None:
+            raise RuntimeError("Internal error: server was not created successfully.")
         self.server_thread = threading.Thread(target=self.server.serve_forever)
         self.server_thread.daemon = True
         self.server_thread.start()
@@ -139,6 +164,8 @@ class OAuth2PKCE:
         self.server_thread.join()
 
         # Get the authorization code
+        if self.server is None:
+            raise RuntimeError("Internal error: server was not created successfully.")
         return LoginResponse(
             auth_code=self.server.auth_code,
             code_verifier=self.auth_session.code_verifier,

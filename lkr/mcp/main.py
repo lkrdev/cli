@@ -17,7 +17,7 @@ from pydash import get
 
 from lkr.auth_service import get_auth
 from lkr.classes import LkrCtxObj
-from lkr.logging import logger
+from lkr.logger import logger
 
 __all__ = ["group"]
 
