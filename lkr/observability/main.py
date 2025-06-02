@@ -17,7 +17,7 @@ from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from lkr.logging import structured_logger
+from lkr.logger import structured_logger
 from lkr.observability.classes import (
     EmbedSDKObj,
     IframeRequestEvent,

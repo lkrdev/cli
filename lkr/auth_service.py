@@ -1,24 +1,26 @@
 import json
 import os
 import sqlite3
+import types
 from datetime import datetime, timedelta, timezone
 from typing import List, Self, Tuple, Union
 
+import requests
 import typer
 from looker_sdk.rtl import serialize
 from looker_sdk.rtl.api_settings import ApiSettings, SettingsConfig
 from looker_sdk.rtl.auth_session import AuthSession, CryptoHash, OAuthSession
 from looker_sdk.rtl.auth_token import AccessToken, AuthToken
 from looker_sdk.rtl.requests_transport import RequestsTransport
-from looker_sdk.rtl.transport import HttpMethod
+from looker_sdk.rtl.transport import LOOKER_API_ID, HttpMethod
 from looker_sdk.sdk.api40.methods import Looker40SDK
 from pydantic import BaseModel, Field, computed_field
 from pydash import get
 
 from lkr.classes import LkrCtxObj, LookerApiKey
 from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID, OAUTH_REDIRECT_URI
-from lkr.logging import logger
-from lkr.types import NewTokenCallback
+from lkr.custom_types import NewTokenCallback
+from lkr.logger import logger
 
 __all__ = ["get_auth", "ApiKeyAuthSession", "DbOAuthSession"]
 
@@ -43,7 +45,6 @@ class ApiKeyApiSettings(ApiSettings):
         self.api_key = api_key
         super().__init__()
         self.agent_tag = "lkr-cli-api-key"
-        self.headers = {"X-Looker-AppId": "lkr-cli"}
 
     def read_config(self) -> SettingsConfig:
         return SettingsConfig(
@@ -58,7 +59,6 @@ class OAuthApiSettings(ApiSettings):
         self.base_url = base_url
         super().__init__()
         self.agent_tag = "lkr-cli-oauth"
-        self.headers = {"X-Looker-AppId": "lkr-cli"}
 
     def read_config(self) -> SettingsConfig:
         return SettingsConfig(
@@ -151,7 +151,7 @@ def get_auth_session(
     access_token: AccessToken | None = None,
 ) -> DbOAuthSession:
     settings = OAuthApiSettings(base_url)
-    transport = RequestsTransport.configure(settings)
+    transport = MonkeyPatchTransport.configure(settings)
     auth = DbOAuthSession(
         settings=settings,
         transport=transport,
@@ -188,6 +188,29 @@ def init_api_key_sdk(api_key: LookerApiKey, use_production: bool) -> Looker40SDK
     )
 
 
+# monkey patch to remove the LOOKER_API_ID header when exchanging the code for a token
+def monkey_patch_prepare_request(session: requests.Session):
+    original_prepare_request = session.prepare_request
+
+    def prepare_request(self, request, *args, **kwargs):
+        x = original_prepare_request(request, *args, **kwargs)
+        if (
+            x.headers.get(LOOKER_API_ID)
+            and x.path_url.endswith("/api/token")
+            and request.method == "POST"
+        ):
+            x.headers.pop(LOOKER_API_ID)
+        return x
+
+    session.prepare_request = types.MethodType(prepare_request, session)
+
+
+class MonkeyPatchTransport(RequestsTransport):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        monkey_patch_prepare_request(self.session)
+
+
 def init_oauth_sdk(
     base_url: str,
     new_token_callback: NewTokenCallback,
@@ -198,7 +221,8 @@ def init_oauth_sdk(
     """Default dependency configuration"""
     settings = OAuthApiSettings(base_url)
     settings.is_configured()
-    transport = RequestsTransport.configure(settings)
+    transport = MonkeyPatchTransport.configure(settings)
+
     auth = get_auth_session(
         base_url,
         new_token_callback,
@@ -500,7 +524,7 @@ class SqlLiteAuth:
             if not token:
                 raise InvalidRefreshTokenError(current_auth.instance_name)
             else:
-                from lkr.logging import logger
+                from lkr.logger import logger
 
                 logger.info(
                     f"Successfully refreshed token for {current_auth.instance_name}"
