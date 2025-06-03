@@ -8,6 +8,13 @@ from rich.theme import Theme
 
 from lkr.custom_types import LogLevel
 
+structlog.configure(
+    processors=[
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer(),
+    ]
+)
+
 # Define a custom theme for our logging
 theme = Theme(
     {
@@ -49,6 +56,7 @@ logging.basicConfig(
 # Create a logger for the application
 logger = logging.getLogger("lkr")
 structured_logger = structlog.get_logger("lkr.structured")
+
 
 # Configure the requests_transport logger to only show debug messages when LOG_LEVEL is DEBUG
 requests_logger = logging.getLogger("looker_sdk.rtl.requests_transport")
