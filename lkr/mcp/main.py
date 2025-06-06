@@ -1,23 +1,37 @@
 # server.py
-import os
 import threading
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any, Callable, List, Literal, Self, Set
+from typing import Annotated, List, Literal, Self, Set
 
 import duckdb
 import typer
-from fastmcp import FastMCP
 from looker_sdk.sdk.api40.models import (
     SqlQueryCreate,
     WriteQuery,
 )
-from pydantic import BaseModel, Field, computed_field
+from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, Field
 from pydash import get
 
 from lkr.auth_service import get_auth
 from lkr.classes import LkrCtxObj
 from lkr.logger import logger
+from lkr.mcp.classes import (
+    Connection,
+    Database,
+    Row,
+    Schema,
+    SpectaclesRequest,
+    SpectaclesResponse,
+    Table,
+)
+from lkr.mcp.utils import (
+    conn_registry_path,
+    get_connection_registry_file,
+    get_database_search_file,
+    ok,
+)
 
 __all__ = ["group"]
 
@@ -28,34 +42,7 @@ ctx_lkr: LkrCtxObj | None = None
 # Create an MCP server
 mcp = FastMCP("lkr:mcp")
 
-group = typer.Typer(name="spectacles")
-
-db_loc: Path | None = None
-
-
-def get_db_loc() -> Path:
-    global db_loc
-    if db_loc is None:
-        db_path = os.path.expanduser("~/.lkr")
-        db_loc = Path(db_path) / "mcp_search_db"
-        db_loc.mkdir(exist_ok=True, parents=True)
-    return db_loc
-
-
-def get_database_search_file(prefix: str = "") -> Path:
-    p = get_db_loc() / f"{prefix + '.' if prefix else ''}looker_connection_search.jsonl"
-    if not p.exists():
-        p.touch()
-    return p
-
-
-def get_connection_registry_file(
-    type: Literal["connection", "database", "schema", "table"], prefix: str = ""
-) -> Path:
-    return (
-        get_db_loc()
-        / f"{prefix + '.' if prefix else ''}looker_connection_registry.{type}.jsonl"
-    )
+group = typer.Typer()
 
 
 # Initialize DuckDB connection
@@ -66,38 +53,6 @@ conn.execute("INSTALL 'fts'")
 conn.execute("LOAD 'fts'")
 conn.execute("INSTALL 'json'")
 conn.execute("LOAD 'json'")
-
-
-class SpectaclesResponse(BaseModel):
-    success: bool
-    result: Any | None = None
-    error: str | None = None
-    sql: str | None = None
-    share_url: str | None = None
-
-
-class SpectaclesRequest(BaseModel):
-    model: Annotated[
-        str,
-        Field(
-            description="the model to run a test query against, you can find this by the filenames in the repository, they will end with .model.lkml. You should not pass in the .model.lkml extension.",
-            default="",
-        ),
-    ]
-    explore: Annotated[
-        str,
-        Field(
-            description="the explore to run a test query against, you can find this by finding explore: <name> {} in any file in the repository",
-            default="",
-        ),
-    ]
-    fields: Annotated[
-        List[str],
-        Field(
-            description="this should be the list of fields you want to return from the test query. If the user does not provide them, use all that have changed in your current context",
-            default=[],
-        ),
-    ]
 
 
 def get_mcp_sdk(ctx: LkrCtxObj | typer.Context):
@@ -179,85 +134,6 @@ SELECT * FROM (
         )
 
 
-def now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-class Connection(BaseModel):
-    connection: str
-    updated_at: datetime = Field(default_factory=now)
-
-    @computed_field(return_type=str)
-    @property
-    def fully_qualified_name(self) -> str:
-        return self.connection
-
-
-class Database(Connection):
-    database: str
-
-    @computed_field(return_type=str)
-    @property
-    def fully_qualified_name(self) -> str:
-        return f"{self.connection}.{self.database}"
-
-
-class Schema(Database):
-    database_schema_name: str
-
-    @computed_field(return_type=str)
-    @property
-    def fully_qualified_name(self) -> str:
-        return f"{self.connection}.{self.database}.{self.database_schema_name}"
-
-
-class Table(Schema):
-    database_table_name: str
-
-    @computed_field(return_type=str)
-    @property
-    def fully_qualified_name(self) -> str:
-        return f"{self.connection}.{self.database}.{self.database_schema_name}.{self.database_table_name}"
-
-
-class Row(Table):
-    database_column_name: str
-    data_type_database: str
-    data_type_looker: str
-
-    @computed_field(return_type=str)
-    @property
-    def fully_qualified_name(self) -> str:
-        return f"{self.connection}.{self.database}.{self.database_schema_name}.{self.database_table_name}.{self.database_column_name}"
-
-    def append(self, base_url: str) -> None:
-        with open(get_database_search_file(base_url), "a") as f:
-            f.write(self.model_dump_json() + "\n")
-
-    def exists(self, base_url: str) -> bool:
-        columns = conn.execute(
-            f"SELECT * FROM read_json_auto('{get_database_search_file(base_url)}') WHERE fully_qualified_name = '{self.fully_qualified_name}'"
-        ).fetchall()
-        return len(columns) > 0
-
-
-def ok[T](func: Callable[[], T], default: T) -> T:
-    try:
-        return func()
-    except Exception:
-        # logger.error(f"Error in {func.__name__}: {str(e)}")
-        return default
-
-
-def conn_registry_path(
-    type: Literal["connection", "database", "schema", "table"], prefix: str = ""
-) -> Path:
-    file_loc = get_connection_registry_file(type, prefix)
-    if not file_loc.exists():
-        file_loc.touch()
-    return file_loc
-
-
 class ConnectionRegistry(BaseModel):
     connections: Set[str]
     databases: Set[str]
@@ -301,7 +177,7 @@ class ConnectionRegistry(BaseModel):
 
     def load_connections(self, dt_filter: datetime | None = None) -> None:
         file = conn_registry_path("connection", self.prefix)
-        # logger.debug(f"Loading connections from {file}")
+        logger.debug(f"Loading connections from {file}")
         sql = f"SELECT connection FROM read_json_auto('{file}')"
         if dt_filter:
             sql += f" WHERE updated_at > '{dt_filter.isoformat()}'"
@@ -310,8 +186,8 @@ class ConnectionRegistry(BaseModel):
             for row in results:
                 connection = Connection(connection=row[0])
                 self.connections.add(connection.fully_qualified_name)
-        except Exception:
-            # logger.error(f"Error loading connections from {file}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error loading connections from {file}: {str(e)}")
             return
 
     def load_databases(self, dt_filter: datetime | None = None) -> None:
@@ -324,8 +200,8 @@ class ConnectionRegistry(BaseModel):
             for row in results:
                 database = Database(connection=row[0], database=row[1])
                 self.databases.add(database.fully_qualified_name)
-        except Exception:
-            # logger.error(f"Error loading databases from {file}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error loading databases from {file}: {str(e)}")
             return
 
     def load_schemas(self, dt_filter: datetime | None = None) -> None:
@@ -340,8 +216,8 @@ class ConnectionRegistry(BaseModel):
                     connection=row[0], database=row[1], database_schema_name=row[2]
                 )
                 self.schemas.add(schema.fully_qualified_name)
-        except Exception:
-            # logger.error(f"Error loading schemas from {file}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error loading schemas from {file}: {str(e)}")
             return
 
     def load_tables(self, dt_filter: datetime | None = None) -> None:
@@ -359,8 +235,8 @@ class ConnectionRegistry(BaseModel):
                     database_table_name=row[3],
                 )
                 self.tables.add(table.fully_qualified_name)
-        except Exception:
-            # logger.error(f"Error loading tables from {file}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error loading tables from {file}: {str(e)}")
             return
 
     @classmethod
@@ -387,27 +263,31 @@ def populate_looker_connection_search_on_startup(ctx: typer.Context) -> None:
     # logger.debug("Populating looker connection search")
     sdk = get_mcp_sdk(ctx)
     if not current_instance:
-        # logger.error("No current instance found")
-        raise typer.Abort()
-    registry = ConnectionRegistry.initialize(prefix=current_instance)
+        logger.error("No current instance found")
+        return
+    url_from_instance = sdk.auth.settings.base_url
+    logger.debug(
+        f"Populating looker connection search for {url_from_instance} from {current_instance}"
+    )
+    registry = ConnectionRegistry.initialize(prefix=url_from_instance)
     connections = ok(lambda: sdk.all_connections(), [])
     for connection in connections:
         if not connection.name:
             continue
         elif registry.check("connection", connection.name):
-            # logger.debug(
-            #     f"Skipping {connection.name} because it already exists in the registry"
-            # )
+            logger.debug(
+                f"Skipping {connection.name} because it already exists in the registry"
+            )
             continue
-        # logger.debug(f"Populating looker connection search for {connection.name}")
+        logger.debug(f"Populating looker connection search for {connection.name}")
         databases = ok(lambda: sdk.connection_databases(connection.name or ""), [])
         for database in databases:
             if registry.check("database", database):
-                # logger.debug(
-                #     f"Skipping {database} because it already exists in the registry"
-                # )
+                logger.debug(
+                    f"Skipping {database} because it already exists in the registry"
+                )
                 continue
-            # logger.debug(f"Populating looker connection search for {database}")
+            logger.debug(f"Populating looker connection search for {database}")
             schemas = ok(
                 lambda: sdk.connection_schemas(
                     connection.name or "", database, cache=True, fields="name"
@@ -559,22 +439,48 @@ def load_database_search_file(file_loc: Path) -> None:
     )
 
 
-class SearchFullyQualifiedNamesRequest(BaseModel):
-    search_term: str = Field(
-        description="The search term to search for within the fully qualified column name. It will be converted to lowercase before searching. The fully quallified column name incluses database, schema, table, and column names."
-    )
-
-
 # Add a dynamic greeting resource
 @mcp.tool()
-def search_fully_qualified_names(req: SearchFullyQualifiedNamesRequest) -> List[dict]:
+def search_fully_qualified_names(
+    search_term: Annotated[
+        str,
+        Field(
+            description="The search term to search for within the fully qualified column name. It will be converted to lowercase before searching. The fully quallified column name incluses database, schema, table, and column names.",
+            min_length=1,
+        ),
+    ],
+    database_filter: Annotated[
+        str | None,
+        Field(
+            description="The database to search for within the fully qualified column name. It will be converted to lowercase before searching. The fully quallified column name incluses database, schema, table, and column names. If not provided, all databases will be searched. This is synonymous with BigQuery's projects.",
+        ),
+    ],
+    schema_filter: Annotated[
+        str | None,
+        Field(
+            description="The schema to search for within the fully qualified column name. It will be converted to lowercase before searching. The fully quallified column name incluses database, schema, table, and column names. If not provided, all schemas will be searched. This is synonymous with BigQuery's datasets",
+        ),
+    ],
+    table_filter: Annotated[
+        str | None,
+        Field(
+            description="The table to search for within the fully qualified column name. It will be converted to lowercase before searching. The fully quallified column name incluses database, schema, table, and column names. If not provided, all tables will be searched.",
+        ),
+    ],
+    limit: Annotated[
+        int,
+        Field(
+            description="The number of results to return. If not provided, the default is 10000.",
+            default=100,
+        ),
+    ],
+) -> List[Row]:
     """
     Use lkr to search fully qualified columns which include connection, database, schema, table, column names, and data types
-    Returns a list of matching rows with their BM25 scores
+    Returns a list of matching rows with their BM25 scores. If no database, schema, or table is provided, all will be searched. When specified together, databsae, scema and table are filtered together using an AND.
     """
-    result = conn.execute(
-        """
-        SELECT 
+    sql = """
+    SELECT 
           connection, 
           database, 
           database_schema_name, 
@@ -584,15 +490,30 @@ def search_fully_qualified_names(req: SearchFullyQualifiedNamesRequest) -> List[
           data_type_looker, 
           fts_main_looker_connection_search.match_bm25(
             fully_qualified_name,
-            ?
+            $search_term
           ) AS score
         FROM looker_connection_search
         WHERE score IS NOT NULL
-        ORDER BY score DESC
-        LIMIT 10000
-        """,
-        [req.search_term.lower()],
-        # [search_term, connections, databases, schemas, tables],
+    """
+    params = dict(
+        search_term=search_term.lower(),
+        limit=limit,
+    )
+    if database:
+        sql += " AND database = $database"
+        params["database"] = database
+    if schema:
+        sql += " AND database_schema_name = $schema"
+        params["schema"] = schema
+    if table:
+        sql += " AND database_table_name = $table"
+        params["table"] = table
+    sql += " ORDER BY score DESC LIMIT $limit"
+    logger.debug(f"Executing SQL: {sql}")
+    logger.debug(f"Params: {params}")
+    result = conn.execute(
+        sql,
+        params,
     ).fetchall()
     return [
         Row(
@@ -603,20 +524,31 @@ def search_fully_qualified_names(req: SearchFullyQualifiedNamesRequest) -> List[
             database_column_name=row[4],
             data_type_database=row[5],
             data_type_looker=row[6],
-        ).model_dump()
+        )
         for row in result
     ]
 
 
-@group.callback()
-def main(ctx: typer.Context):
-    global ctx_lkr
-    ctx_lkr = LkrCtxObj(force_oauth=False)
-    validate_current_instance_database_search_file(ctx)
-
-
 @group.command(name="run")
-def run():
+def run(
+    ctx: typer.Context,
+    debug: bool = typer.Option(False, help="Debug mode"),
+):
+    from lkr.logger import LogLevel, set_log_level
+
+    global ctx_lkr
+
+    ctx_lkr = LkrCtxObj(force_oauth=False)
+    validate_current_instance_database_search_file(ctx, debug)
+    sdk = get_mcp_sdk(ctx_lkr)
+    if not sdk.auth.settings.base_url:
+        logger.error("No current instance found")
+        raise typer.Exit(1)
+
+    if debug:
+        set_log_level(LogLevel.DEBUG)
+    else:
+        set_log_level(LogLevel.ERROR)
     mcp.run()
 
 
@@ -631,18 +563,25 @@ def check_for_database_search_file(ctx: typer.Context) -> None:
         raise typer.Abort()
 
 
-def validate_current_instance_database_search_file(ctx: typer.Context) -> None:
+def validate_current_instance_database_search_file(
+    ctx: typer.Context, debug: bool
+) -> None:
     global current_instance
     check = get_auth(ctx).get_current_instance()
+    if not check:
+        logger.error("No current instance found")
     if not current_instance:
         current_instance = check
-        thread = threading.Thread(target=check_for_database_search_file, args=(ctx,))
-        # thread.daemon = True
+        thread = threading.Thread(
+            target=check_for_database_search_file, args=(ctx,), daemon=not debug
+        )
         thread.start()
     elif current_instance != check:
         current_instance = check
-        thread = threading.Thread(target=check_for_database_search_file, args=(ctx,))
-        # thread.daemon = True
+        thread = threading.Thread(
+            target=check_for_database_search_file, args=(ctx,), daemon=not debug
+        )
+        thread.daemon = True if not debug else False
         thread.start()
     else:
         pass

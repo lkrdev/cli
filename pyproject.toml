@@ -18,9 +18,9 @@ dependencies = [
     "structlog>=25.3.0",
     "questionary>=2.1.0",
     "duckdb>=1.2.2",
-    "fastmcp>=2.3.5",
     "fastapi>=0.115.12",
     "selenium>=4.32.0",
+    "mcp[cli]>=1.9.2",
 ]
 
 [project.scripts]
