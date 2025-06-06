@@ -156,26 +156,33 @@ For example:
 
 ### Cloud Run + GCP Health Check example
 
-One of the simplest ways to launch the health check is the `lkr-cli` public docker image, Cloud Run, and the GCP health check service. Here's an example; make sure to change your region, models, user_attributes, and external_user_id.
+One of the simplest ways to launch the health check is the `lkr-cli` public docker image, Cloud Run, and the GCP health check service. Here's an example; make sure to change your region and project. HEALTH_URL is an example of how to structure the query parameters for the health check.
 
 ```bash
 export REGION=<your region>
 export PROJECT=<your project id>
 
-export HEALTH_URL="/health?dashboard_id=1&external_user_id=embed-user-abc&models=thelook&user_attributes={\"store_id\":\"1\"}"
+export HEALTH_URL="/health?dashboard_id=1&external_user_id=observability-embed-user&models=thelook&user_attributes={\"store_id\":\"1\"}"
 
 gcloud run deploy lkr-observability \
   --image us-central1-docker.pkg.dev/lkr-dev-production/lkr-cli/cli:latest \
   --command lkr \
   --args observability,embed \
   --platform managed \
-  --region $REGION \ 
+  --region $REGION \
   --project $PROJECT \
   --cpu 2 \
   --memory 4Gi \
-  --liveness-probe httpGet.path=$HEALTH_URL,timeoutSeconds=20,periodSeconds=20 \
   --set-env-vars LOOKERSDK_CLIENT_ID=<your client id>,LOOKERSDK_CLIENT_SECRET=<your client secret>,LOOKERSDK_BASE_URL=<your instance url> 
 
+gcloud monitoring uptime create lkr-observability-health-check \
+  --protocol https \
+  --project $PROJECT \
+  --resource-type="cloud-run-revision" \
+  --resource-labels="project_id=${PROJECT},service_name=lkr-observability,location=${REGION}" \
+  --path="${HEALTH_URL}" \
+  --period="15" \
+  --timeout="60"
 
 ```
 
