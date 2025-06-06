@@ -9,6 +9,7 @@ from lkr.custom_types import LogLevel
 from lkr.logger import logger
 from lkr.mcp.main import group as mcp_group
 from lkr.observability.main import group as observability_group
+from lkr.tools.main import group as tools_group
 
 app = typer.Typer(
     name="lkr", help="LookML Repository CLI", add_completion=True, no_args_is_help=True
@@ -17,6 +18,7 @@ app = typer.Typer(
 app.add_typer(auth_group, name="auth")
 app.add_typer(mcp_group, name="mcp")
 app.add_typer(observability_group, name="observability")
+app.add_typer(tools_group, name="tools")
 
 
 @app.callback()
