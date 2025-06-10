@@ -7,7 +7,7 @@ from looker_sdk.sdk.api40.models import (
     WriteUserAttribute,
     WriteUserAttributeWithValue,
 )
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from lkr.auth_service import init_api_key_sdk
 from lkr.classes import LookerApiKey
@@ -15,10 +15,10 @@ from lkr.logger import logger
 
 
 class UserAttributeUpdater(BaseModel):
-    client_id: Optional[str] = None
-    client_secret: Optional[str] = None
-    base_url: Optional[str] = None
-    value: Optional[str] = None
+    client_id: Optional[str] = Field(default=None, exclude=True)
+    client_secret: Optional[str] = Field(default=None, exclude=True)
+    base_url: Optional[str] = Field(default=None, exclude=False)
+    value: Optional[str] = Field(default=None, exclude=True)
     user_attribute: Optional[str]
     user_attribute_id: Optional[str] = None
     update_type: Literal["group", "default", "user"]

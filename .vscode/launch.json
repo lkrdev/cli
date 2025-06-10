@@ -21,7 +21,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/.venv/bin/lkr",
             "args": ["mcp", "run", "--debug"],
-            "justMyCode": false,
+            "justMyCode": false, 
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
             }
@@ -31,7 +31,7 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/.venv/bin/lkr",
-            "args": ["tools", "access-token-updater"],
+            "args": ["tools", "user-attribute-updater"],
             "justMyCode": false,
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
