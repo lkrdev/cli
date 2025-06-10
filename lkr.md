@@ -16,6 +16,7 @@ $ lkr [OPTIONS] COMMAND [ARGS]...
 * `--log-level [DEBUG|INFO|WARNING|ERROR|CRITICAL]`: [env var: LOG_LEVEL]
 * `--quiet`
 * `--force-oauth`
+* `--dev`
 * `--install-completion`: Install completion for the current shell.
 * `--show-completion`: Show completion for the current shell, to copy it or customize the installation.
 * `--help`: Show this message and exit.
@@ -25,6 +26,7 @@ $ lkr [OPTIONS] COMMAND [ARGS]...
 * `auth`: Authentication commands for LookML Repository
 * `mcp`
 * `observability`
+* `tools`
 
 ## `lkr auth`
 
@@ -132,6 +134,7 @@ $ lkr mcp run [OPTIONS]
 
 **Options**:
 
+* `--debug / --no-debug`: Debug mode  [default: no-debug]
 * `--help`: Show this message and exit.
 
 ## `lkr observability`
@@ -166,4 +169,34 @@ $ lkr observability embed [OPTIONS]
 * `--port INTEGER`: Port to bind to  [env var: PORT; default: 8080]
 * `--timeout INTEGER`: Timeout for the health check  [env var: TIMEOUT; default: 120]
 * `--event-prefix TEXT`: Event prefix  [env var: EVENT_PREFIX; default: lkr-observability]
+* `--help`: Show this message and exit.
+
+## `lkr tools`
+
+**Usage**:
+
+```console
+$ lkr tools [OPTIONS] COMMAND [ARGS]...
+```
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+**Commands**:
+
+* `user-attribute-updater`
+
+### `lkr tools user-attribute-updater`
+
+**Usage**:
+
+```console
+$ lkr tools user-attribute-updater [OPTIONS]
+```
+
+**Options**:
+
+* `--host TEXT`: [env var: HOST; default: 127.0.0.1]
+* `--port INTEGER`: [env var: PORT; default: 8080]
 * `--help`: Show this message and exit.

@@ -16,7 +16,7 @@ group = typer.Typer()
 def user_attribute_updater(
     ctx: typer.Context,
     host: str = typer.Option(default="127.0.0.1", envvar="HOST"),
-    port: int = typer.Option(default=8080, envvar="PORT"),
+    port: int = typer.Option(default=8080, envvar="x`"),
 ):
     api = FastAPI()
 
@@ -73,6 +73,10 @@ def user_attribute_updater(
             )
         except Exception as e:
             return AttributeUpdaterResponse(success=False, message=str(e))
+
+    @api.get("")
+    def health():
+        return {"status": "ok"}
 
     uvicorn.run(api, host=host, port=port)
 
