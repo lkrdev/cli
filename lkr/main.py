@@ -12,7 +12,10 @@ from lkr.observability.main import group as observability_group
 from lkr.tools.main import group as tools_group
 
 app = typer.Typer(
-    name="lkr", help="LookML Repository CLI", add_completion=True, no_args_is_help=True
+    name="lkr",
+    help="A CLI for Looker with helpful tools",
+    add_completion=True,
+    no_args_is_help=True,
 )
 
 app.add_typer(auth_group, name="auth")

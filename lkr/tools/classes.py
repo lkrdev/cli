@@ -68,6 +68,17 @@ class UserAttributeUpdater(BaseModel):
             return None
         return init_api_key_sdk(api_key, True)
 
+    def _get_looker_user_id(self, sdk: Looker40SDK) -> str | None:
+        if self.looker_user_id:
+            return self.looker_user_id
+        elif self.email:
+            user = sdk.user_for_credential("email", self.email)
+            return user.id if user else None
+        elif self.external_user_id:
+            user = sdk.user_for_credential("embed", self.external_user_id)
+            return user.id if user else None
+        return None
+
     def _get_group_id(self, sdk: Looker40SDK) -> str | None:
         if self.group_id:
             return self.group_id
@@ -107,25 +118,24 @@ class UserAttributeUpdater(BaseModel):
             else:
                 raise ValueError("Group not found")
         elif self.update_type == "default":
-            sdk.delete_user_attribute(user_attribute_id)
+            user_attribute = sdk.user_attribute(user_attribute_id, "name,label,type")
+            sdk.update_user_attribute(
+                user_attribute_id,
+                WriteUserAttribute(
+                    default_value=None,
+                    name=user_attribute.name,
+                    label=user_attribute.label,
+                    type=user_attribute.type,
+                ),
+            )
         elif self.update_type == "user":
-            if self.looker_user_id:
-                sdk.delete_user_attribute_user_value(
-                    user_id=self.looker_user_id,
-                    user_attribute_id=user_attribute_id,
-                )
-            elif self.external_user_id:
-                sdk.delete_user_attribute_user_value(
-                    user_id=self.external_user_id,
-                    user_attribute_id=user_attribute_id,
-                )
-            elif self.email:
-                sdk.delete_user_attribute_user_value(
-                    user_id=self.email,
-                    user_attribute_id=user_attribute_id,
-                )
-            else:
+            looker_user_id = self._get_looker_user_id(sdk)
+            if not looker_user_id:
                 raise ValueError("User not found")
+            sdk.delete_user_attribute_user_value(
+                user_id=looker_user_id,
+                user_attribute_id=user_attribute_id,
+            )
 
     def update_user_attribute_value(self):
         if not self.value:
@@ -170,35 +180,16 @@ class UserAttributeUpdater(BaseModel):
                 ),
             )
         elif self.update_type == "user":
-
-            def set_user_attribute_user_value(user_id: str):
-                sdk.set_user_attribute_user_value(
-                    user_id=user_id,
-                    user_attribute_id=user_attribute_id,
-                    body=WriteUserAttributeWithValue(
-                        value=self.value,
-                    ),
-                )
-
-            if self.looker_user_id:
-                set_user_attribute_user_value(self.looker_user_id)
-
-            elif self.external_user_id:
-                user = sdk.user_for_credential("embed", self.external_user_id)
-                if not (user and user.id):
-                    raise ValueError("User not found")
-                set_user_attribute_user_value(user.id)
-
-            elif self.email:
-                user = sdk.user_for_credential("email", self.email)
-                if not (user and user.id):
-                    raise ValueError("User not found")
-                set_user_attribute_user_value(user.id)
-
-            else:
+            looker_user_id = self._get_looker_user_id(sdk)
+            if not looker_user_id:
                 raise ValueError("User not found")
-        else:
-            raise ValueError("Invalid update_type")
+            sdk.set_user_attribute_user_value(
+                user_id=looker_user_id,
+                user_attribute_id=user_attribute_id,
+                body=WriteUserAttributeWithValue(
+                    value=self.value,
+                ),
+            )
 
 
 class AttributeUpdaterResponse(BaseModel):

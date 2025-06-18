@@ -188,3 +188,111 @@ gcloud monitoring uptime create lkr-observability-health-check \
 
 ### Alternative Usage
 This can also be used to stress test your Looker environment as it serves an API that logs into a Looker embedded dashboard and runs queries like a user would within Chromium. If you wrote a script to repeatedly call this API with different parameters, you could use it to stress test your Looker environment and/or your database.
+
+## User Attribute Updater (OIDC Token)
+
+1. Create a new cloud run using the `lkr-cli` public docker image `us-central1-docker.pkg.dev/lkr-dev-production/lkr-cli/cli:latest`
+2. Put in the environment variables LOOKERSDK_CLIENT_ID, LOOKERSDK_CLIENT_SECRET, LOOKERSDK_BASE_URL, LOOKER_WHITELISTED_BASE_URLS. The `LOOKER_WHITELISTED_BASE_URLS` would be the same url as the `LOOKERSDK_BASE_URL` if you are only using this for a single Looker instance. For more advanced use cases, you can set the `LOOKER_WHITELISTED_BASE_URLS` to a comma separated list of urls. The body of the request also accepts a `base_url`, `client_id`, and `client_secret` key that will override these settings.
+3. Deploy the cloud run
+4. Retrieve the URL of the cloud run
+5. Create the user attribute 
+   - Name: cloud_run_access_token 
+   - Data Type: String
+   - User Access: None
+   - Hide values: Yes
+   - Domain Allowlist: The URL of the cloud run from step 4. Looker will only allow the user attribute to be set if the request is going to this URL
+
+> [!NOTE]
+> The user attribute name can be anything you want. Typically you will be using this with an extension, so you should follow the naming convention of the type of user attribute you will be using with the extension. I would recommend using a `scoped user attributes` for this. See [Extension User Attributes](https://www.npmjs.com/package/@looker/extension-sdk#user-attributes). If you are using a `global_user_attribute`, then you can just use the name of it like `cloud_run_access_token`.
+
+6. Create a new cloud scheduler
+   - cron: `0 * * * *`
+   - Target Type: Cloud Run
+   - URL: The URL of the cloud run from step 4 with a path of `/identity_token`. E.g. `https://your-cloud-run-url.com/identity_token`
+   - HTTP Method: POST
+   - Headers: `Content-Type: application/json`
+   - Body: Use the user attribute_name from  step 5, or use the user_attribute_id found in the Looker URL after you created it or are editing it
+
+    ```json
+    {
+      "user_attribute": "cloud_run_access_token",
+      "update_type": "default"
+    }
+    ```
+   - Auth Header: OIDC Token
+   - Service Account: Choose the service account you want to use to run the cloud scheduler
+   - Audience: The URL of the cloud run
+   - Max Retries: >0
+7. Make sure the Service Account has the `Cloud Run Invoker` role
+8. Navigate the the cloud scheduler page, select the one you just created, and click Force Run
+9. Check the logs of the cloud run to see if there was a 200 response
+
+
+## UserAttributeUpdater `lkr-dev-cli`
+
+Exported from the `lkr-dev-cli` package is the `UserAttributeUpdater` pydantic class. This class has all the necessary logic to update a user attribute value. 
+
+It supports the following operations:
+- Updating a default value
+- Updating a group value
+- Updating a user value
+- Deleting a default value
+- Deleting a group value
+- Deleting a user value
+
+It can also support looking up looker ids. It will lookup the following if the id is not provided:
+- user_attribute_id by the name
+- user_id by the email or external_user_id
+- group_id by the name
+
+
+### Example Usage
+
+```python
+from lkr import UserAttributeUpdater
+
+# without credentials
+updater = UserAttributeUpdater(
+    user_attribute="cloud_run_access_token",
+    update_type="default",
+    value="123",
+)
+
+
+# with credentials
+updater = UserAttributeUpdater(
+    user_attribute="cloud_run_access_token",
+    update_type="default",
+    value="123",
+    base_url="https://your-looker-instance.com",
+    client_id="your-client-id",
+    client_secret="your-client-secret",
+)
+
+updater.update_user_attribute_value()
+
+# Getting authorization header from a FastAPI request
+from fastapi import Request
+from lkr import UserAttributeUpdater
+
+@app.post("/request_authorization")
+def request_authorization(request: Request):
+    body = await request.json()
+    updater = UserAttributeUpdater.model_validate(body)
+    updater.get_request_authorization_for_value(request)
+    updater.update_user_attribute_value()
+
+@app.post("/as_body")
+def as_body(request: Request, body: UserAttributeUpdater):
+    body.get_request_authorization_for_value(request)
+    body.update_user_attribute_value()
+
+@app.post("/assigning_value")
+def assigning_value(request: Request):
+    updater = UserAttributeUpdater(
+      user_attribute="cloud_run_access_token",
+      update_type="default"
+    )
+    updater.value = request.headers.get("my_custom_header")
+    updater.update_user_attribute_value()
+```
