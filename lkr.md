@@ -1,6 +1,6 @@
 # `lkr`
 
-LookML Repository CLI
+A CLI for Looker with helpful tools
 
 **Usage**:
 

@@ -14,9 +14,8 @@ group = typer.Typer()
 
 @group.command()
 def user_attribute_updater(
-    ctx: typer.Context,
     host: str = typer.Option(default="127.0.0.1", envvar="HOST"),
-    port: int = typer.Option(default=8080, envvar="x`"),
+    port: int = typer.Option(default=8080, envvar="PORT"),
 ):
     api = FastAPI()
 
