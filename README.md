@@ -192,10 +192,13 @@ This can also be used to stress test your Looker environment as it serves an API
 ## User Attribute Updater (OIDC Token)
 
 1. Create a new cloud run using the `lkr-cli` public docker image `us-central1-docker.pkg.dev/lkr-dev-production/lkr-cli/cli:latest`
-2. Put in the environment variables LOOKERSDK_CLIENT_ID, LOOKERSDK_CLIENT_SECRET, LOOKERSDK_BASE_URL, LOOKER_WHITELISTED_BASE_URLS. The `LOOKER_WHITELISTED_BASE_URLS` would be the same url as the `LOOKERSDK_BASE_URL` if you are only using this for a single Looker instance. For more advanced use cases, you can set the `LOOKER_WHITELISTED_BASE_URLS` to a comma separated list of urls. The body of the request also accepts a `base_url`, `client_id`, and `client_secret` key that will override these settings.
-3. Deploy the cloud run
-4. Retrieve the URL of the cloud run
-5. Create the user attribute 
+2. Put in the environment variables LOOKERSDK_CLIENT_ID, LOOKERSDK_CLIENT_SECRET, LOOKERSDK_BASE_URL, LOOKER_WHITELISTED_BASE_URLS. The `LOOKER_WHITELISTED_BASE_URLS` would be the same url as the `LOOKERSDK_BASE_URL` if you are only using this for a single Looker instance. For more advanced use cases, you can set the `LOOKER_WHITELISTED_BASE_URLS` to a comma separated list of urls. The body of the request also accepts a `base_url`, `client_id`, and `client_secret` key that will override these settings. See example [`gcloud` command](#example-gcloud-command)
+3. For the command and arguments use:
+   - command: `lkr`
+   - args: `tools` `user-attribute-updater`
+4. Deploy the cloud run
+5. Retrieve the URL of the cloud run
+6. Create the user attribute 
    - Name: cloud_run_access_token 
    - Data Type: String
    - User Access: None
@@ -227,6 +230,23 @@ This can also be used to stress test your Looker environment as it serves an API
 8. Navigate the the cloud scheduler page, select the one you just created, and click Force Run
 9. Check the logs of the cloud run to see if there was a 200 response
 
+
+### Example `gcloud` command
+```bash
+export REGION=<your region>
+export PROJECT=<your project id>
+
+gcloud run deploy lkr-access-token-updater \
+  --image us-central1-docker.pkg.dev/lkr-dev-production/lkr-cli/cli:latest \
+  --command lkr \
+  --args tools,user-attribute-updater \
+  --platform managed \
+  --region $REGION \
+  --project $PROJECT \
+  --cpu 1 \
+  --memory 2Gi \
+  --set-env-vars LOOKERSDK_CLIENT_ID=<your client id>,LOOKERSDK_CLIENT_SECRET=<your client secret>,LOOKERSDK_BASE_URL=<your instance url>,LOOKER_WHITELISTED_BASE_URLS=<your instance url>
+  ```
 
 ## UserAttributeUpdater `lkr-dev-cli`
 
@@ -295,4 +315,13 @@ def assigning_value(request: Request):
     )
     updater.value = request.headers.get("my_custom_header")
     updater.update_user_attribute_value()
+
+@app.delete("/:user_attribute_name/:email")
+def delete_user_attribute(user_attribute_name: str, email: str):
+    updater = UserAttributeUpdater(
+      user_attribute=user_attribute_name,
+      update_type="user",
+      email=email,
+    )
+    updater.delete_user_attribute_value()
 ```
