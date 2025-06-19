@@ -226,7 +226,50 @@ This can also be used to stress test your Looker environment as it serves an API
    - Service Account: Choose the service account you want to use to run the cloud scheduler
    - Audience: The URL of the cloud run
    - Max Retries: >0
-7. Make sure the Service Account has the `Cloud Run Invoker` role
+
+   **Example `gcloud` command to create Cloud Scheduler Job:**
+   ```bash
+   export CLOUD_RUN_URL=<your-cloud-run-url> # e.g., https://lkr-access-token-updater-xxxxxxxxxx-uc.a.run.app
+   export SCHEDULER_SERVICE_ACCOUNT_EMAIL=<your-scheduler-service-account-email> # e.g., scheduler-sa@<your-project-id>.iam.gserviceaccount.com
+   export REGION=<your-region>
+   export PROJECT=<your-project-id>
+
+   gcloud scheduler jobs create http lkr-token-updater-scheduler \
+     --schedule "0 * * * *" \
+     --http-method POST \
+     --uri "${CLOUD_RUN_URL}/identity_token" \
+     --message-body "{\"user_attribute\": \"cloud_run_access_token\", \"update_type\": \"default\"}" \
+     --oidc-service-account-email "$SCHEDULER_SERVICE_ACCOUNT_EMAIL" \
+     --oidc-token-audience "$CLOUD_RUN_URL" \
+     --max-retry-attempts 5 \
+     --region "$REGION" \
+     --project "$PROJECT" \
+     --description "Periodically update Looker user attribute with OIDC token." \
+     --time-zone "Etc/UTC" \
+     --headers "Content-Type=application/json"
+   ```
+
+7. Make sure the Service Account has the `Cloud Run Invoker` role.
+
+   **Example `gcloud` command to grant Cloud Run Invoker role:**
+   ```bash
+   export PROJECT=<your-project-id>
+   export CLOUD_RUN_SERVICE_ACCOUNT_EMAIL=<your-cloud-run-service-account-email> # The service account used by your Cloud Run service
+   export SCHEDULER_SERVICE_ACCOUNT_EMAIL=<your-scheduler-service-account-email> # The service account used by Cloud Scheduler
+
+   # Grant the Cloud Scheduler's service account permission to invoke the Cloud Run service
+   gcloud run services add-iam-policy-binding lkr-access-token-updater \
+     --member="serviceAccount:${SCHEDULER_SERVICE_ACCOUNT_EMAIL}" \
+     --role="roles/run.invoker" \
+     --region "$REGION" \
+     --project "$PROJECT" \
+     --platform managed
+   ```
+
+   > [!NOTE]
+   > The above command assumes your Cloud Run service is named `lkr-access-token-updater`. Adjust the name and region accordingly.
+   > It's also common for the Cloud Run service to run as a specific service account. Ensure that this service account (`CLOUD_RUN_SERVICE_ACCOUNT_EMAIL`) has necessary permissions if it needs to interact with other Google Cloud services. The scheduler's service account (`SCHEDULER_SERVICE_ACCOUNT_EMAIL`) is the one that needs the `run.invoker` role to trigger the Cloud Run service.
+
 8. Navigate the the cloud scheduler page, select the one you just created, and click Force Run
 9. Check the logs of the cloud run to see if there was a 200 response
 
@@ -235,9 +278,11 @@ This can also be used to stress test your Looker environment as it serves an API
 ```bash
 export REGION=<your region>
 export PROJECT=<your project id>
+export CLOUD_RUN_SERVICE_ACCOUNT_EMAIL=<your-cloud-run-service-account-email> # e.g., cloud-run-sa@<your-project-id>.iam.gserviceaccount.com
 
 gcloud run deploy lkr-access-token-updater \
   --image us-central1-docker.pkg.dev/lkr-dev-production/lkr-cli/cli:latest \
+  --service-account "$CLOUD_RUN_SERVICE_ACCOUNT_EMAIL" \
   --command lkr \
   --args tools,user-attribute-updater \
   --platform managed \
