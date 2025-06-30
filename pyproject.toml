@@ -17,10 +17,16 @@ dependencies = [
     "pydash>=8.0.5",
     "structlog>=25.3.0",
     "questionary>=2.1.0",
-    "duckdb>=1.2.2",
     "fastapi>=0.115.12",
-    "selenium>=4.32.0",
     "mcp[cli]>=1.9.2",
+]
+
+[project.optional-dependencies]
+mcp = ["duckdb>=1.2.2"]
+observability = ["selenium>=4.32.0"]
+all_features = [
+    "duckdb>=1.2.2",
+    "selenium>=4.32.0",
 ]
 
 [project.scripts]
