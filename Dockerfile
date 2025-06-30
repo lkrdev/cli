@@ -9,6 +9,6 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY lkr ./lkr
 ENV UV_PROJECT_ENVIRONMENT="/usr/local/"
-RUN uv sync --frozen --no-dev --no-editable
+RUN uv sync --frozen --no-dev --no-editable --extra=all
 
 CMD []

@@ -22,7 +22,7 @@ def user_attribute_updater(
     @api.post("/identity_token")
     def identity_token(request: Request, body: UserAttributeUpdater):
         try:
-            body.get_request_authorization_for_value(request)
+            body.get_request_authorization_for_value(request.headers.items())
             body.update_user_attribute_value()
             raw_urls = os.getenv("LOOKER_WHITELISTED_BASE_URLS", "")
             whitelisted_base_urls = (
