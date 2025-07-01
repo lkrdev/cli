@@ -11,29 +11,38 @@ requires-python = ">=3.12"
 dependencies = [
     "looker-sdk>=25.4.0",
     "pydantic>=2.11.4",
-    "typer>=0.15.2",
-    "requests>=2.31.0",
-    "cryptography>=42.0.0",
-    "pydash>=8.0.5",
-    "structlog>=25.3.0",
-    "questionary>=2.1.0",
+    "pydash>=8.0.5"
 ]
 
 [project.optional-dependencies]
+
+cli = [
+    "typer>=0.15.2",
+    "requests>=2.31.0",
+    "cryptography>=42.0.0",
+    "structlog>=25.3.0",
+    "questionary>=2.1.0"
+]
 mcp = [
     "mcp[cli]>=1.9.2",
-    "duckdb>=1.2.2"
+    "duckdb>=1.2.2",
+    "fastapi[standard]>=0.115.12"
 ]
-embed-observability = [
-    "fastapi>=0.115.12",
+observability = [
+    "fastapi[standard]>=0.115.12",
     "selenium>=4.32.0"
 ]
-user-attribute-updater = [
-    "fastapi>=0.115.12"
+tools = [
+    "fastapi[standard]>=0.115.12"
 ]
 all = [
+    "typer>=0.15.2",
+    "requests>=2.31.0",
+    "cryptography>=42.0.0",
+    "structlog>=25.3.0",
+    "questionary>=2.1.0",
     "mcp[cli]>=1.9.2",
-    "fastapi>=0.115.12",
+    "fastapi[standard]>=0.115.12",
     "selenium>=4.32.0",
     "duckdb>=1.2.2"
 ]

@@ -1,19 +1,28 @@
 import logging
 import os
-
-import structlog
-from rich.console import Console
-from rich.logging import RichHandler
-from rich.theme import Theme
-
 from lkr.custom_types import LogLevel
 
-structlog.configure(
-    processors=[
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer(),
-    ]
-)
+STRUCT_LOG_AVAILABLE = True
+RICH_AVAILABLE = True
+try:
+    import structlog
+except ModuleNotFoundError:
+    STRUCT_LOG_AVAILABLE = False
+try:
+    from rich.console import Console
+    from rich.logging import RichHandler
+    from rich.theme import Theme
+except ModuleNotFoundError:
+    RICH_AVAILABLE = False
+
+
+if STRUCT_LOG_AVAILABLE:
+    structlog.configure(
+        processors=[
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.JSONRenderer(),
+        ]
+    )
 
 # Define a custom theme for our logging
 theme = Theme(
@@ -24,10 +33,10 @@ theme = Theme(
         "logging.level.error": "bold red",
         "logging.level.critical": "bold white on red",
     }
-)
+) if RICH_AVAILABLE else None
 
 # Create a console for logging
-console = Console(theme=theme)
+console = Console(theme=theme) if RICH_AVAILABLE else None
 
 # Configure the logging handler
 handler = RichHandler(
@@ -37,7 +46,7 @@ handler = RichHandler(
     markup=True,
     rich_tracebacks=True,
     tracebacks_show_locals=True,
-)
+) if RICH_AVAILABLE else None
 
 # Get log level from environment variable, defaulting to INFO
 DEFAULT_LOG_LEVEL = "INFO"
@@ -50,25 +59,27 @@ logging.basicConfig(
     ),  # Fallback to INFO if invalid level
     format="%(message)s",
     datefmt="[%X]",
-    handlers=[handler],
+    handlers=[handler] if handler else [],
 )
 
 # Create a logger for the application
 logger = logging.getLogger("lkr")
-structured_logger = structlog.get_logger("lkr.structured")
+structured_logger = structlog.get_logger("lkr.structured") if STRUCT_LOG_AVAILABLE else None
 
 
 # Configure the requests_transport logger to only show debug messages when LOG_LEVEL is DEBUG
-requests_logger = logging.getLogger("looker_sdk.rtl.requests_transport")
-if log_level != "DEBUG":
+requests_logger = logging.getLogger("looker_sdk.rtl.requests_transport") if RICH_AVAILABLE else None
+if log_level != "DEBUG" and requests_logger:
     requests_logger.setLevel(logging.WARNING)
 
 
 def set_log_level(level: LogLevel):
     """Set the logging level for the application."""
     logger.setLevel(getattr(logging, level.value))
-    logging.getLogger("lkr.structured").setLevel(getattr(logging, level.value))
+    if structured_logger:
+        structured_logger.setLevel(getattr(logging, level.value))
     # Update requests_transport logger level based on the new level
-    requests_logger.setLevel(
-        logging.DEBUG if level == LogLevel.DEBUG else logging.WARNING
-    )
+    if requests_logger:
+        requests_logger.setLevel(
+            logging.DEBUG if level == LogLevel.DEBUG else logging.WARNING
+        )

@@ -3,10 +3,11 @@ import os
 import sqlite3
 import types
 from datetime import datetime, timedelta, timezone
-from typing import List, Self, Tuple, Union
+from typing import List, Self, Tuple, Union, TYPE_CHECKING
 
 import requests
-import typer
+if TYPE_CHECKING:
+    import typer
 from looker_sdk.rtl import serialize
 from looker_sdk.rtl.api_settings import ApiSettings, SettingsConfig
 from looker_sdk.rtl.auth_session import AuthSession, CryptoHash, OAuthSession
@@ -25,7 +26,7 @@ from lkr.logger import logger
 __all__ = ["get_auth", "ApiKeyAuthSession", "DbOAuthSession"]
 
 
-def get_auth(ctx: typer.Context | LkrCtxObj) -> Union["SqlLiteAuth", "ApiKeyAuth"]:
+def get_auth(ctx: Union["typer.Context", LkrCtxObj]) -> Union["SqlLiteAuth", "ApiKeyAuth"]:
     if isinstance(ctx, LkrCtxObj):
         lkr_ctx = ctx
     else:

@@ -11,6 +11,9 @@ __all__ = ["group"]
 
 group = typer.Typer()
 
+if not logger:
+    raise Exception("Logger is not available")
+
 
 @group.command()
 def user_attribute_updater(

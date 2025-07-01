@@ -7,9 +7,6 @@ from lkr.auth.main import group as auth_group
 from lkr.classes import LkrCtxObj
 from lkr.custom_types import LogLevel
 from lkr.logger import logger
-from lkr.mcp.main import group as mcp_group
-from lkr.observability.main import group as observability_group
-from lkr.tools.main import group as tools_group
 
 app = typer.Typer(
     name="lkr",
@@ -19,10 +16,32 @@ app = typer.Typer(
 )
 
 app.add_typer(auth_group, name="auth")
-app.add_typer(mcp_group, name="mcp")
-app.add_typer(observability_group, name="observability")
-app.add_typer(tools_group, name="tools")
 
+IMPORT_ERROR = None
+
+def add_optional_typer_group(app, import_path, group_name, extra_message=None):
+    try:
+        module_path, attr = import_path.rsplit(".", 1)
+        mod = __import__(module_path, fromlist=[attr])
+        group = getattr(mod, attr)
+        app.add_typer(group, name=group_name)
+    except ModuleNotFoundError as import_error:
+        @app.command(
+            name=group_name,
+            add_help_option=False,
+            context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+        )
+        def fallback(import_error=import_error):
+            msg = f"{group_name} tools (dependencies not available, try installing optional dependencies: lkr-dev-cli\\[{group_name}])"
+            if extra_message:
+                msg += f" {extra_message}"
+            logger.error(msg)
+            logger.error(import_error)
+            raise typer.Exit(1)
+
+add_optional_typer_group(app, "lkr.mcp.main.group", "mcp")
+add_optional_typer_group(app, "lkr.observability.main.group", "observability")
+add_optional_typer_group(app, "lkr.tools.main.group", "tools")
 
 @app.callback()
 def callback(
