@@ -7,6 +7,9 @@ This test verifies that:
 2. uv sync --extra [all individual extras]
 
 Both resolve to the same lock file, ensuring consistency in dependency resolution.
+
+This test also verifies that the UserAttributeUpdater can be imported, instantiated, and model_dump_json() works
+with only the base dependencies (no extras installed).
 """
 
 import subprocess
@@ -16,6 +19,7 @@ import hashlib
 from pathlib import Path
 import pytest
 import tomllib
+import os
 
 
 def get_file_hash(file_path: Path) -> str:
@@ -173,8 +177,62 @@ def test_individual_extras_consistency():
         print(f"ℹ️  Dev dependencies ({len(dev_deps)} items) are excluded from 'all' extra as expected")
 
 
+def test_user_attribute_updater_base_deps_only(tmp_path):
+    """
+    Test that UserAttributeUpdater can be imported, instantiated, and model_dump_json() works
+    in a fresh environment with only base dependencies (no extras installed).
+    This is done by creating a temp dir, running 'uv sync' (no extras), and running a subprocess.
+    """
+    FILENAME = "test_user_attribute_updater.py"
+    # Copy minimal project files to temp dir
+    project_root = Path(__file__).parent.parent
+    temp_dir = Path(tmp_path) / "base_deps_env"
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir)
+    temp_dir.mkdir()
+    for item in ["pyproject.toml", "README.md", "LICENSE"]:
+        src = project_root / item
+        if src.exists():
+            shutil.copy2(src, temp_dir / item)
+    lkr_src = project_root / "lkr"
+    if lkr_src.exists():
+        shutil.copytree(lkr_src, temp_dir / "lkr")
+
+    # Run 'uv sync' in the temp dir (no extras)
+    subprocess.run(["uv", "sync"], cwd=temp_dir, check=True)
+
+    # Write a small test script to the temp dir
+    test_script = temp_dir / FILENAME
+    test_script.write_text(
+        """
+from lkr.tools.classes import UserAttributeUpdater
+updater = UserAttributeUpdater(user_attribute='test', value='test', update_type='default')
+print(updater.model_dump_json())
+"""
+    )
+
+    # Run the script using the temp dir as the working directory and PYTHONPATH
+    env = dict(**os.environ)
+    env["PYTHONPATH"] = str(temp_dir)
+    result = subprocess.run(
+        ["uv", "run", FILENAME],
+        cwd=temp_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    output = result.stdout.strip()
+    assert '"user_attribute":"test"' in output
+    assert '"value":"test"' not in output
+    assert '"update_type":"default"' in output
+
+
 if __name__ == "__main__":
     # Run the tests directly if script is executed
     test_dependency_resolution_consistency()
     test_individual_extras_consistency()
+    test_user_attribute_updater_base_deps_only("./tmp")
     print("All tests passed!") 
+
+

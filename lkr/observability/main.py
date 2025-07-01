@@ -39,6 +39,8 @@ DEFAULT_PERMISSIONS = set(
 
 observability_ctx = ObservabilityCtxObj()
 
+if not structured_logger:
+    raise Exception("Structured logger is not available")
 
 def get_embed_sdk_obj(
     dashboard_id: str = Query(...),

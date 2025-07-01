@@ -331,12 +331,9 @@ The `lkr` CLI supports optional dependencies that enable additional functionalit
 
 ### Available Extras
 
-- **`mcp`**: Enables the MCP (Model Context Protocol) server functionality
-  - Includes: `mcp[cli]>=1.9.2`, `duckdb>=1.2.2`
-- **`embed-observability`**: Enables the observability embed monitoring features
-  - Includes: `fastapi>=0.115.12`, `selenium>=4.32.0`
-- **`user-attribute-updater`**: Enables the user attribute updater functionality
-  - Includes: `fastapi>=0.115.12`
+- **`mcp`**: Enables the MCP (Model Context Protocol) server functionality and `lkr mcp` commands
+- **`observability`**: Enables the observability embed monitoring features and `lkr observability` commands
+- **`tools`**: Enables the user attribute updater functionality and `lkr tools` commands
 
 ### Installing Optional Dependencies
 
@@ -368,11 +365,3 @@ pip install lkr-dev-cli[all]
 # Install specific extras
 pip install lkr-dev-cli[mcp,embed-observability,user-attribute-updater]
 ```
-
-### What Each Extra Enables
-
-- **`mcp`**: Use the MCP server with tools like Cursor for enhanced IDE integration
-- **`embed-observability`**: Run the observability embed server for monitoring Looker dashboard performance
-- **`user-attribute-updater`**: Deploy the user attribute updater service for OIDC token management
-
-All extras are designed to work together seamlessly, and installing `all` is equivalent to installing all individual extras.

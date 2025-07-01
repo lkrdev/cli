@@ -1,15 +1,24 @@
 import urllib.parse
 from typing import Annotated, List, Union
 
-import questionary
 import typer
 from looker_sdk.rtl.auth_token import AccessToken, AuthToken
-from rich.console import Console
-from rich.table import Table
 
 from lkr.auth.oauth import OAuth2PKCE
 from lkr.auth_service import get_auth
 from lkr.logger import logger
+
+QUESTIONARY_AVAILABLE = True
+RICH_AVAILABLE = True
+try:
+    import questionary
+except ModuleNotFoundError:
+    QUESTIONARY_AVAILABLE = False
+try:
+    from rich.console import Console
+    from rich.table import Table
+except ModuleNotFoundError:
+    RICH_AVAILABLE = False
 
 __all__ = ["group"]
 
@@ -199,7 +208,7 @@ def list(ctx: typer.Context):
     """
     List all authenticated Looker instances
     """
-    console = Console()
+    console = Console() if RICH_AVAILABLE else None
     auth = get_auth(ctx)
     all_instances = auth.list_auth()
     if not all_instances:
@@ -213,7 +222,10 @@ def list(ctx: typer.Context):
             instance[1],
             "Yes" if instance[3] else "No",
         )
-    console.print(table)
+    if console:
+        console.print(table)
+    else:
+        print(table)
 
 
 if __name__ == "__main__":
