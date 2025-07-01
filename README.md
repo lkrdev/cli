@@ -4,9 +4,9 @@ The `lkr` cli is a tool for interacting with Looker. It combines Looker's SDK an
 
 ## Usage
 
-`uv` makes everyone's life easier. Go [install it](https://docs.astral.sh/uv/getting-started/installation/). You can start using `lkr` by running `uv run --with lkr-dev-cli lkr --help`.
+`uv` makes everyone's life easier. Go [install it](https://docs.astral.sh/uv/getting-started/installation/). You can start using `lkr` by running `uv run --with lkr-dev-cli[all] lkr --help`.
 
-Alternatively, you can install `lkr` with `pip install lkr-dev-cli` and use commands directly like `lkr <command>`.
+Alternatively, you can install `lkr` with `pip install lkr-dev-cli[all]` and use commands directly like `lkr <command>`.
 
 We also have a public docker image that you can use to run `lkr` commands.
 
@@ -24,7 +24,7 @@ See the [prerequisites section](#oauth2-prerequisites)
 Login to `lkr`
 
 ```bash
-uv run --with lkr-dev-cli lkr auth login
+uv run --with lkr-dev-cli[all] lkr auth login
 ```
 
 - Select a new instance
@@ -37,7 +37,7 @@ You will be redirected to the Looker OAuth authorization page, click Allow. If y
 If everything is successful, you will see `Successfully authenticated!`. Test it with
 
 ```bash
-uv run --with lkr-dev-cli lkr auth whoami
+uv run --with lkr-dev-cli[all] lkr auth whoami
 ```
 
 ### Using API Key
@@ -45,7 +45,7 @@ uv run --with lkr-dev-cli lkr auth whoami
 If you provide environment variables for `LOOKERSDK_CLIENT_ID`, `LOOKERSDK_CLIENT_SECRET`, and `LOOKERSDK_BASE_URL`, `lkr` will use the API key to authenticate and the commands.  We also support command line arguments to pass in the client id, client secret, and base url.
 
 ```bash
-uv run --with lkr-dev-cli  lkr --client-id <your client id> --client-secret <your client secret> --base-url <your instance url> auth whoami
+uv run --with lkr-dev-cli[all]  lkr --client-id <your client id> --client-secret <your client secret> --base-url <your instance url> auth whoami
 ```
 
 
@@ -81,7 +81,7 @@ Built into the `lkr` is an MCP server. Right now its tools are based on helping 
   "mcpServers": {
     "lkr-mcp": {
       "command": "uv",
-      "args": ["run", "--with", "lkr-dev-cli", "lkr", "mcp", "run"]
+      "args": ["run", "--with", "lkr-dev-cli[all]", "lkr", "mcp", "run"]
     },
     "lkr-mcp-docker": {
       "command": "docker",
