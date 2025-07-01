@@ -142,7 +142,7 @@ def test_individual_extras_consistency():
     
     # Check that all required extras are defined
     for extra in required_extras:
-        assert f'{extra} =' in content, f"Extra '{extra}' not found in pyproject.toml"
+        assert extra in optional_deps, f"Extra '{extra}' not found in pyproject.toml"
     
     # Check that the 'all' extra includes all individual extras
     assert '"mcp[cli]>=1.9.2"' in content, "mcp dependency not found in 'all' extra"
