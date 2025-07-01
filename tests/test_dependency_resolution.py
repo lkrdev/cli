@@ -55,7 +55,7 @@ def run_uv_sync(project_dir: Path, extras: list[str]) -> Path:
         cmd.extend(["--extra", extra])
     print(f"Running: {' '.join(cmd)} in {project_dir}")
     
-    result = subprocess.run(
+    _result = subprocess.run(
         cmd,
         cwd=project_dir,
         capture_output=True,
@@ -132,9 +132,11 @@ def test_individual_extras_consistency():
     if not pyproject_path.exists():
         pytest.skip("pyproject.toml not found")
     
-    # Read pyproject.toml to verify the extras are properly defined
-    with open(pyproject_path, 'r') as f:
-        content = f.read()
+    # Parse pyproject.toml to get the actual dependencies
+    with open(pyproject_path, "rb") as f:
+        data = tomllib.load(f)
+    
+    optional_deps = data.get("project", {}).get("optional-dependencies", {})
     
     # Discover individual extras
     individual_extras = discover_individual_extras(project_root)
@@ -144,11 +146,31 @@ def test_individual_extras_consistency():
     for extra in required_extras:
         assert extra in optional_deps, f"Extra '{extra}' not found in pyproject.toml"
     
-    # Check that the 'all' extra includes all individual extras
-    assert '"mcp[cli]>=1.9.2"' in content, "mcp dependency not found in 'all' extra"
-    assert '"fastapi>=0.115.12"' in content, "fastapi dependency not found in 'all' extra"
-    assert '"selenium>=4.32.0"' in content, "selenium dependency not found in 'all' extra"
-    assert '"duckdb>=1.2.2"' in content, "duckdb dependency not found in 'all' extra"
+    # Get all dependencies from individual extras (excluding dev dependencies)
+    all_individual_deps = set()
+    dev_deps = set()
+    for extra in individual_extras:
+        if extra in optional_deps:
+            if extra == "dev":
+                # Dev dependencies are typically not included in 'all'
+                dev_deps.update(optional_deps[extra])
+            else:
+                all_individual_deps.update(optional_deps[extra])
+    
+    # Get dependencies from the 'all' extra
+    all_extra_deps = set(optional_deps.get("all", []))
+    
+    # Check that the 'all' extra includes all non-dev individual extras
+    missing_deps = all_individual_deps - all_extra_deps
+    assert not missing_deps, (
+        f"The 'all' extra is missing dependencies from individual extras: {missing_deps}\n"
+        f"Individual extras dependencies (non-dev): {all_individual_deps}\n"
+        f"'all' extra dependencies: {all_extra_deps}"
+    )
+    
+    print(f"✅ 'all' extra includes all {len(all_individual_deps)} non-dev dependencies from individual extras")
+    if dev_deps:
+        print(f"ℹ️  Dev dependencies ({len(dev_deps)} items) are excluded from 'all' extra as expected")
 
 
 if __name__ == "__main__":
