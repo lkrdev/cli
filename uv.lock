@@ -329,10 +329,6 @@ all = [
     { name = "mcp", extra = ["cli"] },
     { name = "selenium" },
 ]
-dev = [
-    { name = "pytest" },
-    { name = "ruff" },
-]
 embed-observability = [
     { name = "fastapi" },
     { name = "selenium" },
@@ -364,16 +360,14 @@ requires-dist = [
     { name = "mcp", extras = ["cli"], marker = "extra == 'mcp'", specifier = ">=1.9.2" },
     { name = "pydantic", specifier = ">=2.11.4" },
     { name = "pydash", specifier = ">=8.0.5" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.4" },
     { name = "questionary", specifier = ">=2.1.0" },
     { name = "requests", specifier = ">=2.31.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.7" },
     { name = "selenium", marker = "extra == 'all'", specifier = ">=4.32.0" },
     { name = "selenium", marker = "extra == 'embed-observability'", specifier = ">=4.32.0" },
     { name = "structlog", specifier = ">=25.3.0" },
     { name = "typer", specifier = ">=0.15.2" },
 ]
-provides-extras = ["mcp", "embed-observability", "user-attribute-updater", "all", "dev"]
+provides-extras = ["mcp", "embed-observability", "user-attribute-updater", "all"]
 
 [package.metadata.requires-dev]
 dev = [

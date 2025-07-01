@@ -27,12 +27,8 @@ jobs:
         
     - name: Install dependencies
       run: |
-        uv sync --extra dev
+        uv sync --extra all
         
-    - name: Run dependency resolution tests
-      run: |
-        python tests/test_dependency_resolution.py
-        
-    - name: Run with pytest (optional)
+    - name: Run with pytest
       run: |
         uv run pytest tests/test_dependency_resolution.py -v 
