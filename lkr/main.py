@@ -37,7 +37,7 @@ def add_optional_typer_group(app, import_path, group_name, extra_message=None):
                 msg += f" {extra_message}"
             logger.error(msg)
             logger.error(import_error)
-            raise typer.Exit(0)
+            raise typer.Exit(1)
 
 add_optional_typer_group(app, "lkr.mcp.main.group", "mcp")
 add_optional_typer_group(app, "lkr.observability.main.group", "observability")
