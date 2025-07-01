@@ -1,6 +1,5 @@
 from typing import Literal, Optional, Self, cast
 
-from fastapi import Request
 from looker_sdk.sdk.api40.methods import Looker40SDK
 from looker_sdk.sdk.api40.models import (
     UserAttributeGroupValue,
@@ -46,10 +45,12 @@ class UserAttributeUpdater(BaseModel):
                 )
         return self
 
-    def get_request_authorization_for_value(self, request: Request):
-        authorization_token = request.headers.get("Authorization")
+    def get_request_authorization_for_value(self, headers: list[tuple[str, str]]):
+        authorization_token = next(
+            (header for header in headers if header[0] == "Authorization"), None
+        )
         if authorization_token:
-            self.value = authorization_token
+            self.value = authorization_token[1]
         else:
             logger.error("No authorization token found")
 

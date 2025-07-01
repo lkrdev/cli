@@ -299,12 +299,12 @@ from lkr import UserAttributeUpdater
 def request_authorization(request: Request):
     body = await request.json()
     updater = UserAttributeUpdater.model_validate(body)
-    updater.get_request_authorization_for_value(request)
+    updater.get_request_authorization_for_value(request.headers.items())
     updater.update_user_attribute_value()
 
 @app.post("/as_body")
 def as_body(request: Request, body: UserAttributeUpdater):
-    body.get_request_authorization_for_value(request)
+    body.get_request_authorization_for_value(request.headers.items())
     body.update_user_attribute_value()
 
 @app.post("/assigning_value")
@@ -324,4 +324,55 @@ def delete_user_attribute(user_attribute_name: str, email: str):
       email=email,
     )
     updater.delete_user_attribute_value()
+
+## Optional Dependencies
+
+The `lkr` CLI supports optional dependencies that enable additional functionality. You can install these individually or all at once.
+
+### Available Extras
+
+- **`mcp`**: Enables the MCP (Model Context Protocol) server functionality
+  - Includes: `mcp[cli]>=1.9.2`, `duckdb>=1.2.2`
+- **`embed-observability`**: Enables the observability embed monitoring features
+  - Includes: `fastapi>=0.115.12`, `selenium>=4.32.0`
+- **`user-attribute-updater`**: Enables the user attribute updater functionality
+  - Includes: `fastapi>=0.115.12`
+
+### Installing Optional Dependencies
+
+**Install all optional dependencies:**
+```bash
+uv sync --extra all
 ```
+
+**Install specific extras:**
+```bash
+# Install MCP functionality
+uv sync --extra mcp
+
+# Install observability features
+uv sync --extra embed-observability
+
+# Install user attribute updater
+uv sync --extra user-attribute-updater
+
+# Install multiple extras
+uv sync --extra mcp --extra embed-observability
+```
+
+**Using pip:**
+```bash
+# Install all optional dependencies
+pip install lkr-dev-cli[all]
+
+# Install specific extras
+pip install lkr-dev-cli[mcp,embed-observability,user-attribute-updater]
+```
+
+### What Each Extra Enables
+
+- **`mcp`**: Use the MCP server with tools like Cursor for enhanced IDE integration
+- **`embed-observability`**: Run the observability embed server for monitoring Looker dashboard performance
+- **`user-attribute-updater`**: Deploy the user attribute updater service for OIDC token management
+
+All extras are designed to work together seamlessly, and installing `all` is equivalent to installing all individual extras.
