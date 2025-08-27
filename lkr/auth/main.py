@@ -3,6 +3,7 @@ from typing import Annotated, List, Union
 
 import typer
 from looker_sdk.rtl.auth_token import AccessToken, AuthToken
+from pydantic import BaseModel
 
 from lkr.auth.oauth import OAuth2PKCE
 from lkr.auth_service import get_auth
@@ -226,6 +227,41 @@ def list(ctx: typer.Context):
         console.print(table)
     else:
         print(table)
+
+
+class Test(BaseModel):
+    name: str
+    age: int
+
+
+@group.command()
+def get(
+    name: Annotated[str, typer.Option("--name")] = "John",
+    age: Annotated[int, typer.Option("--age")] = 30,
+):
+    """
+    get authentication
+    """
+    test = Test(name=name, age=age)
+    print(test.model_dump_json())
+
+
+@group.command()
+def set(ctx: typer.Context):
+    """
+    put authentication
+    """
+    import sys
+
+    if sys.stdin.isatty():
+        logger.error(
+            "This command is intended to be used with a pipe. For example: `lkr auth get | lkr auth set`"
+        )
+        raise typer.Exit(1)
+
+    read = sys.stdin.read()
+    test = Test.model_validate_json(read)
+    print(test.model_dump_json())
 
 
 if __name__ == "__main__":
