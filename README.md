@@ -4,7 +4,7 @@ The `lkr` cli is a tool for interacting with Looker. It combines Looker's SDK an
 
 ## Usage
 
-`uv` makes everyone's life easier. Go [install it](https://docs.astral.sh/uv/getting-started/installation/). You can start using `lkr` by running `uv run --with lkr-dev-cli[all] lkr --help`.
+`uv` makes everyone's life easier. Go [install it](https://docs.astral.sh/uv/getting-started/installation/). You can start using `lkr` by running `uvx --from lkr-dev-cli[all] lkr --help`.
 
 Alternatively, you can install `lkr` with `pip install lkr-dev-cli[all]` and use commands directly like `lkr <command>`.
 
@@ -24,7 +24,7 @@ See the [prerequisites section](#oauth2-prerequisites)
 Login to `lkr`
 
 ```bash
-uv run --with lkr-dev-cli[all] lkr auth login
+uvx --from lkr-dev-cli[all] lkr auth login
 ```
 
 - Select a new instance
@@ -324,6 +324,30 @@ def delete_user_attribute(user_attribute_name: str, email: str):
       email=email,
     )
     updater.delete_user_attribute_value()
+
+## Permission Deprecation Tool
+
+The `schedule-download-deprecation` tool helps Looker admins ensure that users do not lose access to models they already have when Looker moves towards more granular model-specific permissions for scheduling and downloading.
+
+### How it helps
+Currently, some permissions in Looker can be granted instance-wide. In the future, these permissions may need to be explicitly granted at the model level (via Model Sets). This tool audits all active users and identifies those who:
+- Have "target permissions" (like `download_with_limit`, `schedule_look_emails`, etc.) instance-wide.
+- Do **not** have those same permissions for specific models they otherwise have access to.
+
+By running this tool, an admin can proactively identify and fix permission gaps before any deprecation takes effect, ensuring a seamless experience for end-users.
+
+### Usage
+This command should be run by a **Looker Admin**.
+
+```bash
+uv run --with lkr-dev-cli[all] lkr tools schedule-download-deprecation
+```
+
+Options:
+- `--csv`: Export the results to a CSV file for easier analysis of large instances.
+- `--unfiltered`: Show all users, including those who have all required permissions across all models.
+- `--model-offset`: Slice the table output to show different sets of models (the table shows 5 models at a time).
+
 
 ## Optional Dependencies
 
