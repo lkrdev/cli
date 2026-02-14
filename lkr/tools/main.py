@@ -117,7 +117,7 @@ def schedule_download_deprecation_command(
     limit: Annotated[Optional[int], typer.Option(help="Search batch size")] = 500,
     model_offset: Annotated[int, typer.Option(help="Offset for model columns")] = 0,
     csv_output: Annotated[bool, typer.Option("--csv", help="Output as CSV instead of a table")] = False,
-    csv_file_name: Annotated[Optional[str], typer.Option("--csv-file-name", help="Output as CSV instead of a table")] = "schedule_download_deprecation",
+    csv_file_name: Annotated[Optional[str], typer.Option("--csv-file-name", help="Name for the output CSV file (without extension)")] = "schedule_download_deprecation",
     unfiltered: Annotated[bool, typer.Option("--unfiltered", help="Show all rows, including those with no missing permissions")] = False,
     email: Annotated[Optional[bool], typer.Option("--email", help="Use Email instead of Name")] = False,
 ):

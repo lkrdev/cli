@@ -37,7 +37,7 @@ You will be redirected to the Looker OAuth authorization page, click Allow. If y
 If everything is successful, you will see `Successfully authenticated!`. Test it with
 
 ```bash
-uv run --with lkr-dev-cli[all] lkr auth whoami
+uvx --from lkr-dev-cli[all] lkr auth whoami
 ```
 
 ### Using API Key
@@ -45,7 +45,7 @@ uv run --with lkr-dev-cli[all] lkr auth whoami
 If you provide environment variables for `LOOKERSDK_CLIENT_ID`, `LOOKERSDK_CLIENT_SECRET`, and `LOOKERSDK_BASE_URL`, `lkr` will use the API key to authenticate and the commands.  We also support command line arguments to pass in the client id, client secret, and base url.
 
 ```bash
-uv run --with lkr-dev-cli[all]  lkr --client-id <your client id> --client-secret <your client secret> --base-url <your instance url> auth whoami
+uvx --from lkr-dev-cli[all]  lkr --client-id <your client id> --client-secret <your client secret> --base-url <your instance url> auth whoami
 ```
 
 
@@ -340,7 +340,7 @@ By running this tool, an admin can proactively identify and fix permission gaps 
 This command should be run by a **Looker Admin**.
 
 ```bash
-uv run --with lkr-dev-cli[all] lkr tools schedule-download-deprecation
+uvx --from lkr-dev-cli[all] lkr tools schedule-download-deprecation
 ```
 
 Options:

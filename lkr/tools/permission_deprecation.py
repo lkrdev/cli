@@ -1,8 +1,7 @@
 import typer
-from typing import Annotated, List, Optional, Set, Dict
+from typing import List, Optional, Set, Dict
 from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
-from pydash import get
 from lkr.auth_service import get_auth
 from lkr.logger import logger
 
@@ -97,7 +96,6 @@ def schedule_download_deprecation(
                     sdk.search_users,
                     is_disabled=False,
                     embed_user=False,
-                    email="bryanweber%",
                     limit=limit,
                     offset=offset + (i * limit),
                     fields="id,first_name,last_name,role_ids,external_id,email"
