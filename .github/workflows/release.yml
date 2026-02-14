@@ -52,6 +52,12 @@ jobs:
             ${{ env.IMAGE_NAME }}:latest \
             --project ${{ secrets.GCP_PROJECT_ID }}
 
+      - name: Trigger Website Deploy
+        run: |
+            curl -fSL "$DEPLOY_URL"
+        env:
+            DEPLOY_URL: ${{ secrets.DEPLOY_URL }}
+
   publish:
     name: python
     runs-on: ubuntu-latest
