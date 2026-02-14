@@ -6,7 +6,7 @@ from pydash import get
 from lkr.auth_service import get_auth
 from lkr.logger import logger
 
-target_permissions = [
+TARGET_PERMISSIONS = frozenset([
     "download_with_limit",
     "download_without_limit",
     "schedule_look_emails",
@@ -15,7 +15,7 @@ target_permissions = [
     "send_to_sftp",
     "send_outgoing_webhook",
     "send_to_integration",
-]
+])
 
 class AuditRow(BaseModel):
     user_id: str
@@ -59,11 +59,11 @@ def schedule_download_deprecation(
         if role.permission_set:
             if role.permission_set.name == "Admin":
                 is_admin = True
-                target_perms_in_role = set(target_permissions)
+                target_perms_in_role = set(TARGET_PERMISSIONS)
                 has_access_data = True
             elif role.permission_set.permissions:
                 role_perms = set(role.permission_set.permissions)
-                target_perms_in_role = set([p for p in target_permissions if p in role_perms])
+                target_perms_in_role = set([p for p in TARGET_PERMISSIONS if p in role_perms])
                 has_access_data = "access_data" in role_perms
         
         role_models = set()
