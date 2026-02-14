@@ -186,6 +186,7 @@ $ lkr tools [OPTIONS] COMMAND [ARGS]...
 **Commands**:
 
 * `user-attribute-updater`
+* `schedule-download-deprecation`: Build a table of users and their...
 
 ### `lkr tools user-attribute-updater`
 
@@ -199,4 +200,24 @@ $ lkr tools user-attribute-updater [OPTIONS]
 
 * `--host TEXT`: [env var: HOST; default: 127.0.0.1]
 * `--port INTEGER`: [env var: PORT; default: 8080]
+* `--help`: Show this message and exit.
+
+### `lkr tools schedule-download-deprecation`
+
+Build a table of users and their scheduling/downloading permissions per model.
+
+**Usage**:
+
+```console
+$ lkr tools schedule-download-deprecation [OPTIONS]
+```
+
+**Options**:
+
+* `--limit INTEGER`: Search batch size  [default: 500]
+* `--model-offset INTEGER`: Offset for model columns  [default: 0]
+* `--csv`: Output as CSV instead of a table
+* `--csv-file-name TEXT`: Name for the output CSV file (without extension)  [default: schedule_download_deprecation]
+* `--unfiltered`: Show all rows, including those with no missing permissions
+* `--email`: Use Email instead of Name
 * `--help`: Show this message and exit.
