@@ -1,5 +1,5 @@
 import os
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
 import typer
 
@@ -19,6 +19,7 @@ app.add_typer(auth_group, name="auth")
 
 IMPORT_ERROR = None
 
+
 def add_optional_typer_group(app, import_path, group_name, extra_message=None):
     try:
         module_path, attr = import_path.rsplit(".", 1)
@@ -26,6 +27,7 @@ def add_optional_typer_group(app, import_path, group_name, extra_message=None):
         group = getattr(mod, attr)
         app.add_typer(group, name=group_name)
     except ModuleNotFoundError as import_error:
+
         @app.command(
             name=group_name,
             add_help_option=False,
@@ -39,32 +41,54 @@ def add_optional_typer_group(app, import_path, group_name, extra_message=None):
             logger.error(import_error)
             raise typer.Exit(1)
 
+
 add_optional_typer_group(app, "lkr.mcp.main.group", "mcp")
 add_optional_typer_group(app, "lkr.observability.main.group", "observability")
 add_optional_typer_group(app, "lkr.tools.main.group", "tools")
 
+
 @app.callback()
 def callback(
     ctx: typer.Context,
-    client_id: Annotated[str | None, typer.Option(envvar="LOOKERSDK_CLIENT_ID")] = None,
-    client_secret: Annotated[
-        str | None, typer.Option(envvar="LOOKERSDK_CLIENT_SECRET")
-    ] = None,
-    base_url: Annotated[str | None, typer.Option(envvar="LOOKERSDK_BASE_URL")] = None,
+    client_id: Annotated[str | None, typer.Option()] = None,
+    client_secret: Annotated[str | None, typer.Option()] = None,
+    base_url: Annotated[str | None, typer.Option()] = None,
     log_level: Annotated[LogLevel | None, typer.Option(envvar="LOG_LEVEL")] = None,
     quiet: Annotated[bool, typer.Option("--quiet")] = False,
     force_oauth: Annotated[bool, typer.Option("--force-oauth")] = False,
     dev: Annotated[Optional[bool], typer.Option("--dev")] = None,
+    env_prefix: Annotated[str | None, typer.Option("--env-prefix")] = "LOOKERSDK",
 ):
+    def get_prefixed_env_var(
+        var_name: Literal["CLIENT_ID", "CLIENT_SECRET", "BASE_URL"],
+    ) -> str | None:
+        value = os.environ.get(f"{env_prefix}_{var_name}")
+        if value:
+            logger.debug(f"Set {env_prefix}_{var_name} from env")
+        return value
+
+    def set_default_env_var(
+        var_name: Literal["CLIENT_ID", "CLIENT_SECRET", "BASE_URL"], value: str
+    ):
+        if value:
+            os.environ[f"LOOKERSDK_{var_name}"] = value
+            logger.debug(f"Set LOOKERSDK_{var_name} from command line")
+
     if client_id:
-        os.environ["LOOKERSDK_CLIENT_ID"] = client_id
-        logger.debug("Set LOOKERSDK_CLIENT_ID from command line")
+        set_default_env_var("CLIENT_ID", client_id)
+    elif prefixed_client := get_prefixed_env_var("CLIENT_ID"):
+        set_default_env_var("CLIENT_ID", prefixed_client)
+
     if client_secret:
-        os.environ["LOOKERSDK_CLIENT_SECRET"] = client_secret
-        logger.debug("Set LOOKERSDK_CLIENT_SECRET from command line")
+        set_default_env_var("CLIENT_SECRET", client_secret)
+    elif prefixed_client_secret := get_prefixed_env_var("CLIENT_SECRET"):
+        set_default_env_var("CLIENT_SECRET", prefixed_client_secret)
+
     if base_url:
-        os.environ["LOOKERSDK_BASE_URL"] = base_url
-        logger.debug("Set LOOKERSDK_BASE_URL from command line")
+        set_default_env_var("BASE_URL", base_url)
+    elif prefixed_base_url := get_prefixed_env_var("BASE_URL"):
+        set_default_env_var("BASE_URL", prefixed_base_url)
+
     # Initialize ctx.obj as a dictionary if it's None
     if ctx.obj is None:
         ctx.obj = {}
