@@ -191,16 +191,22 @@ def whoami(ctx: typer.Context):
     Check current authentication
     """
     auth = get_auth(ctx)
-    sdk = auth.get_current_sdk(prompt_refresh_invalid_token=True)
-    if not sdk:
-        logger.error(
-            "Not currently authenticated - use `lkr auth login` or `lkr auth switch` to authenticate"
+    try:
+        sdk = auth.get_current_sdk(prompt_refresh_invalid_token=True)
+        if not sdk:
+            logger.error(
+                "Not currently authenticated - use `lkr auth login` or `lkr auth switch` to authenticate"
+            )
+            raise typer.Exit(1)
+        user = sdk.me()
+        logger.info(
+            f"Currently authenticated as {user.first_name} {user.last_name} ({user.email}) to {sdk.auth.settings.base_url}"
         )
-        raise typer.Exit(1)
-    user = sdk.me()
-    logger.info(
-        f"Currently authenticated as {user.first_name} {user.last_name} ({user.email}) to {sdk.auth.settings.base_url}"
-    )
+    except Exception as e:
+        if "invalid_grant" in str(e) or "token expired" in str(e):
+            logger.error("Your Looker OAuth session has expired. Please run 'lkr auth login' to re-authenticate.")
+            raise typer.Exit(1)
+        raise e
 
 
 @group.command()

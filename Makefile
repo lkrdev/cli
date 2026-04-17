@@ -1,4 +1,4 @@
-.PHONY: docs test-deps codemode-test codemode-start
+.PHONY: docs test-deps codemode-test codemode-test2 codemode-start
 
 docs:
 	uv run typer lkr/main.py utils docs --output lkr.md
@@ -8,6 +8,10 @@ test-deps:
 
 codemode-test:
 	uv run python tests/test_codemode.py
+
+codemode-test2:
+	uv run python tests/test_codemode2.py
+
 
 codemode-start:
 	@echo "Add this to your mcpServers config:"

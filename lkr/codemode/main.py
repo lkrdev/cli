@@ -48,23 +48,23 @@ def run_python_code(code: str) -> str:
     Capture the result and any print outputs.
     """
     global ctx_lkr
-    if not ctx_lkr:
-         ctx_lkr = LkrCtxObj(force_oauth=False)
-         
-    sdk = get_mcp_sdk(ctx_lkr)
-    
-    external_funcs = {}
-    for name, method in inspect.getmembers(sdk, predicate=inspect.ismethod):
-        if not name.startswith('_'):
-            # Wrap in a lambda to recursively convert output to primitives
-            def make_wrapper(m):
-                def wrapper(*args, **kwargs):
-                    res = m(*args, **kwargs)
-                    return to_primitive(res)
-                return wrapper
-            external_funcs[name] = make_wrapper(method)
-
     try:
+        if not ctx_lkr:
+             ctx_lkr = LkrCtxObj(force_oauth=False)
+             
+        sdk = get_mcp_sdk(ctx_lkr)
+        
+        external_funcs = {}
+        for name, method in inspect.getmembers(sdk, predicate=inspect.ismethod):
+            if not name.startswith('_'):
+                # Wrap in a lambda to recursively convert output to primitives
+                def make_wrapper(m):
+                    def wrapper(*args, **kwargs):
+                        res = m(*args, **kwargs)
+                        return to_primitive(res)
+                    return wrapper
+                external_funcs[name] = make_wrapper(method)
+
         m = pydantic_monty.Monty(code)
         result = m.run(external_functions=external_funcs)
         
@@ -78,6 +78,8 @@ def run_python_code(code: str) -> str:
         return output
     except Exception as e:
         logger.error(f"Error executing Monty: {e}")
+        if "invalid_grant" in str(e) or "token expired" in str(e):
+            return "Error: Your Looker OAuth session has expired. Please run 'lkr auth login' to re-authenticate."
         return f"Error: {str(e)}"
 
 
