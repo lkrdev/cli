@@ -22,23 +22,36 @@ def get_mcp_sdk(ctx: LkrCtxObj):
     return sdk
 
 
-import json
-from looker_sdk.rtl import serialize
 
 def to_primitive(obj):
-    if isinstance(obj, (str, int, float, bool, type(None))):
-        return obj
-    elif isinstance(obj, list):
-        return [to_primitive(item) for item in obj]
-    elif isinstance(obj, dict):
-        return {k: to_primitive(v) for k, v in obj.items()}
-    else:
+    seen = set()
+
+    def _to_primitive(o):
+        if isinstance(o, (str, int, float, bool, type(None))):
+            return o
+        
+        obj_id = id(o)
+        if obj_id in seen:
+            return f"<Circular reference to {type(o).__name__}>"
+        seen.add(obj_id)
+        
         try:
-            return to_primitive(vars(obj))
-        except TypeError:
-            return str(obj)
-        except Exception:
-            return str(obj)
+            if isinstance(o, list):
+                return [_to_primitive(item) for item in o]
+            elif isinstance(o, dict):
+                return {k: _to_primitive(v) for k, v in o.items()}
+            else:
+                try:
+                    return _to_primitive(vars(o))
+                except TypeError:
+                    return str(o)
+                except Exception:
+                    return str(o)
+        finally:
+            seen.remove(obj_id)
+
+    return _to_primitive(obj)
+
 
 
 @mcp.tool()
@@ -50,7 +63,7 @@ def run_python_code(code: str) -> str:
     global ctx_lkr
     try:
         if not ctx_lkr:
-             ctx_lkr = LkrCtxObj(force_oauth=False)
+            ctx_lkr = LkrCtxObj(force_oauth=False)
              
         sdk = get_mcp_sdk(ctx_lkr)
         
