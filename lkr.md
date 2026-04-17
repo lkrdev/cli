@@ -23,10 +23,59 @@ $ lkr [OPTIONS] COMMAND [ARGS]...
 
 **Commands**:
 
-* `auth`: Authentication commands for LookML Repository
 * `mcp`
 * `observability`
 * `tools`
+* `code-mode`
+* `auth`: Authentication commands for LookML Repository
+
+## `lkr mcp`
+
+**Usage**:
+
+```console
+$ lkr mcp [OPTIONS]
+```
+
+**Options**:
+
+* `--import-error TEXT`: [default: No module named &#x27;duckdb&#x27;]
+
+## `lkr observability`
+
+**Usage**:
+
+```console
+$ lkr observability [OPTIONS]
+```
+
+**Options**:
+
+* `--import-error TEXT`: [default: No module named &#x27;uvicorn&#x27;]
+
+## `lkr tools`
+
+**Usage**:
+
+```console
+$ lkr tools [OPTIONS]
+```
+
+**Options**:
+
+* `--import-error TEXT`: [default: No module named &#x27;uvicorn&#x27;]
+
+## `lkr code-mode`
+
+**Usage**:
+
+```console
+$ lkr code-mode [OPTIONS]
+```
+
+**Options**:
+
+* `--import-error TEXT`: [default: No module named &#x27;pydantic_monty&#x27;]
 
 ## `lkr auth`
 
@@ -106,118 +155,4 @@ $ lkr auth list [OPTIONS]
 
 **Options**:
 
-* `--help`: Show this message and exit.
-
-## `lkr mcp`
-
-**Usage**:
-
-```console
-$ lkr mcp [OPTIONS] COMMAND [ARGS]...
-```
-
-**Options**:
-
-* `--help`: Show this message and exit.
-
-**Commands**:
-
-* `run`
-
-### `lkr mcp run`
-
-**Usage**:
-
-```console
-$ lkr mcp run [OPTIONS]
-```
-
-**Options**:
-
-* `--debug / --no-debug`: Debug mode  [default: no-debug]
-* `--help`: Show this message and exit.
-
-## `lkr observability`
-
-**Usage**:
-
-```console
-$ lkr observability [OPTIONS] COMMAND [ARGS]...
-```
-
-**Options**:
-
-* `--help`: Show this message and exit.
-
-**Commands**:
-
-* `embed`: Start the observability FastAPI server.
-
-### `lkr observability embed`
-
-Start the observability FastAPI server.
-
-**Usage**:
-
-```console
-$ lkr observability embed [OPTIONS]
-```
-
-**Options**:
-
-* `--host TEXT`: Host to bind to  [env var: HOST; default: 0.0.0.0]
-* `--port INTEGER`: Port to bind to  [env var: PORT; default: 8080]
-* `--timeout INTEGER`: Timeout for the health check  [env var: TIMEOUT; default: 120]
-* `--event-prefix TEXT`: Event prefix  [env var: EVENT_PREFIX; default: lkr-observability]
-* `--help`: Show this message and exit.
-
-## `lkr tools`
-
-**Usage**:
-
-```console
-$ lkr tools [OPTIONS] COMMAND [ARGS]...
-```
-
-**Options**:
-
-* `--help`: Show this message and exit.
-
-**Commands**:
-
-* `user-attribute-updater`
-* `schedule-download-deprecation`: Build a table of users and their...
-
-### `lkr tools user-attribute-updater`
-
-**Usage**:
-
-```console
-$ lkr tools user-attribute-updater [OPTIONS]
-```
-
-**Options**:
-
-* `--host TEXT`: [env var: HOST; default: 127.0.0.1]
-* `--port INTEGER`: [env var: PORT; default: 8080]
-* `--help`: Show this message and exit.
-
-### `lkr tools schedule-download-deprecation`
-
-Build a table of users and their scheduling/downloading permissions per model.
-
-**Usage**:
-
-```console
-$ lkr tools schedule-download-deprecation [OPTIONS]
-```
-
-**Options**:
-
-* `--limit INTEGER`: Search batch size  [default: 500]
-* `--model-offset INTEGER`: Offset for model columns  [default: 0]
-* `--csv`: Output as CSV instead of a table
-* `--csv-file-name TEXT`: Name for the output CSV file (without extension)  [default: schedule_download_deprecation]
-* `--unfiltered`: Show all rows, including those with no missing permissions
-* `--email`: Use Email instead of Name
 * `--help`: Show this message and exit.
