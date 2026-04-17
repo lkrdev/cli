@@ -412,6 +412,7 @@ all = [
     { name = "duckdb" },
     { name = "fastapi", extra = ["standard"] },
     { name = "mcp", extra = ["cli"] },
+    { name = "pydantic-monty" },
     { name = "selenium" },
 ]
 codemode = [
@@ -451,6 +452,7 @@ requires-dist = [
     { name = "mcp", extras = ["cli"], marker = "extra == 'codemode'", specifier = ">=1.10.1" },
     { name = "mcp", extras = ["cli"], marker = "extra == 'mcp'", specifier = ">=1.10.1" },
     { name = "pydantic", specifier = ">=2.11.7" },
+    { name = "pydantic-monty", marker = "extra == 'all'" },
     { name = "pydantic-monty", marker = "extra == 'codemode'" },
     { name = "pydash", specifier = ">=8.0.5" },
     { name = "questionary", specifier = ">=2.1.0" },
