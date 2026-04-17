@@ -9,34 +9,38 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "looker-sdk>=25.4.0",
-    "pydantic>=2.11.4",
+    "looker-sdk>=25.10.0",
+    "pydantic>=2.11.7",
     "pydash>=8.0.5",
-    "typer>=0.15.2",
-    "requests>=2.31.0",
-    "cryptography>=42.0.0",
-    "structlog>=25.3.0",
-    "questionary>=2.1.0"
+    "typer>=0.16.0",
+    "requests>=2.32.4",
+    "cryptography>=45.0.4",
+    "structlog>=25.4.0",
+    "questionary>=2.1.0",
 ]
 
 [project.optional-dependencies]
 mcp = [
-    "mcp[cli]>=1.9.2",
-    "duckdb>=1.2.2",
-    "fastapi[standard]>=0.115.12"
+    "mcp[cli]>=1.10.1",
+    "duckdb>=1.3.1",
+    "fastapi[standard]>=0.115.14"
+]
+codemode = [
+    "pydantic-monty",
+    "mcp[cli]>=1.10.1"
 ]
 observability = [
-    "fastapi[standard]>=0.115.12",
-    "selenium>=4.32.0"
+    "fastapi[standard]>=0.115.14",
+    "selenium>=4.34.0"
 ]
 tools = [
-    "fastapi[standard]>=0.115.12"
+    "fastapi[standard]>=0.115.14"
 ]
 all = [
-    "mcp[cli]>=1.9.2",
-    "fastapi[standard]>=0.115.12",
-    "selenium>=4.32.0",
-    "duckdb>=1.2.2"
+    "mcp[cli]>=1.10.1",
+    "fastapi[standard]>=0.115.14",
+    "selenium>=4.34.0",
+    "duckdb>=1.3.1"
 ]
 
 [project.scripts]
@@ -48,9 +52,15 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
-    "pytest>=8.3.4",
-    "ruff>=0.11.7",
+    "pytest>=8.4.1",
+    "ruff>=0.12.1",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["lkr"]
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
+
