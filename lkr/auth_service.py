@@ -23,7 +23,12 @@ from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID, OAUTH_REDIRECT_UR
 from lkr.custom_types import NewTokenCallback
 from lkr.logger import logger
 
-__all__ = ["get_auth", "ApiKeyAuthSession", "DbOAuthSession"]
+__all__ = ["get_auth", "ApiKeyAuthSession", "DbOAuthSession", "is_auth_expired"]
+
+
+def is_auth_expired(e: Exception) -> bool:
+    return "invalid_grant" in str(e) or "token expired" in str(e)
+
 
 
 def get_auth(ctx: Union["typer.Context", LkrCtxObj]) -> Union["SqlLiteAuth", "ApiKeyAuth"]:
@@ -465,11 +470,23 @@ class SqlLiteAuth:
             def refresh_current_token(token: Union[AccessToken, AuthToken]):
                 current_auth.set_token(self.conn, new_token=token, commit=True)
 
-            return init_oauth_sdk(
+            sdk = init_oauth_sdk(
                 current_auth.base_url,
                 new_token_callback=refresh_current_token,
                 access_token=current_auth.to_access_token(),
             )
+            if prompt_refresh_invalid_token:
+                import sys
+                try:
+                    sdk.auth.authenticate({})
+                except Exception as e:
+                    if is_auth_expired(e):
+                        if sys.stdin.isatty():
+                            self._cli_confirm_refresh_token(current_auth, quiet=False)
+                            return self.get_current_sdk(prompt_refresh_invalid_token=False)
+                    raise e
+
+            return sdk
 
         else:
             logger.error("No current instance found, please login")

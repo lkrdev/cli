@@ -42,6 +42,7 @@ def add_optional_typer_group(app, import_path, group_name, extra_message=None):
 add_optional_typer_group(app, "lkr.mcp.main.group", "mcp")
 add_optional_typer_group(app, "lkr.observability.main.group", "observability")
 add_optional_typer_group(app, "lkr.tools.main.group", "tools")
+add_optional_typer_group(app, "lkr.codemode.main.group", "code-mode")
 
 @app.callback()
 def callback(

@@ -27,6 +27,7 @@ $ lkr [OPTIONS] COMMAND [ARGS]...
 * `mcp`
 * `observability`
 * `tools`
+* `code-mode`
 
 ## `lkr auth`
 
@@ -220,4 +221,33 @@ $ lkr tools schedule-download-deprecation [OPTIONS]
 * `--csv-file-name TEXT`: Name for the output CSV file (without extension)  [default: schedule_download_deprecation]
 * `--unfiltered`: Show all rows, including those with no missing permissions
 * `--email`: Use Email instead of Name
+* `--help`: Show this message and exit.
+
+## `lkr code-mode`
+
+**Usage**:
+
+```console
+$ lkr code-mode [OPTIONS] COMMAND [ARGS]...
+```
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+**Commands**:
+
+* `run`
+
+### `lkr code-mode run`
+
+**Usage**:
+
+```console
+$ lkr code-mode run [OPTIONS]
+```
+
+**Options**:
+
+* `--debug / --no-debug`: Debug mode  [default: no-debug]
 * `--help`: Show this message and exit.
