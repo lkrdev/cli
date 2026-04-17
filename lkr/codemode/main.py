@@ -5,7 +5,7 @@ import typer
 import pydantic_monty
 from mcp.server.fastmcp import FastMCP
 
-from lkr.auth_service import get_auth
+from lkr.auth_service import get_auth, is_auth_expired
 from lkr.classes import LkrCtxObj
 from lkr.logger import logger
 
@@ -13,7 +13,7 @@ __all__ = ["group"]
 
 mcp = FastMCP("lkr:codemode")
 group = typer.Typer()
-ctx_lkr: Optional[LkrCtxObj] = None
+
 
 
 def get_mcp_sdk(ctx: LkrCtxObj):
@@ -60,12 +60,9 @@ def run_python_code(code: str) -> str:
     Execute Python code safely with access to all Looker SDK methods as global functions.
     Capture the result and any print outputs.
     """
-    global ctx_lkr
     try:
-        if not ctx_lkr:
-            ctx_lkr = LkrCtxObj(force_oauth=False)
-             
-        sdk = get_mcp_sdk(ctx_lkr)
+        ctx = LkrCtxObj(force_oauth=False)
+        sdk = get_mcp_sdk(ctx)
         
         external_funcs = {}
         for name, method in inspect.getmembers(sdk, predicate=inspect.ismethod):
@@ -91,7 +88,7 @@ def run_python_code(code: str) -> str:
         return output
     except Exception as e:
         logger.error(f"Error executing Monty: {e}")
-        if "invalid_grant" in str(e) or "token expired" in str(e):
+        if is_auth_expired(e):
             return "Error: Your Looker OAuth session has expired. Please run 'lkr auth login' to re-authenticate."
         return f"Error: {str(e)}"
 
@@ -101,11 +98,7 @@ def run(
     ctx: typer.Context,
     debug: bool = typer.Option(False, help="Debug mode"),
 ):
-    global ctx_lkr
-
-    ctx_lkr = LkrCtxObj(force_oauth=False)
     mcp.run()
 
 if __name__ == "__main__":
-    ctx_lkr = LkrCtxObj(force_oauth=False)
     mcp.run("sse")
