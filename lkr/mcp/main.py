@@ -550,7 +550,32 @@ def run(
         set_log_level(LogLevel.DEBUG)
     else:
         set_log_level(LogLevel.ERROR)
+        
+    import mcp.server.stdio
+    
+    # Save the original stdout for the MCP transport
+    original_stdout = sys.stdout
+    
+    # Redirect sys.stdout to sys.stderr to prevent print() from polluting the JSON-RPC stream
     sys.stdout = sys.stderr
+    
+    import anyio
+    from io import TextIOWrapper
+    
+    # Wrap the original stdout buffer using anyio, exactly as FastMCP does
+    wrapped_stdout = anyio.wrap_file(TextIOWrapper(original_stdout.buffer, encoding="utf-8"))
+    
+    # Patch FastMCP's stdio_server to use the original stdout
+    original_stdio_server = mcp.server.stdio.stdio_server
+    
+    import contextlib
+    @contextlib.asynccontextmanager
+    async def patched_stdio_server():
+        async with original_stdio_server(stdout=wrapped_stdout) as streams:
+            yield streams
+            
+    mcp.server.stdio.stdio_server = patched_stdio_server
+
     mcp.run()
 
 

@@ -52,7 +52,7 @@ def callback(
         str | None, typer.Option(envvar="LOOKERSDK_CLIENT_SECRET")
     ] = None,
     base_url: Annotated[str | None, typer.Option(envvar="LOOKERSDK_BASE_URL")] = None,
-    log_level: Annotated[LogLevel | None, typer.Option(envvar="LOG_LEVEL")] = None,
+    log_level: Annotated[LogLevel | None, typer.Option(envvar="LOG_LEVEL", case_sensitive=False)] = None,
     quiet: Annotated[bool, typer.Option("--quiet")] = False,
     force_oauth: Annotated[bool, typer.Option("--force-oauth")] = False,
     dev: Annotated[Optional[bool], typer.Option("--dev")] = None,

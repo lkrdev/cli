@@ -19,9 +19,15 @@ except ModuleNotFoundError:
 if STRUCT_LOG_AVAILABLE:
     structlog.configure(
         processors=[
+            structlog.stdlib.filter_by_level,
             structlog.processors.TimeStamper(fmt="iso"),
+            structlog.stdlib.add_logger_name,
+            structlog.stdlib.add_log_level,
             structlog.processors.JSONRenderer(),
-        ]
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
     )
 
 # Define a custom theme for our logging
@@ -77,7 +83,7 @@ def set_log_level(level: LogLevel):
     """Set the logging level for the application."""
     logger.setLevel(getattr(logging, level.value))
     if structured_logger:
-        structured_logger.setLevel(getattr(logging, level.value))
+        logging.getLogger("lkr.structured").setLevel(getattr(logging, level.value))
     # Update requests_transport logger level based on the new level
     if requests_logger:
         requests_logger.setLevel(
