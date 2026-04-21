@@ -1,6 +1,6 @@
 import inspect
-import sys
 import io
+import json
 from contextlib import redirect_stdout
 from typing import Optional
 
@@ -107,11 +107,13 @@ def run_python_code(code: str) -> str:
         printed_output = f.getvalue()
         
         # m.run() returns the evaluated result of the last expression (which is already a primitive)
-        import json
         try:
             # Use JSON for nice formatting if it's a dict/list
             if result is not None:
-                output = json.dumps(result, indent=2, default=str)
+                if isinstance(result, str):
+                    output = result
+                else:
+                    output = json.dumps(result, indent=2, default=str)
             else:
                 output = ""
         except Exception:
