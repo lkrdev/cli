@@ -85,7 +85,7 @@ Built into the `lkr` is an MCP server. Right now its tools are based on helping 
   "mcpServers": {
     "lkr-mcp": {
       "command": "uvx",
-      "args": ["run", "--with", "lkr-dev-cli[mcp]", "lkr", "mcp", "run"]
+      "args": ["--from", "lkr-dev-cli[mcp]", "lkr", "mcp", "run"]
     },
     "lkr-mcp-docker": {
       "command": "docker",
