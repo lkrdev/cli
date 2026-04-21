@@ -19,7 +19,7 @@ The tool instantiates Looker SDK natively, searches all bound methods, and passe
 ### 1. Starting the Server
 To immediately trigger the stdio listener, use:
 ```bash
-uvx --from lkr-dev-cli[codemode] lkr code-mode run
+uvx -q --from lkr-dev-cli[codemode] lkr code-mode run
 ```
 
 ### 2. Client Configuration
@@ -28,9 +28,9 @@ To hook this server into Cursor or Claude Desktop natively over stdio, append th
 ```json
 {
   "mcpServers": {
-    "looker-codemode": {
+    "lkr_codemode": {
       "command": "uvx",
-      "args": ["--from", "lkr-dev-cli[codemode]", "lkr", "code-mode", "run"],
+      "args": ["-q", "--from", "lkr-dev-cli[codemode]", "lkr", "code-mode", "run"],
       "env": {
         "LOOKERSDK_BASE_URL": "https://your.looker.instance",
         "LOOKERSDK_CLIENT_ID": "your-client-id",
@@ -44,7 +44,7 @@ To hook this server into Cursor or Claude Desktop natively over stdio, append th
 ### 3. Visual Inspector
 To check things out on a web panel:
 ```bash
-npx @modelcontextprotocol/inspector uvx --from lkr-dev-cli[codemode] lkr code-mode run
+npx @modelcontextprotocol/inspector uvx -q --from lkr-dev-cli[codemode] lkr code-mode run
 ```
 
 ```

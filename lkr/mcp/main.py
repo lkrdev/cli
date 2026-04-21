@@ -549,6 +549,8 @@ def run(
         set_log_level(LogLevel.DEBUG)
     else:
         set_log_level(LogLevel.ERROR)
+    import sys
+    sys.stdout = sys.stderr
     mcp.run()
 
 

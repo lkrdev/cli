@@ -36,7 +36,7 @@ theme = Theme(
 ) if RICH_AVAILABLE else None
 
 # Create a console for logging
-console = Console(theme=theme) if RICH_AVAILABLE else None
+console = Console(theme=theme, stderr=True) if RICH_AVAILABLE else None
 
 # Configure the logging handler
 handler = RichHandler(

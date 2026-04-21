@@ -1,4 +1,7 @@
 import inspect
+import sys
+import io
+from contextlib import redirect_stdout
 from typing import Optional
 
 import typer
@@ -58,7 +61,14 @@ def to_primitive(obj):
 def run_python_code(code: str) -> str:
     """
     Execute Python code safely with access to all Looker SDK methods as global functions.
-    Capture the result and any print outputs.
+    Capture the result. 
+    
+    AGENT HINTS:
+    - Use `dir()` and `help('method_name')` to discover available SDK methods.
+    - Do not instantiate an SDK; use global functions directly (e.g. `me()`).
+    - Returned Looker models are primitive dictionaries (use `obj["id"]`, not `obj.id`).
+    - Return your output (avoid using print() as it may pollute the stdio stream).
+    - Recursion: Use `folder_children(id)` to traverse nested folders.
     """
     try:
         ctx = LkrCtxObj(force_oauth=False)
@@ -75,22 +85,106 @@ def run_python_code(code: str) -> str:
                     return wrapper
                 external_funcs[name] = make_wrapper(method)
 
+        # Provide helper functions for the LLM to explore the SDK
+        external_funcs['dir'] = lambda: list(external_funcs.keys())
+        
+        def _help(name: str) -> str:
+            if name in external_funcs:
+                if hasattr(sdk, name):
+                    return getattr(sdk, name).__doc__ or "No docstring available."
+                return f"{name} is a built-in helper function."
+            return f"Function '{name}' not found."
+        external_funcs['help'] = _help
+
         m = pydantic_monty.Monty(code)
-        result = m.run(external_functions=external_funcs)
         
-        # Monty run returns a MontyComplete or None
-        output = str(getattr(result, "output", "")) if result is not None else ""
+        # Redirect stdout to capture any print() statements
+        # and prevent them from corrupting the JSON-RPC stream
+        f = io.StringIO()
+        with redirect_stdout(f):
+            result = m.run(external_functions=external_funcs)
         
-        # Try to append captured stdout if available on the object
-        stdout = getattr(result, "stdout", None) if result is not None else None
-        if stdout:
-            return f"Output:\n{output}\nStdout:\n{stdout}"
+        printed_output = f.getvalue()
+        
+        # m.run() returns the evaluated result of the last expression (which is already a primitive)
+        import json
+        try:
+            # Use JSON for nice formatting if it's a dict/list
+            if result is not None:
+                output = json.dumps(result, indent=2, default=str)
+            else:
+                output = ""
+        except Exception:
+            output = repr(result)
+            
+        if printed_output:
+            return f"PRINTED OUTPUT:\n{printed_output}\nRESULT:\n{output}"
         return output
     except Exception as e:
         logger.error(f"Error executing Monty: {e}")
         if is_auth_expired(e):
             return "Error: Your Looker OAuth session has expired. Please run 'lkr auth login' to re-authenticate."
         return f"Error: {str(e)}"
+
+
+@mcp.resource("looker://agent-hints")
+def get_agent_hints() -> str:
+    """Crucial hints and rules for AI agents writing Python for the Looker SDK."""
+    return """
+1. **Global Functions**: All Looker SDK methods are global. Use `me()`, not `sdk.me()`.
+2. **Dict Access**: Return values are dictionaries, not objects. Use `user["id"]`, not `user.id`.
+3. **Discovery**: Use `dir()` and `help('method')` to explore the SDK.
+4. **No Imports**: Do not `import looker_sdk`.
+5. **Output**: Return your results instead of using `print()`.
+6. **Efficiency**: Always use the `fields` parameter (e.g., `all_dashboards(fields="id,title")`) when listing many objects to prevent timeouts.
+7. **Nested Folders**: Use `folder_children(id)` to get sub-folders.
+"""
+
+
+@mcp.prompt("explore_looker_sdk")
+def explore_looker_sdk() -> str:
+    """Provide examples for how to explore the Looker SDK in code mode."""
+    return '''
+To explore the Looker SDK, you can use the injected `dir()` and `help()` helpers.
+Do not use print() as it may corrupt the MCP output stream; always return the result.
+
+Example 1: Find all dashboard-related methods
+```python
+return [m for m in dir() if 'dashboard' in m.lower()]
+```
+
+Example 2: Get the description of a specific method
+```python
+return help('search_dashboards')
+```
+'''
+
+
+@mcp.prompt("list_personal_dashboards")
+def list_personal_dashboards() -> str:
+    """Provide an example of how to recursively list dashboards in a user's personal folder."""
+    return '''
+Here is a robust example of how to traverse the folder hierarchy using the Looker SDK in code mode:
+
+```python
+def get_all_items(folder_id):
+    f = folder(folder_id)
+    items = {
+        "dashboards": f.get("dashboards", []),
+        "looks": f.get("looks", [])
+    }
+    
+    for child in folder_children(folder_id):
+        child_items = get_all_items(child["id"])
+        items["dashboards"].extend(child_items["dashboards"])
+        items["looks"].extend(child_items["looks"])
+        
+    return items
+
+me_data = me()
+return get_all_items(me_data["personal_folder_id"])
+```
+'''
 
 
 @group.command(name="run")
