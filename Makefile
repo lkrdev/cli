@@ -17,10 +17,10 @@ codemode-start:
 	@echo "Add this to your mcpServers config:"
 	@echo "{"
 	@echo "  \"mcpServers\": {"
-	@echo "    \"lkr-codemode\": {"
+	@echo "    \"lkr_codemode\": {"
 	@echo "      \"command\": \"uvx\","
-	@echo "      \"args\": [\"--from\", \"lkr-dev-cli[codemode]\", \"lkr\", \"code-mode\", \"run\"]"
+	@echo "      \"args\": [\"-q\", \"--from\", \"lkr-dev-cli[codemode]\", \"lkr\", \"code-mode\", \"run\"]"
 	@echo "    }"
 	@echo "  }"
 	@echo "}"
-	uv run lkr code-mode run
+	uv run -q lkr code-mode run

@@ -1,5 +1,7 @@
 from lkr.codemode.main import run_python_code
 
+# Find me all my dashboards and looks within all my personal folder and nested folders
+
 code = """
 me_obj = me()
 personal_folder_id = me_obj["personal_folder_id"]

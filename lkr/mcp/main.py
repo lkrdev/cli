@@ -1,4 +1,5 @@
 # server.py
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -549,6 +550,7 @@ def run(
         set_log_level(LogLevel.DEBUG)
     else:
         set_log_level(LogLevel.ERROR)
+    sys.stdout = sys.stderr
     mcp.run()
 
 
