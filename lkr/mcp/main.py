@@ -550,7 +550,10 @@ def run(
         set_log_level(LogLevel.DEBUG)
     else:
         set_log_level(LogLevel.ERROR)
-    sys.stdout = sys.stderr
+        
+    from lkr.mcp_transport import patch_mcp_stdio_transport
+    patch_mcp_stdio_transport(mcp)
+
     mcp.run()
 
 

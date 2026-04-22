@@ -194,6 +194,9 @@ def run(
     ctx: typer.Context,
     debug: bool = typer.Option(False, help="Debug mode"),
 ):
+    from lkr.mcp_transport import patch_mcp_stdio_transport
+    patch_mcp_stdio_transport(mcp)
+
     mcp.run()
 
 if __name__ == "__main__":
