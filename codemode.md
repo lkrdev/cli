@@ -1,4 +1,4 @@
-# Looker Code-Mode MCP Server
+# Looker Code Mode MCP Server
 
 `lkr code-mode` allows you to invoke a Python-based Model Context Protocol (MCP) server. It offers an AI agent the unique capacity to batched-execute Python commands securely within the Monty sandbox against your active Looker instance!
 
@@ -11,7 +11,7 @@ The tool instantiates Looker SDK natively, searches all bound methods, and passe
 ### Key Features:
 - **100% Tool Coverage:** Accesses all Looker SDK public operations smoothly without token limits.
 - **Recursive Translation:** Complex Looker models like User, Folder, Dashboard get string-converted into dictionaries immediately before ingesting them into Monty.
-- **Automatic PKCE Restarter:** Caught an invalid token? Code-Mode immediately catches `InvalidRefreshTokenError` and safely opens up your PKCE authentication browser automatically.
+- **Automatic PKCE Restarter:** Caught an invalid token? Code Mode immediately catches `InvalidRefreshTokenError` and safely opens up your PKCE authentication browser automatically.
 - **Extremely Secure:** Monty interpreter ensures isolated sandbox processing. No local filesystem accesses are exposed.
 
 ## Continuous Usage

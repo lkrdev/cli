@@ -73,9 +73,9 @@ Go to the Looker API Explorer for Register OAuth App (https://your.looker.instan
 - This only needs to be done once per instance
 
 
-## Code-Mode
+## Code Mode
 
-Execute Python code safely with full Looker SDK coverage within a secure sandbox environment. Constructed as an MCP tool, it dynamically inspects the Looker SDK for all public methods and injects them into the Monty sandbox safely. For detailed options, safe primitives transformations, and PKCE configurations, view the full [Code-Mode Docs](./codemode.md).
+Execute Python code safely with full Looker SDK coverage within a secure sandbox environment. Constructed as an MCP tool, it dynamically inspects the Looker SDK for all public methods and injects them into the Monty sandbox safely. For detailed options, safe primitives transformations, and PKCE configurations, view the full [Code Mode Docs](./codemode.md).
 
 ## MCP
 Built into the `lkr` is an MCP server. Right now its tools are based on helping you work within an IDE. To use it a tool like [Cursor](https://www.cursor.com/), add this to your mcp.json
