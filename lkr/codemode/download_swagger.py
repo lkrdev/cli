@@ -2,6 +2,8 @@ import os
 import requests
 import json
 import sys
+from dotenv import load_dotenv
+
 
 def download_swagger():
     base_url = os.environ.get("LOOKERSDK_BASE_URL")
@@ -12,11 +14,8 @@ def download_swagger():
         env_path = os.path.join(current_dir, "..", "..", ".env")
         if os.path.exists(env_path):
             print(f"Loading environment from {env_path}")
-            with open(env_path) as f:
-                for line in f:
-                    if line.startswith("LOOKERSDK_BASE_URL="):
-                        base_url = line.split("=", 1)[1].strip()
-                        break
+            load_dotenv(env_path)
+            base_url = os.environ.get("LOOKERSDK_BASE_URL")
                         
     if not base_url:
         print("Error: LOOKERSDK_BASE_URL environment variable not set.", file=sys.stderr)

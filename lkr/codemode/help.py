@@ -35,7 +35,7 @@ def _get_operation_map():
                             'summary': summary,
                             'description': description
                         }
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         pass
         
     return _operation_map
