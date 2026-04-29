@@ -401,7 +401,6 @@ dependencies = [
     { name = "looker-sdk" },
     { name = "pydantic" },
     { name = "pydash" },
-    { name = "python-dotenv" },
     { name = "questionary" },
     { name = "requests" },
     { name = "structlog" },
@@ -436,6 +435,7 @@ tools = [
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
+    { name = "python-dotenv" },
     { name = "ruff" },
 ]
 
@@ -456,7 +456,6 @@ requires-dist = [
     { name = "pydantic-monty", marker = "extra == 'all'" },
     { name = "pydantic-monty", marker = "extra == 'codemode'" },
     { name = "pydash", specifier = ">=8.0.5" },
-    { name = "python-dotenv", specifier = ">=1.1.1" },
     { name = "questionary", specifier = ">=2.1.0" },
     { name = "requests", specifier = ">=2.32.4" },
     { name = "selenium", marker = "extra == 'all'", specifier = ">=4.34.0" },
@@ -469,6 +468,7 @@ provides-extras = ["mcp", "codemode", "observability", "tools", "all"]
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = ">=8.4.1" },
+    { name = "python-dotenv", specifier = ">=1.1.1" },
     { name = "ruff", specifier = ">=0.12.1" },
 ]
 
