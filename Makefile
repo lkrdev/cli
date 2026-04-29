@@ -12,6 +12,11 @@ codemode-test:
 codemode-test2:
 	uv run python tests/test_codemode2.py
 
+codemode-test3:
+	uv run pytest tests/test_codemode_new_features.py
+
+download-swagger:
+	uv run python lkr/codemode/download_swagger.py
 
 codemode-start:
 	@echo "Add this to your mcpServers config:"

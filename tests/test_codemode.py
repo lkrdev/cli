@@ -1,4 +1,7 @@
 from lkr.codemode.main import run_python_code
+import looker_sdk
+sdk = looker_sdk.init40()
+sdk.me()
 
 code = """
 me_obj = me()
