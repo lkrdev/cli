@@ -1,4 +1,4 @@
-.PHONY: docs test-deps codemode-test codemode-test2 codemode-start
+.PHONY: docs test-deps codemode-test codemode-start
 
 docs:
 	uv run typer lkr/main.py utils docs --output lkr.md
@@ -7,11 +7,11 @@ test-deps:
 	python tests/test_dependency_resolution.py 
 
 codemode-test:
-	uv run python tests/test_codemode.py
+	uv run pytest tests/test_codemode.py
 
-codemode-test2:
-	uv run python tests/test_codemode2.py
 
+download-swagger:
+	uv run python lkr/codemode/download_swagger.py
 
 codemode-start:
 	@echo "Add this to your mcpServers config:"
