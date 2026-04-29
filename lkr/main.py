@@ -43,6 +43,7 @@ add_optional_typer_group(app, "lkr.mcp.main.group", "mcp")
 add_optional_typer_group(app, "lkr.observability.main.group", "observability")
 add_optional_typer_group(app, "lkr.tools.main.group", "tools")
 add_optional_typer_group(app, "lkr.codemode.main.group", "code-mode")
+add_optional_typer_group(app, "lkr.query_mcp.main.group", "query-mcp")
 
 @app.callback()
 def callback(
