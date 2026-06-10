@@ -1,11 +1,16 @@
 {
-    "sqltools.connections": [
-        {
-            "previewLimit": 50,
-            "driver": "SQLite",
-            "name": "lookerauth",
-            "database": "/Users/bryanweber/.lkr/auth.db"
-        }
-    ],
-    "python.analysis.typeCheckingMode": "basic"
+  "[python]": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "always",
+      "source.organizeImports.ruff": "always"
+    }
+  },
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python",
+  "ruff.interpreter": ["${workspaceFolder}/backend/.venv/bin/python"],
+  "ty.configurationFile": "./ty.toml",
+  "python.pyrefly.typeCheckingMode": "off",
+  "python.pyrefly.disableLanguageServices": true,
+  "python.pyrefly.disableTypeErrors": true
 }

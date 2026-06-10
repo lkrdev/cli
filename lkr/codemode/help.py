@@ -1,6 +1,5 @@
 import re
 import inspect
-import fnmatch
 import json
 import os
 from lkr.codemode.constant import EXCLUDED_FUNCS

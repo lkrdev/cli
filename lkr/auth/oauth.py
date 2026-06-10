@@ -3,11 +3,12 @@ import os
 import secrets
 import socket
 import socketserver
+import subprocess
 import threading
 import time
 import urllib.parse
 import webbrowser
-from typing import Optional, TypedDict
+from typing import Optional, TypedDict, cast
 from urllib.parse import parse_qs
 
 from lkr.custom_types import NewTokenCallback
@@ -26,10 +27,16 @@ def kill_process_on_port(port: int, retries: int = 5, delay: float = 1) -> None:
     except socket.error:
         # Port is in use, try to kill the process
         if os.name == "posix":  # macOS/Linux
-            os.system(f"lsof -ti tcp:{port} | xargs kill -9 2>/dev/null")
+            subprocess.run(
+                f"lsof -ti tcp:{port} | xargs kill -9",
+                shell=True,
+                capture_output=True,
+            )
         elif os.name == "nt":  # Windows
-            os.system(
-                f'for /f "tokens=5" %a in (\'netstat -aon ^| find ":{port}"\') do taskkill /F /PID %a 2>nul'
+            subprocess.run(
+                f'for /f "tokens=5" %a in (\'netstat -aon ^| find ":{port}"\') do taskkill /F /PID %a',
+                shell=True,
+                capture_output=True,
             )
         # After killing, wait for the port to be free
         for _ in range(retries):
@@ -66,16 +73,17 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
         logger.debug(f"OAuth callback query parameters: {query_components}")
 
         # Store the code in the server instance
+        server = cast(OAuthCallbackServer, self.server)
         if "code" in query_components:
-            self.server.auth_code = query_components["code"][0]  # type: ignore
+            server.auth_code = query_components["code"][0]
             logger.debug(
-                f"Authorization code received successfully: {self.server.auth_code[:5]}..."
+                f"Authorization code received successfully: {server.auth_code[:5]}..."
             )
             self.wfile.write(
                 b"Successfully authenticated to Looker OAuth! You can close this window."
             )
             # Shutdown the server
-            threading.Thread(target=self.server.shutdown).start()
+            threading.Thread(target=server.shutdown).start()
         elif "error" in query_components:
             error = query_components["error"][0]
             error_description = query_components.get("error_description", [""])[0]
@@ -87,7 +95,7 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
                     "utf-8"
                 )
             )
-            threading.Thread(target=self.server.shutdown).start()
+            threading.Thread(target=server.shutdown).start()
         else:
             logger.warning(
                 f"Callback received without 'code' or 'error' query parameters: {self.path}"
@@ -95,7 +103,7 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(
                 b"OAuth Authentication Failed: Invalid callback request. You can close this window."
             )
-            threading.Thread(target=self.server.shutdown).start()
+            threading.Thread(target=server.shutdown).start()
 
     def log_message(self, format, *args):
         """Suppress logging of requests"""

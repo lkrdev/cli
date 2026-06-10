@@ -42,7 +42,8 @@ def ok[T](func: Callable[[], T], default: T) -> T:
     try:
         return func()
     except Exception as e:
-        logger.error(f"Error in {func.__name__}: {str(e)}")
+        fname = getattr(func, "__name__", str(func))
+        logger.error(f"Error in {fname}: {str(e)}")
         return default
 
 

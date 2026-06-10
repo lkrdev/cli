@@ -55,7 +55,8 @@ build-backend = "hatchling.build"
 dev = [
     "pytest>=8.4.1",
     "ruff>=0.12.1",
-    "python-dotenv>=1.1.1"
+    "python-dotenv>=1.1.1",
+    "ty",
 ]
 
 [tool.hatch.build.targets.wheel]

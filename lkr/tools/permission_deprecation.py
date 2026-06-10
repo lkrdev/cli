@@ -1,5 +1,5 @@
 import typer
-from typing import List, Optional, Set, Dict
+from typing import List, Optional, Set, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
 from lkr.auth_service import get_auth
@@ -48,7 +48,7 @@ def schedule_download_deprecation(
     roles = sdk.all_roles(fields="id,name,permission_set,model_set")
     
     # Pre-process roles for faster lookup
-    role_map = {}
+    role_map: dict[str, Any] = {}
     for role in roles:
         target_perms_in_role = set()
         has_access_data = False
@@ -167,14 +167,16 @@ def schedule_download_deprecation(
                 missing = user_instance_perms - user_model_perms[m_name]
                 model_results[m_name] = sorted(list(missing))
                     
-        audit_rows.append(AuditRow(
-            user_id=str(user_id),
-            name=name,
-            email=user.email,
-            instance_wide=sorted(list(user_instance_perms)),
-            model_permissions=model_results,
-            has_target_perms=len(user_instance_perms) > 0
-        ))
+        audit_rows.append(
+            AuditRow(
+                user_id=str(user_id),
+                name=name,
+                email=user.email if isinstance(user.email, str) else None,
+                instance_wide=sorted(list(user_instance_perms)),
+                model_permissions=model_results,
+                has_target_perms=len(user_instance_perms) > 0,
+            )
+        )
 
     # 5. Filter Results unless unfiltered is True
     if not unfiltered:

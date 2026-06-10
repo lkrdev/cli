@@ -88,7 +88,7 @@ def test_lookup_type_recursion():
     }
     
     original_get_swagger = lkr.codemode.type._get_swagger_data
-    lkr.codemode.type._get_swagger_data = lambda: mock_swagger
+    setattr(lkr.codemode.type, "_get_swagger_data", lambda: mock_swagger)
     
     try:
         code = """
@@ -98,7 +98,7 @@ return lookup_type('Node')
         assert result.count("Type: Node") == 1
         assert "child: Node (Ref)" in result
     finally:
-        lkr.codemode.type._get_swagger_data = original_get_swagger
+        setattr(lkr.codemode.type, "_get_swagger_data", original_get_swagger)
 
 def test_basic_usage():
     code = """
@@ -134,3 +134,18 @@ return "\\n".join(res)
 """
     result = run_python_code(code)
     assert "+ Folder:" in result
+
+
+def test_extended_sdk_methods_present():
+    code = """
+methods = ['all_project_files', 'get_file_content', 'create_file', 'update_file', 'delete_file', 'create_project_directory', 'delete_project_directory']
+for m in methods:
+    if m not in dir():
+        return "Missing " + m
+return "All present"
+"""
+    result = run_python_code(code)
+    assert result == "All present"
+
+
+

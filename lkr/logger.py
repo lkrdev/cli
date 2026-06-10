@@ -66,7 +66,12 @@ logging.basicConfig(
 
 # Create a logger for the application
 logger = logging.getLogger("lkr")
-structured_logger = structlog.get_logger("lkr.structured") if STRUCT_LOG_AVAILABLE else None
+from typing import Any
+structured_logger: Any = (
+    structlog.get_logger("lkr.structured")
+    if STRUCT_LOG_AVAILABLE
+    else logging.getLogger("lkr.structured")
+)
 
 
 # Configure the requests_transport logger to only show debug messages when LOG_LEVEL is DEBUG

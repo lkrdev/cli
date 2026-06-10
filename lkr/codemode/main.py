@@ -2,7 +2,6 @@ import inspect
 import io
 import json
 from contextlib import redirect_stdout
-from typing import Optional
 
 import typer
 import pydantic_monty

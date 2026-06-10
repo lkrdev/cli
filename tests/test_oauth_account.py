@@ -91,6 +91,7 @@ def test_set_token_refreshes_lookedup_account(temp_db):
     ctx = LkrCtxObj(force_oauth=False, oauth_account="target-inst")
     auth_service = SqlLiteAuth(ctx, db_path=temp_db)
     curr = auth_service._get_current_auth()
+    assert curr is not None
     assert curr.instance_name == "target-inst"
 
     # Refresh the token
