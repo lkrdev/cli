@@ -539,7 +539,11 @@ def run(
 
     global ctx_lkr
 
-    ctx_lkr = LkrCtxObj(force_oauth=False)
+    ctx_lkr = (
+        ctx.obj.get("ctx_lkr")
+        if (ctx.obj and "ctx_lkr" in ctx.obj)
+        else LkrCtxObj(force_oauth=False)
+    )
     validate_current_instance_database_search_file(ctx, debug)
     sdk = get_mcp_sdk(ctx_lkr)
     if not sdk.auth.settings.base_url:

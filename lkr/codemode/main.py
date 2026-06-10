@@ -21,6 +21,7 @@ __all__ = ["group"]
 
 mcp = FastMCP("lkr:codemode")
 group = typer.Typer()
+ctx_lkr: LkrCtxObj | None = None
 
 
 
@@ -79,7 +80,16 @@ def run_python_code(code: str, dev_mode: bool = False) -> str:
     - Dev Mode: Set `dev_mode=True` to ensure you are in development mode before running code.
     """
     try:
-        ctx = LkrCtxObj(force_oauth=False)
+        global ctx_lkr
+        ctx = (
+            LkrCtxObj(
+                force_oauth=ctx_lkr.force_oauth,
+                use_production=ctx_lkr.use_production,
+                oauth_account=ctx_lkr.oauth_account,
+            )
+            if ctx_lkr
+            else LkrCtxObj(force_oauth=False)
+        )
 
         if dev_mode:
             ctx.use_production = False
@@ -156,6 +166,12 @@ def run(
     ctx: typer.Context,
     debug: bool = typer.Option(False, help="Debug mode"),
 ):
+    global ctx_lkr
+    ctx_lkr = (
+        ctx.obj.get("ctx_lkr")
+        if (ctx.obj and "ctx_lkr" in ctx.obj)
+        else LkrCtxObj(force_oauth=False)
+    )
     mcp.run()
 
 if __name__ == "__main__":

@@ -68,6 +68,13 @@ def callback(
     quiet: Annotated[bool, typer.Option("--quiet")] = False,
     force_oauth: Annotated[bool, typer.Option("--force-oauth")] = False,
     dev: Annotated[Optional[bool], typer.Option("--dev")] = None,
+    oauth_account: Annotated[
+        str | None,
+        typer.Option(
+            "--oauth-account",
+            help="OAuth account to lookup in DB and use regardless of what's active",
+        ),
+    ] = None,
 ):
     if client_id:
         os.environ["LOOKERSDK_CLIENT_ID"] = client_id
@@ -85,6 +92,7 @@ def callback(
     ctx_obj = LkrCtxObj(
         force_oauth=force_oauth,
         use_production=not dev if dev is not None else True,
+        oauth_account=oauth_account,
     )
     ctx.obj["ctx_lkr"] = ctx_obj
     # if the user passes --dev, but lkrCtxObj.use_sdk is oauth, then we need to log a warning saying we're ignoring the --dev flag

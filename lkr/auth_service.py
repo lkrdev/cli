@@ -3,12 +3,10 @@ import os
 import sqlite3
 import types
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, List, Self, Tuple, Union
+from typing import List, Self, Tuple, Union
 
 import requests
-
-if TYPE_CHECKING:
-    import typer
+import typer
 from looker_sdk.rtl import serialize
 from looker_sdk.rtl.api_settings import ApiSettings, SettingsConfig
 from looker_sdk.rtl.auth_session import AuthSession, CryptoHash, OAuthSession
@@ -369,11 +367,12 @@ class CurrentAuth(BaseModel):
         ).isoformat()
         if self.from_db and new_token:
             connection.execute(
-                "UPDATE auth SET access_token = ?, token_type = ?, expires_at = ? WHERE current_instance = 1",
+                "UPDATE auth SET access_token = ?, token_type = ?, expires_at = ? WHERE instance_name = ?",
                 (
                     new_token.access_token,
                     new_token.token_type,
                     expires_at,
+                    self.instance_name,
                 ),
             )
         else:
@@ -397,6 +396,7 @@ class CurrentAuth(BaseModel):
 
 class SqlLiteAuth:
     def __init__(self, ctx: LkrCtxObj, db_path: str = "~/.lkr/auth.db"):
+        self.ctx = ctx
         self.db_path = os.path.expanduser(db_path)
         # Ensure the directory exists
         db_dir = os.path.dirname(self.db_path)
@@ -454,6 +454,16 @@ class SqlLiteAuth:
         self.conn.commit()
 
     def _get_current_auth(self) -> CurrentAuth | None:
+        if self.ctx.oauth_account:
+            cursor = self.conn.execute(
+                "SELECT instance_name, access_token, refresh_token, refresh_expires_at, token_type, expires_at, base_url, use_production FROM auth WHERE instance_name = ?",
+                (self.ctx.oauth_account,),
+            )
+            row = cursor.fetchone()
+            if row:
+                return CurrentAuth.from_db_row(row)
+            logger.error("couldnt find oauth account in db, run lkr auth login")
+            raise typer.Exit(1)
         cursor = self.conn.execute(
             "SELECT instance_name, access_token, refresh_token, refresh_expires_at, token_type, expires_at, base_url, use_production FROM auth WHERE current_instance = 1"
         )
