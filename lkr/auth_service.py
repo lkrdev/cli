@@ -31,8 +31,9 @@ def is_auth_expired(e: Exception) -> bool:
     return "invalid_grant" in str(e) or "token expired" in str(e)
 
 
-
-def get_auth(ctx: Union["typer.Context", LkrCtxObj]) -> Union["SqlLiteAuth", "ApiKeyAuth"]:
+def get_auth(
+    ctx: Union["typer.Context", LkrCtxObj],
+) -> Union["SqlLiteAuth", "ApiKeyAuth"]:
     if isinstance(ctx, LkrCtxObj):
         lkr_ctx = ctx
     else:
@@ -130,7 +131,11 @@ class DbOAuthSession(OAuthSession):
     def redeem_auth_code(self, *args, **kwargs):
         super().redeem_auth_code(*args, **kwargs)
         if not self.use_production:
-            self._switch_to_dev_mode()
+            try:
+                self._switch_to_dev_mode()
+            except Exception as e:
+                logger.error(f"Failed to switch to development mode: {e}")
+                raise typer.Exit(1)
         self.new_token_callback(self.token)
 
     def _switch_to_dev_mode(self):
@@ -485,13 +490,16 @@ class SqlLiteAuth:
             )
             if prompt_refresh_invalid_token:
                 import sys
+
                 try:
                     sdk.auth.authenticate({})
                 except Exception as e:
                     if is_auth_expired(e):
                         if sys.stdin.isatty():
                             self._cli_confirm_refresh_token(current_auth, quiet=False)
-                            return self.get_current_sdk(prompt_refresh_invalid_token=False)
+                            return self.get_current_sdk(
+                                prompt_refresh_invalid_token=False
+                            )
                     raise e
 
             return sdk

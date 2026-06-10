@@ -50,6 +50,8 @@ def login(
         typer.Option(
             "-p",
             "--port",
+            min=1,
+            max=65535,
             help="Port to run the local OAuth redirect web server on",
         ),
     ] = None,
@@ -146,10 +148,9 @@ def login(
                 port=port,
             )
             logger.info(f"Opening browser for authentication at {origin + '/auth'}...")
-            if port:
-                logger.info(
-                    f"Listening for OAuth callback on http://localhost:{port}/callback..."
-                )
+            logger.info(
+                f"Listening for OAuth callback on http://localhost:{oauth.port}/callback..."
+            )
             login_response = oauth.initiate_login(origin)
 
             if login_response["auth_code"]:
