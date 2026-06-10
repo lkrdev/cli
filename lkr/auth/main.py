@@ -45,6 +45,14 @@ def login(
             help="Name of the Looker instance to login or switch to",
         ),
     ] = None,
+    port: Annotated[
+        int | None,
+        typer.Option(
+            "-p",
+            "--port",
+            help="Port to run the local OAuth redirect web server on",
+        ),
+    ] = None,
 ):
     """
     Login to Looker instance using OAuth2 or switch to an existing authenticated instance
@@ -101,10 +109,28 @@ def login(
             origin = urllib.parse.urlunparse(
                 (parsed_url.scheme, parsed_url.netloc, "", "", "", "")
             )
-            use_production = typer.confirm("Use production mode?", default=False)
+            if QUESTIONARY_AVAILABLE:
+                mode = questionary.select(
+                    "Do you want this instance to be used for production or development mode?",
+                    choices=[
+                        questionary.Choice("Development", value=False),
+                        questionary.Choice("Production", value=True),
+                    ],
+                    pointer=">",
+                ).ask()
+                if mode is None:
+                    raise typer.Exit()
+                use_production = mode
+            else:
+                use_production = typer.confirm("Use production mode?", default=False)
+            clean_netloc = (
+                parsed_url.netloc.split(":")[0]
+                .removesuffix(".cloud.looker.com")
+                .removesuffix(".looker.com")
+            )
             instance_name = typer.prompt(
                 "Enter a name for this Looker instance",
-                default=f"{'dev' if not use_production else 'prod'}-{parsed_url.netloc}",
+                default=f"{'prod' if use_production else 'dev'}-{clean_netloc}",
             )
             # Ensure instance_name is str, not None
             assert instance_name is not None, (
@@ -115,13 +141,22 @@ def login(
                 auth.add_auth(instance_name, origin, token, use_production)
 
             oauth = OAuth2PKCE(
-                new_token_callback=auth_callback, use_production=use_production
+                new_token_callback=auth_callback,
+                use_production=use_production,
+                port=port,
             )
             logger.info(f"Opening browser for authentication at {origin + '/auth'}...")
+            if port:
+                logger.info(
+                    f"Listening for OAuth callback on http://localhost:{port}/callback..."
+                )
             login_response = oauth.initiate_login(origin)
 
             if login_response["auth_code"]:
                 logger.info("Successfully received authorization code!")
+                logger.debug(
+                    "Exchanging authorization code for tokens at /api/token..."
+                )
                 try:
                     oauth.auth_code = login_response["auth_code"]
                     token = oauth.exchange_code_for_token()
@@ -136,7 +171,12 @@ def login(
                     )
                     raise typer.Exit(1)
             else:
-                logger.error("Failed to receive authorization code")
+                logger.error(
+                    "Failed to receive authorization code from OAuth callback."
+                )
+                logger.debug(
+                    "Check if the browser redirected correctly or if an error was returned."
+                )
                 raise typer.Exit(1)
             do_switch(instance_name)
 

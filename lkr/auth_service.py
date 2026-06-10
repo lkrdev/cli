@@ -3,9 +3,10 @@ import os
 import sqlite3
 import types
 from datetime import datetime, timedelta, timezone
-from typing import List, Self, Tuple, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Self, Tuple, Union
 
 import requests
+
 if TYPE_CHECKING:
     import typer
 from looker_sdk.rtl import serialize
@@ -19,7 +20,7 @@ from pydantic import BaseModel, Field, computed_field
 from pydash import get
 
 from lkr.classes import LkrCtxObj, LookerApiKey
-from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID, OAUTH_REDIRECT_URI
+from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID
 from lkr.custom_types import NewTokenCallback
 from lkr.logger import logger
 
@@ -61,8 +62,9 @@ class ApiKeyApiSettings(ApiSettings):
 
 
 class OAuthApiSettings(ApiSettings):
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, port: int = 8000):
         self.base_url = base_url
+        self.port = port
         super().__init__()
         self.agent_tag = "lkr-cli-oauth"
 
@@ -72,7 +74,7 @@ class OAuthApiSettings(ApiSettings):
             looker_url=self.base_url,
             client_id=OAUTH_CLIENT_ID,
             client_secret="",  # PKCE doesn't need client secret
-            redirect_uri=OAUTH_REDIRECT_URI,
+            redirect_uri=f"http://localhost:{self.port}/callback",
         )
 
 
@@ -127,6 +129,8 @@ class DbOAuthSession(OAuthSession):
 
     def redeem_auth_code(self, *args, **kwargs):
         super().redeem_auth_code(*args, **kwargs)
+        if not self.use_production:
+            self._switch_to_dev_mode()
         self.new_token_callback(self.token)
 
     def _switch_to_dev_mode(self):
@@ -155,8 +159,9 @@ def get_auth_session(
     *,
     use_production: bool,
     access_token: AccessToken | None = None,
+    port: int = 8000,
 ) -> DbOAuthSession:
-    settings = OAuthApiSettings(base_url)
+    settings = OAuthApiSettings(base_url, port=port)
     transport = MonkeyPatchTransport.configure(settings)
     auth = DbOAuthSession(
         settings=settings,
@@ -223,9 +228,10 @@ def init_oauth_sdk(
     *,
     access_token: AccessToken | None = None,
     use_production: bool = False,
+    port: int = 8000,
 ) -> Looker40SDK:
     """Default dependency configuration"""
-    settings = OAuthApiSettings(base_url)
+    settings = OAuthApiSettings(base_url, port=port)
     settings.is_configured()
     transport = MonkeyPatchTransport.configure(settings)
 
@@ -234,6 +240,7 @@ def init_oauth_sdk(
         new_token_callback,
         access_token=access_token,
         use_production=use_production,
+        port=port,
     )
     return Looker40SDK(
         auth=auth,
@@ -474,6 +481,7 @@ class SqlLiteAuth:
                 current_auth.base_url,
                 new_token_callback=refresh_current_token,
                 access_token=current_auth.to_access_token(),
+                use_production=current_auth.use_production,
             )
             if prompt_refresh_invalid_token:
                 import sys
