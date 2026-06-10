@@ -19,6 +19,7 @@ app.add_typer(auth_group, name="auth")
 
 IMPORT_ERROR = None
 
+
 def add_optional_typer_group(app, import_path, group_name, extra_message=None):
     try:
         module_path, attr = import_path.rsplit(".", 1)
@@ -26,10 +27,14 @@ def add_optional_typer_group(app, import_path, group_name, extra_message=None):
         group = getattr(mod, attr)
         app.add_typer(group, name=group_name)
     except ModuleNotFoundError as import_error:
+
         @app.command(
             name=group_name,
             add_help_option=False,
-            context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+            context_settings={
+                "allow_extra_args": True,
+                "ignore_unknown_options": True,
+            },
         )
         def fallback(import_error=import_error):
             msg = f"{group_name} tools (dependencies not available, try installing optional dependencies: lkr-dev-cli\\[{group_name}])"
@@ -39,20 +44,27 @@ def add_optional_typer_group(app, import_path, group_name, extra_message=None):
             logger.error(import_error)
             raise typer.Exit(1)
 
+
 add_optional_typer_group(app, "lkr.mcp.main.group", "mcp")
 add_optional_typer_group(app, "lkr.observability.main.group", "observability")
 add_optional_typer_group(app, "lkr.tools.main.group", "tools")
 add_optional_typer_group(app, "lkr.codemode.main.group", "code-mode")
+add_optional_typer_group(app, "lkr.db_template.main.group", "db-template")
+
 
 @app.callback()
 def callback(
     ctx: typer.Context,
-    client_id: Annotated[str | None, typer.Option(envvar="LOOKERSDK_CLIENT_ID")] = None,
+    client_id: Annotated[
+        str | None, typer.Option(envvar="LOOKERSDK_CLIENT_ID")
+    ] = None,
     client_secret: Annotated[
         str | None, typer.Option(envvar="LOOKERSDK_CLIENT_SECRET")
     ] = None,
-    base_url: Annotated[str | None, typer.Option(envvar="LOOKERSDK_BASE_URL")] = None,
-    log_level: Annotated[LogLevel | None, typer.Option(envvar="LOG_LEVEL")] = None,
+    base_url: Annotated[str | None, typer.Option(envvar="LOOKERSDK_BASE_URL")]
+    = None,
+    log_level: Annotated[LogLevel | None, typer.Option(envvar="LOG_LEVEL")]
+    = None,
     quiet: Annotated[bool, typer.Option("--quiet")] = False,
     force_oauth: Annotated[bool, typer.Option("--force-oauth")] = False,
     dev: Annotated[Optional[bool], typer.Option("--dev")] = None,
@@ -77,7 +89,9 @@ def callback(
     ctx.obj["ctx_lkr"] = ctx_obj
     # if the user passes --dev, but lkrCtxObj.use_sdk is oauth, then we need to log a warning saying we're ignoring the --dev flag
     if dev and ctx_obj.use_sdk == "oauth":
-        logger.warning("Ignoring --dev flag because OAuth token tracks dev/prod mode.")
+        logger.warning(
+            "Ignoring --dev flag because OAuth token tracks dev/prod mode."
+        )
 
     if log_level:
         from lkr.logger import set_log_level
