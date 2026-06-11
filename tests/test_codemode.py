@@ -257,3 +257,29 @@ return {"status": "success"}
     data = json.loads(result_raw)
     assert data["stdout"] == "Hello from stdout\n"
     assert data["result"] == {"status": "success"}
+
+def test_captured_print_json_many():
+    code = """
+for i in range(10):
+    print(i)
+return {"status": "success"}
+"""
+    result_raw = run_python_code(code)
+    data = json.loads(result_raw)
+    assert data["stdout"] == "0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n"
+    assert data["result"] == {"status": "success"}
+
+
+def test_parent_runtime_not_polluted(capfd):
+    code = """
+print("This should be trapped and not leak to parent stdout")
+print("Also checking second print")
+return {"status": "clean"}
+"""
+    result_raw = run_python_code(code)
+    data = json.loads(result_raw)
+    assert "This should be trapped" in data["stdout"]
+    assert "Also checking" in data["stdout"]
+    
+    out, err = capfd.readouterr()
+    assert out == ""

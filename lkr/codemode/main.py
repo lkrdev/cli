@@ -32,25 +32,30 @@ class OSCapture:
 def capture_os_stdout():
     cap = OSCapture()
     fd, temp_path = tempfile.mkstemp()
+    
+    if sys.stdout and hasattr(sys.stdout, "flush"):
+        sys.stdout.flush()
+        
+    original_stdout = sys.stdout
+    original_stdout_fd = os.dup(1)
     try:
-        original_stdout_fd = os.dup(1)
-        try:
-            os.dup2(fd, 1)
-            with open(temp_path, "w") as f:
-                sys.stdout = f
-                yield cap
-                f.flush()
-        finally:
-            sys.stdout = sys.__stdout__
-            os.dup2(original_stdout_fd, 1)
-            os.close(original_stdout_fd)
-            
-        with open(temp_path, "r") as f:
-            cap.output = f.read()
+        os.dup2(fd, 1)
+        with os.fdopen(os.dup(1), "w") as f:
+            sys.stdout = f
+            yield cap
+            f.flush()
     finally:
+        sys.stdout = original_stdout
+        os.dup2(original_stdout_fd, 1)
+        os.close(original_stdout_fd)
         os.close(fd)
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        
+        try:
+            with open(temp_path, "r") as f:
+                cap.output = f.read()
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
 def get_mcp_sdk(ctx: LkrCtxObj):
     sdk = get_auth(ctx).get_current_sdk(prompt_refresh_invalid_token=True)
