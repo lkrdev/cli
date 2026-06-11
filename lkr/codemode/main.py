@@ -1,10 +1,9 @@
 import inspect
-import io
 import json
 import os
 import sys
 import tempfile
-from contextlib import redirect_stdout, contextmanager
+from contextlib import contextmanager
 
 import typer
 import pydantic_monty
