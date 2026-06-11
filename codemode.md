@@ -47,5 +47,14 @@ To check things out on a web panel:
 npx @modelcontextprotocol/inspector uvx -q --from lkr-dev-cli[codemode] lkr code-mode run
 ```
 
-```
+## Architectural & Troubleshooting Notes
+
+### The stdio Stream Corruption Trap
+When running an MCP server over standard input/output (`stdio`) transport, JSON-RPC packets are transmitted directly through the process's `stdout`. 
+
+If Python code executed within the server (such as tool execution or third-party libraries) writes raw text directly to `sys.stdout` via standard `print()` calls, that raw text corrupts the JSON-RPC response stream. This causes fatal JSON parsing errors on the client (e.g., `invalid character 'C' looking for beginning of value`) and immediately closes the connection.
+
+To safeguard against this:
+1. `run_python_code` automatically wraps all Monty execution in a `redirect_stdout` block.
+2. If any `print()` output is captured, it is safely packaged and returned as part of a valid JSON structure rather than polluting raw `stdout`.
 
