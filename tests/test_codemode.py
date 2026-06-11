@@ -198,7 +198,7 @@ return "\\n".join(res)
 
 def test_extended_sdk_methods_present():
     code = """
-methods = ['all_project_files', 'get_file_content', 'create_file', 'update_file', 'delete_file', 'create_project_directory', 'delete_project_directory']
+methods = ['all_project_files', 'get_file_content', 'create_file', 'update_file', 'delete_file', 'create_project_directory', 'delete_project_directory', 'generate_lookml', 'generate_lookml_with_new_files']
 for m in methods:
     if m not in dir():
         return "Missing " + m
@@ -206,6 +206,23 @@ return "All present"
 """
     result = run_python_code(code)
     assert result == "All present"
+
+
+def test_extended_models_help_search():
+    code_help = """
+return help('ProjectGeneratorTable')
+"""
+    result = run_python_code(code_help)
+    assert "Type: ProjectGeneratorTable" in result
+    assert "Property match" in result or "Name match" in result
+
+    code_lookup = """
+return lookup('ProjectGeneratorTable')
+"""
+    result_lookup = run_python_code(code_lookup)
+    assert "Type: ProjectGeneratorTable" in result_lookup
+    assert "The fully qualified schema" in result_lookup
+    assert "primary_key: string" in result_lookup
 
 
 
