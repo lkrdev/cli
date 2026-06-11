@@ -307,7 +307,7 @@ def populate_looker_connection_search_on_startup(ctx: typer.Context) -> None:
                 logger.debug(f"Populating looker connection search for {schema.name}.")
                 schema_tables = ok(
                     lambda: sdk.connection_tables(
-                        connection.name,  # type: ignore
+                        connection.name,
                         database=database,
                         schema_name=schema.name,  # type: ignore
                         table_limit=100000,
@@ -326,7 +326,7 @@ def populate_looker_connection_search_on_startup(ctx: typer.Context) -> None:
                         continue
                     schema_columns = ok(
                         lambda: sdk.connection_columns(
-                            connection.name,  # type: ignore
+                            connection.name,
                             database=database,
                             schema_name=schema_name,
                             table_names=table.name,
@@ -446,40 +446,42 @@ def search_fully_qualified_names(
     search_term: Annotated[
         str,
         Field(
-            description="The search term to search for within the fully qualified column name. It will be converted to lowercase before searching. The fully quallified column name incluses database, schema, table, and column names.",
+            description="The search term to search for within the fully qualified column name. It will be converted to lowercase before searching. The fully qualified column name includes database, schema, table, and column names.",
             min_length=1,
         ),
     ],
-    database_filter: Annotated[
+    database: Annotated[
         str | None,
         Field(
-            description="The database to search for within the fully qualified column name. It will be converted to lowercase before searching. The fully quallified column name incluses database, schema, table, and column names. If not provided, all databases will be searched. This is synonymous with BigQuery's projects.",
+            description="The database to search for within the fully qualified column name. It will be converted to lowercase before searching. The fully qualified column name includes database, schema, table, and column names. If not provided, all databases will be searched. This is synonymous with BigQuery's projects.",
         ),
-    ],
-    schema_filter: Annotated[
+    ] = None,
+    schema_name: Annotated[
         str | None,
         Field(
-            description="The schema to search for within the fully qualified column name. It will be converted to lowercase before searching. The fully quallified column name incluses database, schema, table, and column names. If not provided, all schemas will be searched. This is synonymous with BigQuery's datasets",
+            alias="schema",
+            description="The schema to search for within the fully qualified column name. It will be converted to lowercase before searching. The fully qualified column name includes database, schema, table, and column names. If not provided, all schemas will be searched. This is synonymous with BigQuery's datasets.",
         ),
-    ],
-    table_filter: Annotated[
+    ] = None,
+    table: Annotated[
         str | None,
         Field(
-            description="The table to search for within the fully qualified column name. It will be converted to lowercase before searching. The fully quallified column name incluses database, schema, table, and column names. If not provided, all tables will be searched.",
+            description="The table to search for within the fully qualified column name. It will be converted to lowercase before searching. The fully qualified column name includes database, schema, table, and column names. If not provided, all tables will be searched.",
         ),
-    ],
+    ] = None,
     limit: Annotated[
         int,
         Field(
-            description="The number of results to return. If not provided, the default is 10000.",
+            description="The number of results to return. If not provided, the default is 100.",
             default=100,
         ),
-    ],
+    ] = 100,
 ) -> List[Row]:
     """
     Use lkr to search fully qualified columns which include connection, database, schema, table, column names, and data types
-    Returns a list of matching rows with their BM25 scores. If no database, schema, or table is provided, all will be searched. When specified together, databsae, scema and table are filtered together using an AND.
+    Returns a list of matching rows with their BM25 scores. If no database, schema, or table is provided, all will be searched. When specified together, database, schema and table are filtered together using an AND.
     """
+
     sql = """
     SELECT 
           connection, 
@@ -501,14 +503,14 @@ def search_fully_qualified_names(
         limit=limit,
     )
     if database:
-        sql += " AND database = $database"
-        params["database"] = database
-    if schema:
-        sql += " AND database_schema_name = $schema"
-        params["schema"] = schema
+        sql += " AND LOWER(database) = $database"
+        params["database"] = database.lower()
+    if schema_name:
+        sql += " AND LOWER(database_schema_name) = $schema"
+        params["schema"] = schema_name.lower()
     if table:
-        sql += " AND database_table_name = $table"
-        params["table"] = table
+        sql += " AND LOWER(database_table_name) = $table"
+        params["table"] = table.lower()
     sql += " ORDER BY score DESC LIMIT $limit"
     logger.debug(f"Executing SQL: {sql}")
     logger.debug(f"Params: {params}")
@@ -539,7 +541,11 @@ def run(
 
     global ctx_lkr
 
-    ctx_lkr = LkrCtxObj(force_oauth=False)
+    ctx_lkr = (
+        ctx.obj.get("ctx_lkr")
+        if (ctx.obj and "ctx_lkr" in ctx.obj)
+        else LkrCtxObj(force_oauth=False)
+    )
     validate_current_instance_database_search_file(ctx, debug)
     sdk = get_mcp_sdk(ctx_lkr)
     if not sdk.auth.settings.base_url:

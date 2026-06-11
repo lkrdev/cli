@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Any
 from lkr.custom_types import LogLevel
 
 STRUCT_LOG_AVAILABLE = True
@@ -19,9 +20,11 @@ except ModuleNotFoundError:
 if STRUCT_LOG_AVAILABLE:
     structlog.configure(
         processors=[
+            structlog.stdlib.filter_by_level,
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.JSONRenderer(),
-        ]
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
     )
 
 # Define a custom theme for our logging
@@ -64,7 +67,11 @@ logging.basicConfig(
 
 # Create a logger for the application
 logger = logging.getLogger("lkr")
-structured_logger = structlog.get_logger("lkr.structured") if STRUCT_LOG_AVAILABLE else None
+structured_logger: Any = (
+    structlog.get_logger("lkr.structured")
+    if STRUCT_LOG_AVAILABLE
+    else logging.getLogger("lkr.structured")
+)
 
 
 # Configure the requests_transport logger to only show debug messages when LOG_LEVEL is DEBUG
@@ -77,7 +84,7 @@ def set_log_level(level: LogLevel):
     """Set the logging level for the application."""
     logger.setLevel(getattr(logging, level.value))
     if structured_logger:
-        structured_logger.setLevel(getattr(logging, level.value))
+        logging.getLogger("lkr.structured").setLevel(getattr(logging, level.value))
     # Update requests_transport logger level based on the new level
     if requests_logger:
         requests_logger.setLevel(

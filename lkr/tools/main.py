@@ -1,6 +1,5 @@
 import os
 import csv
-import sys
 from typing import Annotated, Optional
 
 import typer
@@ -114,7 +113,7 @@ def visual_ljust(s: str, width: int) -> str:
 @group.command(name="schedule-download-deprecation")
 def schedule_download_deprecation_command(
     ctx: typer.Context,
-    limit: Annotated[Optional[int], typer.Option(help="Search batch size")] = 500,
+    limit: Annotated[int, typer.Option(help="Search batch size")] = 500,
     model_offset: Annotated[int, typer.Option(help="Offset for model columns")] = 0,
     csv_output: Annotated[bool, typer.Option("--csv", help="Output as CSV instead of a table")] = False,
     csv_file_name: Annotated[Optional[str], typer.Option("--csv-file-name", help="Name for the output CSV file (without extension)")] = "schedule_download_deprecation",
@@ -131,7 +130,8 @@ def schedule_download_deprecation_command(
 
     if csv_output:
         # For CSV, we ignore pagination and truncation
-        with open(csv_file_name + ".csv", "w", newline="") as f:
+        fname = (csv_file_name or "schedule_download_deprecation") + ".csv"
+        with open(fname, "w", newline="") as f:
             writer = csv.writer(f)
             csv_headers = ["User ID", "Email" if email else "Name", "Instance Wide"] + result.model_names
             writer.writerow(csv_headers)

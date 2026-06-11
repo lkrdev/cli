@@ -82,12 +82,14 @@ def test_user_scenario_with_access_data(mock_get_auth, mock_sdk):
     # thelook: Role 1 gives both -> ✅
     assert u1.model_permissions["thelook"] == []
     # finance: Role 2 gives access_data, No role gives download_with_limit on finance -> MISSING
+    assert u1.model_permissions["finance"] is not None
     assert "download_with_limit" in u1.model_permissions["finance"]
 
     # User 2 check
     u2 = next(r for r in result.rows if r.user_id == "2")
     assert "download_with_limit" in u2.instance_wide
     # thelook: Role 4 gives access_data, No role gives target on thelook -> MISSING
+    assert u2.model_permissions["thelook"] is not None
     assert "download_with_limit" in u2.model_permissions["thelook"]
     # finance: Role 5 gives target, but NO ONE gives access_data -> N/A
     assert u2.model_permissions["finance"] is None
@@ -118,10 +120,12 @@ def test_schedule_download_deprecation_admin(mock_get_auth, mock_sdk):
     ctx = MagicMock()
     # Default behavior: Admin is filtered out because they have no missing permissions
     result = schedule_download_deprecation(ctx, limit=500)
+    assert result is not None
     assert len(result.rows) == 0
 
     # With unfiltered=True: Admin should be present
     result_unfiltered = schedule_download_deprecation(ctx, limit=500, unfiltered=True)
+    assert result_unfiltered is not None
     assert len(result_unfiltered.rows) == 1
     for model in result_unfiltered.model_names:
         assert result_unfiltered.rows[0].model_permissions[model] == []
@@ -162,12 +166,14 @@ def test_schedule_download_deprecation_filtering_logic(mock_get_auth, mock_sdk):
     
     # Test Default (Filtered)
     result = schedule_download_deprecation(ctx, limit=500, unfiltered=False)
+    assert result is not None
     # Only User A should remain
     assert len(result.rows) == 1
     assert result.rows[0].user_id == "A"
     
     # Test Unfiltered
     result_unfiltered = schedule_download_deprecation(ctx, limit=500, unfiltered=True)
+    assert result_unfiltered is not None
     # All 3 users should remain
     assert len(result_unfiltered.rows) == 3
     ids = [r.user_id for r in result_unfiltered.rows]

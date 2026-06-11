@@ -3,23 +3,22 @@ import os
 import sqlite3
 import types
 from datetime import datetime, timedelta, timezone
-from typing import List, Self, Tuple, Union, TYPE_CHECKING
+from typing import List, Self, Tuple, Union
 
 import requests
-if TYPE_CHECKING:
-    import typer
+import typer
 from looker_sdk.rtl import serialize
 from looker_sdk.rtl.api_settings import ApiSettings, SettingsConfig
 from looker_sdk.rtl.auth_session import AuthSession, CryptoHash, OAuthSession
 from looker_sdk.rtl.auth_token import AccessToken, AuthToken
 from looker_sdk.rtl.requests_transport import RequestsTransport
 from looker_sdk.rtl.transport import LOOKER_API_ID, HttpMethod
-from looker_sdk.sdk.api40.methods import Looker40SDK
+from lkr.extended_sdk_methods import ExtendedLooker40SDK as Looker40SDK
 from pydantic import BaseModel, Field, computed_field
 from pydash import get
 
 from lkr.classes import LkrCtxObj, LookerApiKey
-from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID, OAUTH_REDIRECT_URI
+from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID
 from lkr.custom_types import NewTokenCallback
 from lkr.logger import logger
 
@@ -30,8 +29,9 @@ def is_auth_expired(e: Exception) -> bool:
     return "invalid_grant" in str(e) or "token expired" in str(e)
 
 
-
-def get_auth(ctx: Union["typer.Context", LkrCtxObj]) -> Union["SqlLiteAuth", "ApiKeyAuth"]:
+def get_auth(
+    ctx: Union["typer.Context", LkrCtxObj],
+) -> Union["SqlLiteAuth", "ApiKeyAuth"]:
     if isinstance(ctx, LkrCtxObj):
         lkr_ctx = ctx
     else:
@@ -61,8 +61,9 @@ class ApiKeyApiSettings(ApiSettings):
 
 
 class OAuthApiSettings(ApiSettings):
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, port: int = 8000):
         self.base_url = base_url
+        self.port = port
         super().__init__()
         self.agent_tag = "lkr-cli-oauth"
 
@@ -72,7 +73,7 @@ class OAuthApiSettings(ApiSettings):
             looker_url=self.base_url,
             client_id=OAUTH_CLIENT_ID,
             client_secret="",  # PKCE doesn't need client secret
-            redirect_uri=OAUTH_REDIRECT_URI,
+            redirect_uri=f"http://localhost:{self.port}/callback",
         )
 
 
@@ -127,6 +128,12 @@ class DbOAuthSession(OAuthSession):
 
     def redeem_auth_code(self, *args, **kwargs):
         super().redeem_auth_code(*args, **kwargs)
+        if not self.use_production:
+            try:
+                self._switch_to_dev_mode()
+            except Exception as e:
+                logger.error(f"Failed to switch to development mode: {e}")
+                raise typer.Exit(1)
         self.new_token_callback(self.token)
 
     def _switch_to_dev_mode(self):
@@ -155,8 +162,9 @@ def get_auth_session(
     *,
     use_production: bool,
     access_token: AccessToken | None = None,
+    port: int = 8000,
 ) -> DbOAuthSession:
-    settings = OAuthApiSettings(base_url)
+    settings = OAuthApiSettings(base_url, port=port)
     transport = MonkeyPatchTransport.configure(settings)
     auth = DbOAuthSession(
         settings=settings,
@@ -183,7 +191,7 @@ def init_api_key_sdk(api_key: LookerApiKey, use_production: bool) -> Looker40SDK
         auth=ApiKeyAuthSession(
             settings,
             transport,
-            serialize.deserialize40,  # type: ignore
+            serialize.deserialize40,
             LOOKER_API_VERSION,
             use_production=use_production,
         ),
@@ -208,7 +216,9 @@ def monkey_patch_prepare_request(session: requests.Session):
             x.headers.pop(LOOKER_API_ID)
         return x
 
-    session.prepare_request = types.MethodType(prepare_request, session)
+    setattr(
+        session, "prepare_request", types.MethodType(prepare_request, session)
+    )
 
 
 class MonkeyPatchTransport(RequestsTransport):
@@ -223,9 +233,10 @@ def init_oauth_sdk(
     *,
     access_token: AccessToken | None = None,
     use_production: bool = False,
+    port: int = 8000,
 ) -> Looker40SDK:
     """Default dependency configuration"""
-    settings = OAuthApiSettings(base_url)
+    settings = OAuthApiSettings(base_url, port=port)
     settings.is_configured()
     transport = MonkeyPatchTransport.configure(settings)
 
@@ -234,6 +245,7 @@ def init_oauth_sdk(
         new_token_callback,
         access_token=access_token,
         use_production=use_production,
+        port=port,
     )
     return Looker40SDK(
         auth=auth,
@@ -357,11 +369,12 @@ class CurrentAuth(BaseModel):
         ).isoformat()
         if self.from_db and new_token:
             connection.execute(
-                "UPDATE auth SET access_token = ?, token_type = ?, expires_at = ? WHERE current_instance = 1",
+                "UPDATE auth SET access_token = ?, token_type = ?, expires_at = ? WHERE instance_name = ?",
                 (
                     new_token.access_token,
                     new_token.token_type,
                     expires_at,
+                    self.instance_name,
                 ),
             )
         else:
@@ -385,6 +398,7 @@ class CurrentAuth(BaseModel):
 
 class SqlLiteAuth:
     def __init__(self, ctx: LkrCtxObj, db_path: str = "~/.lkr/auth.db"):
+        self.ctx = ctx
         self.db_path = os.path.expanduser(db_path)
         # Ensure the directory exists
         db_dir = os.path.dirname(self.db_path)
@@ -442,6 +456,16 @@ class SqlLiteAuth:
         self.conn.commit()
 
     def _get_current_auth(self) -> CurrentAuth | None:
+        if self.ctx.oauth_account:
+            cursor = self.conn.execute(
+                "SELECT instance_name, access_token, refresh_token, refresh_expires_at, token_type, expires_at, base_url, use_production FROM auth WHERE instance_name = ?",
+                (self.ctx.oauth_account,),
+            )
+            row = cursor.fetchone()
+            if row:
+                return CurrentAuth.from_db_row(row)
+            logger.error("couldnt find oauth account in db, run lkr auth login")
+            raise typer.Exit(1)
         cursor = self.conn.execute(
             "SELECT instance_name, access_token, refresh_token, refresh_expires_at, token_type, expires_at, base_url, use_production FROM auth WHERE current_instance = 1"
         )
@@ -474,16 +498,20 @@ class SqlLiteAuth:
                 current_auth.base_url,
                 new_token_callback=refresh_current_token,
                 access_token=current_auth.to_access_token(),
+                use_production=current_auth.use_production,
             )
             if prompt_refresh_invalid_token:
                 import sys
+
                 try:
                     sdk.auth.authenticate({})
                 except Exception as e:
                     if is_auth_expired(e):
                         if sys.stdin.isatty():
                             self._cli_confirm_refresh_token(current_auth, quiet=False)
-                            return self.get_current_sdk(prompt_refresh_invalid_token=False)
+                            return self.get_current_sdk(
+                                prompt_refresh_invalid_token=False
+                            )
                     raise e
 
             return sdk

@@ -1,4 +1,64 @@
+from typing import Any, cast
+import pytest
+from unittest.mock import patch, MagicMock
+from looker_sdk.rtl.auth_session import AuthSession
+from looker_sdk.rtl.transport import Transport
 from lkr.codemode.main import run_python_code
+from lkr.extended_sdk_methods import ExtendedLooker40SDK
+
+
+class DummyAuth:
+    def __init__(self):
+        self.settings = MagicMock()
+        self.settings.base_url = "https://example.looker.com"
+        self.settings.agent_tag = "test"
+
+    def authenticate(self, request):
+        return request
+
+
+class MockLookerSDK(ExtendedLooker40SDK):
+    def __init__(self):
+        super().__init__(
+            auth=cast(AuthSession, DummyAuth()),
+            deserialize=cast(Any, MagicMock()),
+            serialize=cast(Any, MagicMock()),
+            transport=cast(Transport, MagicMock()),
+            api_version="4.0",
+        )
+
+    def me(self, *args, **kwargs):
+        """Get information about the currently calling user."""
+        return {
+            "first_name": "Test",
+            "last_name": "User",
+            "personal_folder_id": "1",
+        }
+
+    def folder(self, folder_id, *args, **kwargs):
+        """Get a specific folder."""
+        return {
+            "id": folder_id,
+            "name": f"Folder {folder_id}",
+        }
+
+    def folder_children(self, folder_id, *args, **kwargs):
+        """Get the children of a specific folder."""
+        if str(folder_id) == "1":
+            return [
+                {
+                    "id": "2",
+                    "name": "Child Folder 1",
+                }
+            ]
+        return []
+
+
+@pytest.fixture(autouse=True)
+def mock_get_mcp_sdk():
+    with patch("lkr.codemode.main.get_mcp_sdk", return_value=MockLookerSDK()):
+        yield
+
 
 def test_sdk_object():
     code_sdk = """
@@ -88,7 +148,7 @@ def test_lookup_type_recursion():
     }
     
     original_get_swagger = lkr.codemode.type._get_swagger_data
-    lkr.codemode.type._get_swagger_data = lambda: mock_swagger
+    setattr(lkr.codemode.type, "_get_swagger_data", lambda: mock_swagger)
     
     try:
         code = """
@@ -98,7 +158,7 @@ return lookup_type('Node')
         assert result.count("Type: Node") == 1
         assert "child: Node (Ref)" in result
     finally:
-        lkr.codemode.type._get_swagger_data = original_get_swagger
+        setattr(lkr.codemode.type, "_get_swagger_data", original_get_swagger)
 
 def test_basic_usage():
     code = """
@@ -134,3 +194,18 @@ return "\\n".join(res)
 """
     result = run_python_code(code)
     assert "+ Folder:" in result
+
+
+def test_extended_sdk_methods_present():
+    code = """
+methods = ['all_project_files', 'get_file_content', 'create_file', 'update_file', 'delete_file', 'create_project_directory', 'delete_project_directory']
+for m in methods:
+    if m not in dir():
+        return "Missing " + m
+return "All present"
+"""
+    result = run_python_code(code)
+    assert result == "All present"
+
+
+

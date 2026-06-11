@@ -3,14 +3,16 @@ import os
 import secrets
 import socket
 import socketserver
+import subprocess
 import threading
 import time
 import urllib.parse
 import webbrowser
-from typing import Optional, TypedDict
+from typing import Optional, TypedDict, cast
 from urllib.parse import parse_qs
 
 from lkr.custom_types import NewTokenCallback
+from lkr.logger import logger
 
 
 def kill_process_on_port(port: int, retries: int = 5, delay: float = 1) -> None:
@@ -25,10 +27,16 @@ def kill_process_on_port(port: int, retries: int = 5, delay: float = 1) -> None:
     except socket.error:
         # Port is in use, try to kill the process
         if os.name == "posix":  # macOS/Linux
-            os.system(f"lsof -ti tcp:{port} | xargs kill -9 2>/dev/null")
+            subprocess.run(
+                f"lsof -ti tcp:{port} | xargs kill -9",
+                shell=True,
+                capture_output=True,
+            )
         elif os.name == "nt":  # Windows
-            os.system(
-                f'for /f "tokens=5" %a in (\'netstat -aon ^| find ":{port}"\') do taskkill /F /PID %a 2>nul'
+            subprocess.run(
+                f'for /f "tokens=5" %a in (\'netstat -aon ^| find ":{port}"\') do taskkill /F /PID %a',
+                shell=True,
+                capture_output=True,
             )
         # After killing, wait for the port to be free
         for _ in range(retries):
@@ -46,24 +54,56 @@ def kill_process_on_port(port: int, retries: int = 5, delay: float = 1) -> None:
 class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         """Handle the callback from OAuth authorization"""
+        parsed_url = urllib.parse.urlparse(self.path)
+        logger.debug(f"OAuthCallbackHandler received GET request for path: {self.path}")
+
+        # Ignore requests that are not the callback (e.g. /favicon.ico)
+        if parsed_url.path != "/callback":
+            logger.debug(f"Ignoring non-callback request: {self.path}")
+            self.send_response(404)
+            self.end_headers()
+            return
+
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
 
-        # Parse the authorization code from query parameters
-        query_components = parse_qs(urllib.parse.urlparse(self.path).query)
+        # Parse the authorization code or error from query parameters
+        query_components = parse_qs(parsed_url.query)
+        logger.debug(f"OAuth callback query parameters: {query_components}")
 
         # Store the code in the server instance
+        server = cast(OAuthCallbackServer, self.server)
         if "code" in query_components:
-            self.server.auth_code = query_components["code"][0]  # type: ignore
-
-        # Display a success message to the user
-        self.wfile.write(
-            b"Successfully authenticated to Looker OAuth! You can close this window."
-        )
-
-        # Shutdown the server
-        threading.Thread(target=self.server.shutdown).start()
+            server.auth_code = query_components["code"][0]
+            logger.debug(
+                f"Authorization code received successfully: {server.auth_code[:5]}..."
+            )
+            self.wfile.write(
+                b"Successfully authenticated to Looker OAuth! You can close this window."
+            )
+            # Shutdown the server
+            threading.Thread(target=server.shutdown).start()
+        elif "error" in query_components:
+            error = query_components["error"][0]
+            error_description = query_components.get("error_description", [""])[0]
+            logger.error(
+                f"Looker OAuth returned error: {error} - {error_description}"
+            )
+            self.wfile.write(
+                f"OAuth Authentication Failed: {error} - {error_description}. You can close this window.".encode(
+                    "utf-8"
+                )
+            )
+            threading.Thread(target=server.shutdown).start()
+        else:
+            logger.warning(
+                f"Callback received without 'code' or 'error' query parameters: {self.path}"
+            )
+            self.wfile.write(
+                b"OAuth Authentication Failed: Invalid callback request. You can close this window."
+            )
+            threading.Thread(target=server.shutdown).start()
 
     def log_message(self, format, *args):
         """Suppress logging of requests"""
@@ -71,6 +111,8 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
 
 
 class OAuthCallbackServer(socketserver.TCPServer):
+    allow_reuse_address = True
+
     def __init__(self, server_address):
         super().__init__(server_address, OAuthCallbackHandler)
         self.auth_code: str | None = None
@@ -82,7 +124,12 @@ class LoginResponse(TypedDict):
 
 
 class OAuth2PKCE:
-    def __init__(self, new_token_callback: NewTokenCallback, use_production: bool):
+    def __init__(
+        self,
+        new_token_callback: NewTokenCallback,
+        use_production: bool,
+        port: int | None = None,
+    ):
         from lkr.auth_service import DbOAuthSession
 
         self.auth_code: Optional[str] = None
@@ -91,7 +138,7 @@ class OAuth2PKCE:
         self.auth_session: DbOAuthSession | None = None
         self.server_thread: threading.Thread | None = None
         self.server: OAuthCallbackServer | None = None
-        self.port: int = 8000
+        self.port: int = port if port is not None else 8000
         self.use_production: bool = use_production
 
     def cleanup(self):
@@ -152,11 +199,15 @@ class OAuth2PKCE:
 
         # Construct and open the OAuth URL
         self.auth_session = get_auth_session(
-            base_url, self.new_token_callback, use_production=self.use_production
+            base_url,
+            self.new_token_callback,
+            use_production=self.use_production,
+            port=self.port,
         )
         oauth_url = self.auth_session.create_auth_code_request_url(
             "cors_api", self.state
         )
+        logger.debug(f"Constructed OAuth URL: {oauth_url}")
 
         webbrowser.open(oauth_url)
 
