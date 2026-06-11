@@ -198,7 +198,7 @@ return "\\n".join(res)
 
 def test_extended_sdk_methods_present():
     code = """
-methods = ['all_project_files', 'get_file_content', 'create_file', 'update_file', 'delete_file', 'create_project_directory', 'delete_project_directory', 'generate_lookml', 'generate_lookml_with_new_files']
+methods = ['all_project_files', 'get_file_content', 'create_file', 'update_file', 'delete_file', 'create_project_directory', 'delete_project_directory', 'generate_lookml', 'generate_lookml_with_new_files', 'commit']
 for m in methods:
     if m not in dir():
         return "Missing " + m
@@ -223,6 +223,28 @@ return lookup('ProjectGeneratorTable')
     assert "Type: ProjectGeneratorTable" in result_lookup
     assert "The fully qualified schema" in result_lookup
     assert "primary_key: string" in result_lookup
+
+
+def test_commit_help_and_lookup():
+    code_help = """
+return help('commit')
+"""
+    result = run_python_code(code_help)
+    assert "Function: commit" in result or "Type: ProjectCommitRequest" in result
+
+    code_lookup = """
+return lookup('commit')
+"""
+    result_lookup = run_python_code(code_lookup)
+    assert "Function: commit" in result_lookup
+    assert "Looker automatically stages and commits all modified" in result_lookup
+
+    code_lookup_model = """
+return lookup('ProjectCommitRequest')
+"""
+    result_model = run_python_code(code_lookup_model)
+    assert "Type: ProjectCommitRequest" in result_model
+    assert "Looker automatically stages and commits" in result_model
 
 
 

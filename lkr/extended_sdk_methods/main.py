@@ -13,6 +13,7 @@ from lkr.extended_sdk_methods.classes import (
     ProjectGeneratorColumn,
     ProjectGeneratorTable,
     SelectedTable,
+    ProjectCommitRequest,
 )
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "GenerateLookMLParameters",
     "SelectedTable",
     "GenerateLookMLWithNewFilesResponse",
+    "ProjectCommitRequest",
 ]
 
 
@@ -309,4 +311,37 @@ class ExtendedLooker40SDK(Looker40SDK):
 
         return GenerateLookMLWithNewFilesResponse(
             generate_lookml=response, new_files=new_files
+        )
+
+    def commit(
+        self,
+        project_id: str,
+        body: Union[ProjectCommitRequest, dict, Any],
+        transport_options: Optional[transport.TransportOptions] = None,
+    ) -> str:
+        """Commit changes to the project's git repository.
+
+        If you do not specify an array of files in the body (or pass None),
+        Looker automatically stages and commits all modified, newly added,
+        and deleted LookML files in the project's current development workspace.
+
+        Args:
+            project_id: Id of project.
+            body: Commit parameters.
+            transport_options: Optional transport options.
+
+        Returns:
+            str: API response.
+        """
+        project_id = self.encode_path_param(project_id)
+        path = f"/projects/{project_id}/commit"
+        request_body = self._prepare_body(body)
+        return cast(
+            str,
+            self.post(
+                path=path,
+                structure=str,
+                body=request_body,
+                transport_options=transport_options,
+            ),
         )
