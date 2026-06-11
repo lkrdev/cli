@@ -218,3 +218,26 @@ def test_commit():
         _, kwargs = mock_post.call_args
         assert kwargs["path"] == "/projects/test_proj/commit"
         assert kwargs["body"] == req.model_dump()
+
+
+def test_commit_no_body():
+    mock_auth = MagicMock()
+    mock_auth.settings.base_url = "https://example.looker.com"
+    sdk = ExtendedLooker40SDK(
+        auth=mock_auth,
+        deserialize=MagicMock(),
+        serialize=MagicMock(),
+        transport=MagicMock(),
+        api_version="4.0",
+    )
+
+    with patch.object(sdk, "post") as mock_post:
+        mock_post.return_value = "commit success"
+
+        res = sdk.commit(project_id="test_proj")
+
+        assert res == "commit success"
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        assert kwargs["path"] == "/projects/test_proj/commit"
+        assert kwargs["body"] is None

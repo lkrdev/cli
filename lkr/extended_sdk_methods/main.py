@@ -316,7 +316,7 @@ class ExtendedLooker40SDK(Looker40SDK):
     def commit(
         self,
         project_id: str,
-        body: Union[ProjectCommitRequest, dict, Any],
+        body: Optional[Union[ProjectCommitRequest, dict, Any]] = None,
         transport_options: Optional[transport.TransportOptions] = None,
     ) -> str:
         """Commit changes to the project's git repository.
@@ -327,7 +327,7 @@ class ExtendedLooker40SDK(Looker40SDK):
 
         Args:
             project_id: Id of project.
-            body: Commit parameters.
+            body: Optional commit parameters.
             transport_options: Optional transport options.
 
         Returns:
