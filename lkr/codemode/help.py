@@ -142,18 +142,23 @@ def _get_type_matches(query: str) -> list:
 
     matches = []
     for type_name, def_obj in definitions.items():
+        if not isinstance(def_obj, dict):
+            continue
         hit_in_name = bool(pattern.search(type_name))
         
         matching_props = []
         matching_desc = []
         
         properties = def_obj.get('properties', {})
-        for prop_name, prop_val in properties.items():
-            if pattern.search(prop_name):
-                matching_props.append(prop_name)
-            desc = prop_val.get('description', '')
-            if desc and pattern.search(desc):
-                matching_desc.append(f"{prop_name}: {desc.strip().split(chr(10))[0]}")
+        if isinstance(properties, dict):
+            for prop_name, prop_val in properties.items():
+                if not isinstance(prop_val, dict):
+                    continue
+                if pattern.search(prop_name):
+                    matching_props.append(prop_name)
+                desc = prop_val.get('description', '')
+                if desc and pattern.search(desc):
+                    matching_desc.append(f"{prop_name}: {desc.strip().splitlines()[0]}")
                 
         if hit_in_name or matching_props or matching_desc:
             matches.append({

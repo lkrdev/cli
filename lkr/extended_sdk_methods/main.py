@@ -295,31 +295,17 @@ class ExtendedLooker40SDK(Looker40SDK):
             or []
         )
 
-        before_ids = {}
-        for f in files_before:
+        def _get_file_id(f: Any) -> str:
             if isinstance(f, dict):
-                fid = f.get("id") or f.get("path") or str(f)
-            elif hasattr(f, "id") and f.id is not None:
-                fid = f.id
-            elif hasattr(f, "path") and f.path is not None:
-                fid = f.path
-            else:
-                fid = str(f)
-            before_ids[fid] = True
+                return str(f.get("id") or f.get("path") or str(f))
+            if hasattr(f, "id") and f.id is not None:
+                return str(f.id)
+            if hasattr(f, "path") and f.path is not None:
+                return str(f.path)
+            return str(f)
 
-        new_files = []
-        for f in files_after:
-            if isinstance(f, dict):
-                fid = f.get("id") or f.get("path") or str(f)
-            elif hasattr(f, "id") and f.id is not None:
-                fid = f.id
-            elif hasattr(f, "path") and f.path is not None:
-                fid = f.path
-            else:
-                fid = str(f)
-
-            if fid not in before_ids:
-                new_files.append(f)
+        before_ids = {_get_file_id(f) for f in files_before}
+        new_files = [f for f in files_after if _get_file_id(f) not in before_ids]
 
         return GenerateLookMLWithNewFilesResponse(
             generate_lookml=response, new_files=new_files

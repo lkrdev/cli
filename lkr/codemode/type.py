@@ -5,6 +5,8 @@ from pydantic import BaseModel
 import lkr.extended_sdk_methods.classes as ext_classes
 
 _swagger_data = None
+_ext_definitions_cache = None
+
 
 def _get_swagger_data():
     global _swagger_data
@@ -28,6 +30,10 @@ def _get_swagger_data():
 
 
 def _get_ext_definitions() -> dict:
+    global _ext_definitions_cache
+    if _ext_definitions_cache is not None:
+        return _ext_definitions_cache
+
     ext_defs = {}
     for name, cls in inspect.getmembers(ext_classes, predicate=inspect.isclass):
         if issubclass(cls, BaseModel) and cls is not BaseModel:
@@ -83,6 +89,7 @@ def _get_ext_definitions() -> dict:
                     
                 properties[field_name] = prop_dict
             ext_defs[name] = {'properties': properties}
+    _ext_definitions_cache = ext_defs
     return ext_defs
 
 
