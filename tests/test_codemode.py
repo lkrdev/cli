@@ -1,4 +1,5 @@
 from typing import Any, cast
+import json
 import pytest
 from unittest.mock import patch, MagicMock
 from looker_sdk.rtl.auth_session import AuthSession
@@ -247,4 +248,12 @@ return lookup('ProjectCommitRequest')
     assert "Looker automatically stages and commits" in result_model
 
 
-
+def test_captured_print_json():
+    code = """
+print("Hello from stdout")
+return {"status": "success"}
+"""
+    result_raw = run_python_code(code)
+    data = json.loads(result_raw)
+    assert data["stdout"] == "Hello from stdout\n"
+    assert data["result"] == {"status": "success"}

@@ -1,7 +1,10 @@
 import inspect
 import io
 import json
-from contextlib import redirect_stdout
+import os
+import sys
+import tempfile
+from contextlib import redirect_stdout, contextmanager
 
 import typer
 import pydantic_monty
@@ -21,8 +24,33 @@ __all__ = ["group"]
 mcp = FastMCP("lkr:codemode")
 group = typer.Typer()
 ctx_lkr: LkrCtxObj | None = None
+class OSCapture:
+    def __init__(self):
+        self.output = ""
 
-
+@contextmanager
+def capture_os_stdout():
+    cap = OSCapture()
+    fd, temp_path = tempfile.mkstemp()
+    try:
+        original_stdout_fd = os.dup(1)
+        try:
+            os.dup2(fd, 1)
+            with open(temp_path, "w") as f:
+                sys.stdout = f
+                yield cap
+                f.flush()
+        finally:
+            sys.stdout = sys.__stdout__
+            os.dup2(original_stdout_fd, 1)
+            os.close(original_stdout_fd)
+            
+        with open(temp_path, "r") as f:
+            cap.output = f.read()
+    finally:
+        os.close(fd)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 def get_mcp_sdk(ctx: LkrCtxObj):
     sdk = get_auth(ctx).get_current_sdk(prompt_refresh_invalid_token=True)
@@ -126,13 +154,12 @@ def run_python_code(code: str, dev_mode: bool = False) -> str:
 
         m = pydantic_monty.Monty(code)
         
-        # Redirect stdout to capture any print() statements
-        # and prevent them from corrupting the JSON-RPC stream
-        f = io.StringIO()
-        with redirect_stdout(f):
+        # Use low-level OS stdout capture to ensure any print() statements
+        # in Rust or sub-interpreters don't corrupt the JSON-RPC stream
+        with capture_os_stdout() as cap:
             result = m.run(external_functions=external_funcs)
         
-        printed_output = f.getvalue()
+        printed_output = cap.output
         
         # m.run() returns the evaluated result of the last expression (which is already a primitive)
         try:
@@ -148,7 +175,10 @@ def run_python_code(code: str, dev_mode: bool = False) -> str:
             output = repr(result)
             
         if printed_output:
-            return f"PRINTED OUTPUT:\n{printed_output}\nRESULT:\n{output}"
+            return json.dumps({
+                "stdout": printed_output,
+                "result": result
+            }, indent=2, default=str)
         return output
     except Exception as e:
         logger.error(f"Error executing Monty: {e}")
