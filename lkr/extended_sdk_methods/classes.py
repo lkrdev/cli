@@ -13,6 +13,7 @@ __all__ = [
     "GenerateLookMLParameters",
     "SelectedTable",
     "GenerateLookMLWithNewFilesResponse",
+    "ProjectCommitRequest",
 ]
 
 
@@ -84,3 +85,14 @@ class GenerateLookMLWithNewFilesResponse(BaseModel):
 
     generate_lookml: str = Field(..., description="The API response from generating LookML, typically an empty string on success.")
     new_files: list[Any] = Field(..., description="List of newly created files.")
+
+
+class ProjectCommitRequest(BaseModel):
+    """Request body for LookML project commit."""
+
+    files: Optional[list[str]] = Field(
+        None,
+        description="List of files to commit. If omitted or passed as None, Looker automatically stages and commits all modified, newly added, and deleted LookML files in the project's current development workspace.",
+    )
+    message: Optional[str] = Field(None, description="Commit message")
+    amend: Optional[bool] = Field(None, description="Amend the last commit")

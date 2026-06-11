@@ -8,6 +8,7 @@ from lkr.extended_sdk_methods.main import (
     ProjectGeneratorColumn,
     ProjectGeneratorTable,
     SelectedTable,
+    ProjectCommitRequest,
 )
 
 
@@ -186,3 +187,57 @@ def test_generate_lookml_with_new_files():
         assert isinstance(result, GenerateLookMLWithNewFilesResponse)
         assert result.generate_lookml == "generated"
         assert result.new_files == [FakeFile("c")]
+
+
+def test_project_commit_request_model():
+    req = ProjectCommitRequest(files=["a.lkml"], message="fix bug", amend=False)
+    assert req.files == ["a.lkml"]
+    assert req.message == "fix bug"
+    assert req.amend is False
+
+
+def test_commit():
+    mock_auth = MagicMock()
+    mock_auth.settings.base_url = "https://example.looker.com"
+    sdk = ExtendedLooker40SDK(
+        auth=mock_auth,
+        deserialize=MagicMock(),
+        serialize=MagicMock(),
+        transport=MagicMock(),
+        api_version="4.0",
+    )
+
+    with patch.object(sdk, "post") as mock_post:
+        mock_post.return_value = "commit hash or project"
+
+        req = ProjectCommitRequest(files=["model.lkml"], message="initial commit")
+        res = sdk.commit(project_id="test_proj", body=req)
+
+        assert res == "commit hash or project"
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        assert kwargs["path"] == "/projects/test_proj/commit"
+        assert kwargs["body"] == req.model_dump()
+
+
+def test_commit_no_body():
+    mock_auth = MagicMock()
+    mock_auth.settings.base_url = "https://example.looker.com"
+    sdk = ExtendedLooker40SDK(
+        auth=mock_auth,
+        deserialize=MagicMock(),
+        serialize=MagicMock(),
+        transport=MagicMock(),
+        api_version="4.0",
+    )
+
+    with patch.object(sdk, "post") as mock_post:
+        mock_post.return_value = "commit success"
+
+        res = sdk.commit(project_id="test_proj")
+
+        assert res == "commit success"
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        assert kwargs["path"] == "/projects/test_proj/commit"
+        assert kwargs["body"] is None
