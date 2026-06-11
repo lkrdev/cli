@@ -240,8 +240,10 @@ def whoami(ctx: typer.Context):
             )
             raise typer.Exit(1)
         user = sdk.me()
+        session_info = sdk.session()
+        
         logger.info(
-            f"Currently authenticated as {user.first_name} {user.last_name} ({user.email}) to {sdk.auth.settings.base_url}"
+            f"Currently authenticated as {user.first_name} {user.last_name} ({user.email}) to {sdk.auth.settings.base_url} in {session_info.workspace_id}"
         )
     except Exception as e:
         if "invalid_grant" in str(e) or "token expired" in str(e):

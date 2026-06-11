@@ -1,5 +1,4 @@
-from looker_sdk.rtl.api_methods import TQueryParams
-from typing import Any, Optional, Union, cast, Dict
+from typing import Any, Optional, Union, cast
 
 from looker_sdk.rtl import transport
 from looker_sdk.sdk.api40.methods import Looker40SDK

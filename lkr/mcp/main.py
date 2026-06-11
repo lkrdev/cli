@@ -456,9 +456,10 @@ def search_fully_qualified_names(
             description="The database to search for within the fully qualified column name. It will be converted to lowercase before searching. The fully qualified column name includes database, schema, table, and column names. If not provided, all databases will be searched. This is synonymous with BigQuery's projects.",
         ),
     ] = None,
-    schema: Annotated[
+    schema_name: Annotated[
         str | None,
         Field(
+            alias="schema",
             description="The schema to search for within the fully qualified column name. It will be converted to lowercase before searching. The fully qualified column name includes database, schema, table, and column names. If not provided, all schemas will be searched. This is synonymous with BigQuery's datasets.",
         ),
     ] = None,
@@ -504,9 +505,9 @@ def search_fully_qualified_names(
     if database:
         sql += " AND LOWER(database) = $database"
         params["database"] = database.lower()
-    if schema:
+    if schema_name:
         sql += " AND LOWER(database_schema_name) = $schema"
-        params["schema"] = schema.lower()
+        params["schema"] = schema_name.lower()
     if table:
         sql += " AND LOWER(database_table_name) = $table"
         params["table"] = table.lower()

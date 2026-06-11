@@ -31,7 +31,7 @@ jobs:
 
       - name: Run with pytest
         run: |
-          uv run pytest tests/test_dependency_resolution.py -v
+          uv run pytest tests/ -v
 
       - name: Run ruff
         run: |

@@ -123,9 +123,9 @@ def test_dependency_resolution_consistency():
             print("✅ All dependency combinations resolve to the same lock file!")
             
         except subprocess.CalledProcessError as e:
-            pytest.fail(f"uv sync failed: {e.stderr}")  # type: ignore
+            pytest.fail(f"uv sync failed: {e.stderr}")
         except Exception as e:
-            pytest.fail(f"Test failed with error: {e}")  # type: ignore
+            pytest.fail(f"Test failed with error: {e}")
 
 
 def test_individual_extras_consistency():
@@ -134,7 +134,7 @@ def test_individual_extras_consistency():
     pyproject_path = project_root / "pyproject.toml"
     
     if not pyproject_path.exists():
-        pytest.skip("pyproject.toml not found")  # type: ignore
+        pytest.skip("pyproject.toml not found")
     
     # Parse pyproject.toml to get the actual dependencies
     with open(pyproject_path, "rb") as f:

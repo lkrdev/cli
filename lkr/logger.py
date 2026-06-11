@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Any
 from lkr.custom_types import LogLevel
 
 STRUCT_LOG_AVAILABLE = True
@@ -66,7 +67,6 @@ logging.basicConfig(
 
 # Create a logger for the application
 logger = logging.getLogger("lkr")
-from typing import Any
 structured_logger: Any = (
     structlog.get_logger("lkr.structured")
     if STRUCT_LOG_AVAILABLE
