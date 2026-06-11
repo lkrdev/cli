@@ -125,14 +125,61 @@ def _get_matches(query: str, external_funcs: dict, sdk) -> list:
             
     return matches
 
+def _get_type_matches(query: str) -> list:
+    escaped_query = re.escape(query).replace(r'\*', '.*').replace(r'\?', '.')
+    try:
+        pattern = re.compile(escaped_query, re.IGNORECASE)
+    except re.error:
+        pattern = re.compile(re.escape(query), re.IGNORECASE)
+
+    try:
+        from lkr.codemode.type import _get_swagger_data, _get_ext_definitions
+        swagger = _get_swagger_data()
+        definitions = dict(swagger.get('definitions', {}))
+        definitions.update(_get_ext_definitions())
+    except Exception:
+        return []
+
+    matches = []
+    for type_name, def_obj in definitions.items():
+        if not isinstance(def_obj, dict):
+            continue
+        hit_in_name = bool(pattern.search(type_name))
+        
+        matching_props = []
+        matching_desc = []
+        
+        properties = def_obj.get('properties', {})
+        if isinstance(properties, dict):
+            for prop_name, prop_val in properties.items():
+                if not isinstance(prop_val, dict):
+                    continue
+                if pattern.search(prop_name):
+                    matching_props.append(prop_name)
+                desc = prop_val.get('description', '')
+                if desc and pattern.search(desc):
+                    matching_desc.append(f"{prop_name}: {desc.strip().splitlines()[0]}")
+                
+        if hit_in_name or matching_props or matching_desc:
+            matches.append({
+                'name': type_name,
+                'hit_in_name': hit_in_name,
+                'matching_props': matching_props,
+                'matching_desc': matching_desc
+            })
+    return sorted(matches, key=lambda x: x['name'])
+
+
 def search_help(query: str, external_funcs: dict, sdk) -> str:
     """Search for functions and return a summary string with snippets."""
-    matches = _get_matches(query, external_funcs, sdk)
-    if not matches:
+    func_matches = _get_matches(query, external_funcs, sdk)
+    type_matches = _get_type_matches(query)
+    
+    if not func_matches and not type_matches:
         return f"No matches found for '{query}'."
         
     lines = []
-    for m in matches:
+    for m in func_matches:
         hit_info = []
         if m['hit_in_name']:
             hit_info.append("Name match")
@@ -143,22 +190,49 @@ def search_help(query: str, external_funcs: dict, sdk) -> str:
         if m['output_fields']:
             hit_info.append(f"Output field match: {', '.join(m['output_fields'][:2])}")
             
-        lines.append(f"- {m['name']} ({' | '.join(hit_info)})")
+        lines.append(f"- Function: {m['name']} ({' | '.join(hit_info)})")
+        
+    for m in type_matches:
+        hit_info = []
+        if m['hit_in_name']:
+            hit_info.append("Name match")
+        if m['matching_props']:
+            hit_info.append(f"Property match: {', '.join(m['matching_props'][:2])}")
+        if m['matching_desc']:
+            hit_info.append(f"Comment hit: \"{m['matching_desc'][0]}\"")
+            
+        lines.append(f"- Type: {m['name']} ({' | '.join(hit_info)})")
         
     return f"Matches found for '{query}':\n" + "\n".join(lines)
 
 def search_with_lookups(query: str, external_funcs: dict, sdk) -> list:
     """Search for functions and return the array of lookups for matches."""
-    matches = _get_matches(query, external_funcs, sdk)
+    func_matches = _get_matches(query, external_funcs, sdk)
+    type_matches = _get_type_matches(query)
+    
     results = []
-    for m in matches:
+    for m in func_matches:
         results.append(lookup_function(m['name'], external_funcs, sdk))
+    for m in type_matches:
+        try:
+            from lkr.codemode.type import lookup_type
+            results.append(lookup_type(m['name']))
+        except Exception:
+            pass
     return results
 
 def lookup_function(name: str, external_funcs: dict, sdk) -> str:
-    """Look up the exact name of a function and return its docstring, inputs, and outputs."""
+    """Look up the exact name of a function or type and return its docstring, inputs, and outputs."""
     if name not in external_funcs:
-        return f"Function '{name}' not found."
+        # Check if it's a type name
+        try:
+            from lkr.codemode.type import lookup_type
+            res = lookup_type(name)
+            if not res.startswith("Type '"):
+                return res
+        except Exception:
+            pass
+        return f"Function or type '{name}' not found."
         
     if not hasattr(sdk, name):
         return f"{name} is a built-in helper function."
