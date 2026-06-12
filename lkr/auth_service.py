@@ -657,7 +657,20 @@ def init_sdk(
         else:
             resolved_verify_ssl = True
 
-    if resolved_base_url and resolved_client_id and resolved_client_secret:
+    if resolved_base_url or resolved_client_id or resolved_client_secret:
+        if not (
+            resolved_base_url and resolved_client_id and resolved_client_secret
+        ):
+            missing = []
+            if not resolved_base_url:
+                missing.append("base_url")
+            if not resolved_client_id:
+                missing.append("client_id")
+            if not resolved_client_secret:
+                missing.append("client_secret")
+            raise ValueError(
+                f"Incomplete API key configuration. Missing: {', '.join(missing)}"
+            )
         api_key = LookerApiKey(
             client_id=resolved_client_id,
             client_secret=resolved_client_secret,

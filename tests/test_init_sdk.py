@@ -1,4 +1,3 @@
-import os
 import sqlite3
 from unittest.mock import MagicMock, patch
 import pytest
@@ -141,4 +140,28 @@ def test_sqlite_auth_match_instance_name(tmp_path, monkeypatch):
         assert current_auth is not None
         assert current_auth.instance_name == "matched_inst"
         assert current_auth.base_url == "https://matchme.looker.com"
+
+
+def test_init_sdk_incomplete_api_key(monkeypatch):
+    monkeypatch.delenv("LOOKERSDK_BASE_URL", raising=False)
+    monkeypatch.delenv("LOOKERSDK_CLIENT_ID", raising=False)
+    monkeypatch.delenv("LOOKERSDK_CLIENT_SECRET", raising=False)
+
+    with pytest.raises(
+        ValueError,
+        match="Incomplete API key configuration. Missing: client_id, client_secret",
+    ):
+        init_sdk(base_url="https://incomplete.looker.com")
+
+    with pytest.raises(
+        ValueError,
+        match="Incomplete API key configuration. Missing: base_url, client_secret",
+    ):
+        init_sdk(client_id="my_id")
+
+    with pytest.raises(
+        ValueError,
+        match="Incomplete API key configuration. Missing: base_url, client_id",
+    ):
+        init_sdk(client_secret="my_secret")
 
