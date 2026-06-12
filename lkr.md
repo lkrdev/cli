@@ -17,17 +17,31 @@ $ lkr [OPTIONS] COMMAND [ARGS]...
 * `--quiet`
 * `--force-oauth`
 * `--dev`
+* `--oauth-account TEXT`: OAuth account to lookup in DB and use regardless of what&#x27;s active
 * `--install-completion`: Install completion for the current shell.
 * `--show-completion`: Show completion for the current shell, to copy it or customize the installation.
 * `--help`: Show this message and exit.
 
 **Commands**:
 
+* `db-template`
 * `auth`: Authentication commands for LookML Repository
 * `mcp`
 * `observability`
 * `tools`
 * `code-mode`
+
+## `lkr db-template`
+
+**Usage**:
+
+```console
+$ lkr db-template [OPTIONS]
+```
+
+**Options**:
+
+* `--import-error TEXT`: [default: No module named &#x27;lkr.db_template.main&#x27;]
 
 ## `lkr auth`
 
@@ -63,6 +77,7 @@ $ lkr auth login [OPTIONS]
 **Options**:
 
 * `-I, --instance-name TEXT`: Name of the Looker instance to login or switch to
+* `-p, --port INTEGER RANGE`: Port to run the local OAuth redirect web server on  [1&lt;=x&lt;=65535]
 * `--help`: Show this message and exit.
 
 ### `lkr auth logout`
@@ -188,6 +203,7 @@ $ lkr tools [OPTIONS] COMMAND [ARGS]...
 
 * `user-attribute-updater`
 * `schedule-download-deprecation`: Build a table of users and their...
+* `lookml`: LookML synchronization and deployment tools
 
 ### `lkr tools user-attribute-updater`
 
@@ -221,6 +237,88 @@ $ lkr tools schedule-download-deprecation [OPTIONS]
 * `--csv-file-name TEXT`: Name for the output CSV file (without extension)  [default: schedule_download_deprecation]
 * `--unfiltered`: Show all rows, including those with no missing permissions
 * `--email`: Use Email instead of Name
+* `--help`: Show this message and exit.
+
+### `lkr tools lookml`
+
+LookML synchronization and deployment tools
+
+**Usage**:
+
+```console
+$ lkr tools lookml [OPTIONS] COMMAND [ARGS]...
+```
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+**Commands**:
+
+* `push`: Push local files to Looker, removing files...
+* `pull`: Pull remote files from Looker to local...
+* `deploy`: Commit dev workspace and deploy Looker...
+
+#### `lkr tools lookml push`
+
+Push local files to Looker, removing files on the instance that aren&#x27;t being pushed.
+
+**Usage**:
+
+```console
+$ lkr tools lookml push [OPTIONS] FOLDER_NAME
+```
+
+**Arguments**:
+
+* `FOLDER_NAME`: Local folder name / Looker project ID to push  [required]
+
+**Options**:
+
+* `--project-id, --project TEXT`: Looker project ID to push to (if different from folder name)
+* `--deploy`: Commit and deploy to production after push
+* `--message TEXT`: Commit message when deploying  [default: push from lkr cli]
+* `--help`: Show this message and exit.
+
+#### `lkr tools lookml pull`
+
+Pull remote files from Looker to local disk, removing local files that aren&#x27;t on the instance.
+
+**Usage**:
+
+```console
+$ lkr tools lookml pull [OPTIONS] FOLDER_NAME
+```
+
+**Arguments**:
+
+* `FOLDER_NAME`: Local folder name / Looker project ID to pull into  [required]
+
+**Options**:
+
+* `--project-id, --project TEXT`: Looker project ID to pull from (if different from folder name)
+* `--deploy`: Commit and deploy to production on Looker after pull
+* `--message TEXT`: Commit message when deploying  [default: pull from lkr cli then commit and deploy]
+* `--help`: Show this message and exit.
+
+#### `lkr tools lookml deploy`
+
+Commit dev workspace and deploy Looker project to production.
+
+**Usage**:
+
+```console
+$ lkr tools lookml deploy [OPTIONS] [FOLDER_NAME]
+```
+
+**Arguments**:
+
+* `[FOLDER_NAME]`: Local folder name / Looker project ID to deploy
+
+**Options**:
+
+* `--project-id, --project TEXT`: Looker project ID to deploy (if folder_name not specified)
+* `--message TEXT`: Commit message  [default: commit and deploy from lkr cli]
 * `--help`: Show this message and exit.
 
 ## `lkr code-mode`
