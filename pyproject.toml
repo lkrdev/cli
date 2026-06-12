@@ -60,5 +60,5 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["lkr"]
+packages = ["lkr", "lkr_dev_cli"]
 

@@ -252,9 +252,51 @@ gcloud run deploy lkr-access-token-updater \
   --set-env-vars LOOKERSDK_CLIENT_ID=<your client id>,LOOKERSDK_CLIENT_SECRET=<your client secret>,LOOKERSDK_BASE_URL=<your instance url>,LOOKER_WHITELISTED_BASE_URLS=<your instance url>
   ```
 
-## UserAttributeUpdater `lkr-dev-cli`
+## Python SDK & Library Usage
 
-Exported from the `lkr-dev-cli` package is the `UserAttributeUpdater` pydantic class. This class has all the necessary logic to update a user attribute value. 
+When installing `lkr-dev-cli` in your Python environment, you can import tools and pre-authenticated Looker SDK clients directly into your scripts, apps, or Jupyter notebooks.
+
+### Package Import Aliases (`lkr` vs `lkr_dev_cli`)
+To maximize convenience and match user intuition, both `lkr` and `lkr_dev_cli` are available as identical top-level Python packages. You can use them completely interchangeably:
+
+```python
+from lkr import init_sdk, UserAttributeUpdater
+# works exactly identical to:
+from lkr_dev_cli import init_sdk, UserAttributeUpdater
+```
+
+### Initializing the Looker SDK (`init_sdk`)
+The `init_sdk()` function initializes and returns an authenticated `ExtendedLooker40SDK` instance. It automatically handles credential discovery and authentication:
+
+```python
+from lkr_dev_cli import init_sdk
+
+# Option 1: Explicit API Authentication
+sdk = init_sdk(
+    base_url="https://acme.cloud.looker.com",
+    client_id="your-client-id",
+    client_secret="your-client-secret",
+    verify_ssl=True,  # optional, defaults to True
+)
+
+# Option 2: Environment Variable API Authentication
+# Automatically uses LOOKERSDK_BASE_URL, LOOKERSDK_CLIENT_ID, LOOKERSDK_CLIENT_SECRET
+sdk = init_sdk()
+
+# Option 3: Database (SQLite) OAuth Login Profile
+# Uses your saved active session from running `lkr auth login`
+sdk = init_sdk()  # Picks the active current_instance = 1
+# Or pick a specific named login profile:
+sdk = init_sdk(instance_name="my_dev_instance")
+
+# Make an API call
+me = sdk.me()
+print(f"Hello, {me.display_name}")
+```
+
+### UserAttributeUpdater
+
+Exported from the package is the `UserAttributeUpdater` pydantic class. This class has all the necessary logic to update a user attribute value. 
 
 It supports the following operations:
 - Updating a default value

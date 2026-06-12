@@ -8,14 +8,18 @@ class LookerApiKey(BaseModel):
     client_id: str = Field(..., min_length=1)
     client_secret: str = Field(..., min_length=1)
     base_url: str = Field(..., min_length=1)
+    verify_ssl: bool = True
 
     @classmethod
     def from_env(cls):
         try:
+            verify_ssl_str = os.environ.get("LOOKERSDK_VERIFY_SSL", "true").lower()
+            verify_ssl = verify_ssl_str not in ("false", "0", "f")
             return cls(
                 client_id=os.environ.get("LOOKERSDK_CLIENT_ID"),  # type: ignore
                 client_secret=os.environ.get("LOOKERSDK_CLIENT_SECRET"),  # type: ignore
                 base_url=os.environ.get("LOOKERSDK_BASE_URL"),  # type: ignore
+                verify_ssl=verify_ssl,
             )
         except Exception:
             return None
