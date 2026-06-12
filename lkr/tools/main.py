@@ -13,6 +13,10 @@ from lkr.tools.permission_deprecation import schedule_download_deprecation
 __all__ = ["group"]
 
 group = typer.Typer()
+from lkr.tools.lookml import lookml_group
+
+group.add_typer(lookml_group, name="lookml")
+
 
 if not logger:
     raise Exception("Logger is not available")
