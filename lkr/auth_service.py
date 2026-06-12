@@ -22,7 +22,13 @@ from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID
 from lkr.custom_types import NewTokenCallback
 from lkr.logger import logger
 
-__all__ = ["get_auth", "ApiKeyAuthSession", "DbOAuthSession", "is_auth_expired"]
+__all__ = [
+    "get_auth",
+    "ApiKeyAuthSession",
+    "DbOAuthSession",
+    "is_auth_expired",
+    "init_sdk",
+]
 
 
 def is_auth_expired(e: Exception) -> bool:
@@ -57,6 +63,7 @@ class ApiKeyApiSettings(ApiSettings):
             base_url=self.api_key.base_url,
             client_id=self.api_key.client_id,
             client_secret=self.api_key.client_secret,
+            verify_ssl=str(self.api_key.verify_ssl).lower(),
         )
 
 
@@ -624,3 +631,57 @@ class ApiKeyAuth:
         raise NotImplementedError(
             "ApiKeyAuth does not support getting current instance"
         )
+
+
+def init_sdk(
+    base_url: str | None = None,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+    verify_ssl: bool | None = None,
+    use_production: bool = True,
+    instance_name: str | None = None,
+) -> Looker40SDK:
+    resolved_base_url = base_url or os.environ.get("LOOKERSDK_BASE_URL")
+    resolved_client_id = client_id or os.environ.get("LOOKERSDK_CLIENT_ID")
+    resolved_client_secret = (
+        client_secret or os.environ.get("LOOKERSDK_CLIENT_SECRET")
+    )
+
+    resolved_verify_ssl: bool
+    if verify_ssl is not None:
+        resolved_verify_ssl = verify_ssl
+    else:
+        if "LOOKERSDK_VERIFY_SSL" in os.environ:
+            verify_ssl_str = os.environ.get("LOOKERSDK_VERIFY_SSL", "true").lower()
+            resolved_verify_ssl = verify_ssl_str not in ("false", "0", "f")
+        else:
+            resolved_verify_ssl = True
+
+    if resolved_base_url or resolved_client_id or resolved_client_secret:
+        if not (
+            resolved_base_url and resolved_client_id and resolved_client_secret
+        ):
+            missing = []
+            if not resolved_base_url:
+                missing.append("base_url")
+            if not resolved_client_id:
+                missing.append("client_id")
+            if not resolved_client_secret:
+                missing.append("client_secret")
+            raise ValueError(
+                f"Incomplete API key configuration. Missing: {', '.join(missing)}"
+            )
+        api_key = LookerApiKey(
+            client_id=resolved_client_id,
+            client_secret=resolved_client_secret,
+            base_url=resolved_base_url,
+            verify_ssl=resolved_verify_ssl,
+        )
+        return init_api_key_sdk(api_key, use_production=use_production)
+
+    ctx = LkrCtxObj(
+        force_oauth=True, oauth_account=instance_name, use_production=use_production
+    )
+    sql_auth = SqlLiteAuth(ctx)
+    return sql_auth.get_current_sdk()
+
