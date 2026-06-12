@@ -238,3 +238,31 @@ def test_push_orphan_cleanup_after_upload(tmp_path, mock_sdk, mock_auth):
     )
 
 
+def test_push_create_directory_recursively_fallback(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+
+    nested_dir = project_dir / "views2" / "subfolder"
+    nested_dir.mkdir(parents=True)
+
+    view_file = nested_dir / "my_view.view.lkml"
+    view_file.write_text("view: my_view {}")
+
+    mock_sdk.update_file.side_effect = Exception("File not found")
+    # First create_file fails (missing directory), second succeeds
+    mock_sdk.create_file.side_effect = [Exception("Directory not found"), None]
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
+        result = runner.invoke(app, ["tools", "lookml", "push", str(project_dir)])
+        assert result.exit_code == 0
+
+    mock_sdk.create_project_directory.assert_any_call(
+        project_id="test_project", directory_path="views2"
+    )
+    mock_sdk.create_project_directory.assert_any_call(
+        project_id="test_project", directory_path="views2/subfolder"
+    )
+    assert mock_sdk.create_file.call_count == 2
+
+
+

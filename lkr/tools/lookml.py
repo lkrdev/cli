@@ -53,6 +53,26 @@ def _resolve_project_id(
     return os.path.basename(os.getcwd())
 
 
+def _ensure_remote_directory(
+    sdk: ExtendedLooker40SDK, project_id: str, file_path: str
+) -> None:
+    dir_path = os.path.dirname(file_path.replace("\\", "/"))
+    if not dir_path or dir_path == "." or dir_path == "/":
+        return
+
+    parts = [p for p in dir_path.split("/") if p]
+    current_path = ""
+    for part in parts:
+        current_path = f"{current_path}/{part}" if current_path else part
+        try:
+            sdk.create_project_directory(
+                project_id=project_id,
+                directory_path=current_path,
+            )
+        except Exception as e:
+            logger.debug(f"Directory creation notice for '{current_path}': {e}")
+
+
 @lookml_group.command(name="push")
 def push(
     ctx: typer.Context,
@@ -125,10 +145,19 @@ def push(
                     file_content=file_content,
                 )
             except Exception:
-                sdk.create_file(
-                    project_id=project_id,
-                    file_content=file_content,
-                )
+                try:
+                    sdk.create_file(
+                        project_id=project_id,
+                        file_content=file_content,
+                    )
+                except Exception:
+                    _ensure_remote_directory(
+                        sdk=sdk, project_id=project_id, file_path=structured_path
+                    )
+                    sdk.create_file(
+                        project_id=project_id,
+                        file_content=file_content,
+                    )
             successfully_pushed_paths.add(structured_path)
             continue
         except Exception as struct_err:
