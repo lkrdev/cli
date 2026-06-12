@@ -46,6 +46,7 @@ all = [
 
 [project.scripts]
 lkr = "lkr.main:app"
+lkr-dev-cli = "lkr.main:app"
 
 [build-system]
 requires = ["hatchling"]
