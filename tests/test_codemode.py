@@ -1,11 +1,15 @@
 from typing import Any, cast
 import json
+import os
+import tempfile
 import pytest
 from unittest.mock import patch, MagicMock
+from typer.testing import CliRunner
 from looker_sdk.rtl.auth_session import AuthSession
 from looker_sdk.rtl.transport import Transport
 from lkr.codemode.main import run_python_code
 from lkr.extended_sdk_methods import ExtendedLooker40SDK
+from lkr.main import app
 
 
 class DummyAuth:
@@ -67,7 +71,7 @@ me_obj = sdk.me()
 return me_obj["first_name"]
 """
     result = run_python_code(code_sdk)
-    assert len(result) > 0
+    assert result == "Test"
 
 def test_examples():
     code_examples = """
@@ -283,3 +287,36 @@ return {"status": "clean"}
     
     out, err = capfd.readouterr()
     assert out == ""
+
+runner = CliRunner()
+
+def test_cli_code_mode_sandbox_code():
+    result = runner.invoke(app, ["code-mode", "sandbox", "--code", "return me()"])
+    assert result.exit_code == 0
+    assert "Test" in result.stdout
+
+def test_cli_code_mode_sandbox_sdk_code():
+    result = runner.invoke(app, ["code-mode", "sandbox", "--code", "return sdk.me()"])
+    assert result.exit_code == 0
+    assert "Test" in result.stdout
+
+def test_cli_code_mode_sandbox_file():
+    with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+        f.write("return me()")
+        temp_path = f.name
+        
+    try:
+        result = runner.invoke(app, ["code-mode", "sandbox", "--file", temp_path])
+        assert result.exit_code == 0
+        assert "Test" in result.stdout
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+def test_cli_code_mode_sandbox_both_error():
+    result = runner.invoke(app, ["code-mode", "sandbox", "--code", "return me()", "--file", "dummy.py"])
+    assert result.exit_code == 1
+
+def test_cli_code_mode_sandbox_neither_error():
+    result = runner.invoke(app, ["code-mode", "sandbox"])
+    assert result.exit_code == 1

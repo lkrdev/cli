@@ -1,6 +1,7 @@
 import inspect
 import json
 import os
+import re
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -21,7 +22,7 @@ from lkr.logger import logger
 __all__ = ["group"]
 
 mcp = FastMCP("lkr:codemode")
-group = typer.Typer()
+group = typer.Typer(no_args_is_help=True)
 ctx_lkr: LkrCtxObj | None = None
 class OSCapture:
     def __init__(self):
@@ -156,6 +157,10 @@ def run_python_code(code: str, dev_mode: bool = False) -> str:
                 setattr(SDK, name, staticmethod(func))
         external_funcs['sdk'] = SDK
 
+        # Monty external_functions do not support attribute lookups on objects.
+        # Pre-process the code to replace `sdk.method_name` with `method_name`.
+        code = re.sub(r"\bsdk\.([a-zA-Z_][a-zA-Z0-9_]*)\b", r"\1", code)
+
         m = pydantic_monty.Monty(code)
         
         # Use low-level OS stdout capture to ensure any print() statements
@@ -191,7 +196,45 @@ def run_python_code(code: str, dev_mode: bool = False) -> str:
         return f"Error: {str(e)}"
 
 
+@group.command(name="sandbox")
+def sandbox(
+    ctx: typer.Context,
+    code: str | None = typer.Option(
+        None, "--code", "-c", help="Execute Python code directly in the sandbox"
+    ),
+    file: str | None = typer.Option(
+        None, "--file", "-f", help="Execute Python code from a file in the sandbox"
+    ),
+    dev_mode: bool = typer.Option(
+        False, "--dev-mode", help="Run in dev mode"
+    ),
+):
+    if not code and not file:
+        logger.error("Must specify either --code or --file")
+        raise typer.Exit(1)
+        
+    if code and file:
+        logger.error("Cannot specify both --code and --file")
+        raise typer.Exit(1)
+        
+    if file:
+        try:
+            with open(file, "r") as f:
+                code_to_run = f.read()
+        except Exception as e:
+            logger.error(f"Failed to read file {file}: {e}")
+            raise typer.Exit(1)
+    else:
+        code_to_run = code
 
+    global ctx_lkr
+    ctx_lkr = (
+        ctx.obj.get("ctx_lkr")
+        if (ctx.obj and "ctx_lkr" in ctx.obj)
+        else LkrCtxObj(force_oauth=False)
+    )
+    result = run_python_code(code_to_run, dev_mode=dev_mode)
+    typer.echo(result)
 
 
 @group.command(name="run")
