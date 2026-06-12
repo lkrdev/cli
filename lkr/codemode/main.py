@@ -1,3 +1,4 @@
+import ast
 import inspect
 import json
 import os
@@ -158,8 +159,22 @@ def run_python_code(code: str, dev_mode: bool = False) -> str:
         external_funcs['sdk'] = SDK
 
         # Monty external_functions do not support attribute lookups on objects.
-        # Pre-process the code to replace `sdk.method_name` with `method_name`.
-        code = re.sub(r"\bsdk\.([a-zA-Z_][a-zA-Z0-9_]*)\b", r"\1", code)
+        # Pre-process the code to replace `sdk.method_name` with `method_name` safely using AST.
+        try:
+            class SDKAttributeRewriter(ast.NodeTransformer):
+                def visit_Attribute(self, node):
+                    self.generic_visit(node)
+                    if isinstance(node.value, ast.Name) and node.value.id == 'sdk':
+                        return ast.copy_location(ast.Name(id=node.attr, ctx=node.ctx), node)
+                    return node
+
+            tree = ast.parse(code)
+            tree = SDKAttributeRewriter().visit(tree)
+            ast.fix_missing_locations(tree)
+            code = ast.unparse(tree)
+        except Exception:
+            # Fallback to regex if parsing fails
+            code = re.sub(r"\bsdk\.([a-zA-Z_][a-zA-Z0-9_]*)\b", r"\1", code)
 
         m = pydantic_monty.Monty(code)
         
@@ -219,7 +234,7 @@ def sandbox(
         
     if file:
         try:
-            with open(file, "r") as f:
+            with open(file, "r", encoding="utf-8") as f:
                 code_to_run = f.read()
         except Exception as e:
             logger.error(f"Failed to read file {file}: {e}")
@@ -230,7 +245,7 @@ def sandbox(
     global ctx_lkr
     ctx_lkr = (
         ctx.obj.get("ctx_lkr")
-        if (ctx.obj and "ctx_lkr" in ctx.obj)
+        if (ctx and ctx.obj and "ctx_lkr" in ctx.obj)
         else LkrCtxObj(force_oauth=False)
     )
     result = run_python_code(code_to_run, dev_mode=dev_mode)
@@ -245,7 +260,7 @@ def run(
     global ctx_lkr
     ctx_lkr = (
         ctx.obj.get("ctx_lkr")
-        if (ctx.obj and "ctx_lkr" in ctx.obj)
+        if (ctx and ctx.obj and "ctx_lkr" in ctx.obj)
         else LkrCtxObj(force_oauth=False)
     )
     mcp.run()
