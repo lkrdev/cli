@@ -8,6 +8,7 @@ from lkr.extended_sdk_methods.classes import (
     ProjectGeneratorColumn,
     ProjectGeneratorTable,
     SelectedTable,
+    ProjectCommitRequest,
 )
 from lkr.extended_sdk_methods.main import ExtendedLooker40SDK
 
@@ -22,4 +23,5 @@ __all__ = [
     "GenerateLookMLParameters",
     "SelectedTable",
     "GenerateLookMLWithNewFilesResponse",
+    "ProjectCommitRequest",
 ]
