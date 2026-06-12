@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Annotated, Any, Optional
 
 import typer
@@ -109,9 +110,51 @@ def push(
                     f"Local file '{file}' has an extension not supported by Looker and will be skipped."
                 )
 
-    local_paths = {f["path"] for f in files_to_push}.union(
-        {f["root_name"] for f in files_to_push}
-    )
+    successfully_pushed_paths = set()
+    for f in files_to_push:
+        structured_path = f["path"]
+        root_path = f["root_name"]
+        content = f["content"]
+
+        try:
+            logger.info(f"Uploading/Overwriting remote file: {structured_path}")
+            file_content = FileContent(path=structured_path, content=content)
+            try:
+                sdk.update_file(
+                    project_id=project_id,
+                    file_content=file_content,
+                )
+            except Exception:
+                sdk.create_file(
+                    project_id=project_id,
+                    file_content=file_content,
+                )
+            successfully_pushed_paths.add(structured_path)
+            continue
+        except Exception as struct_err:
+            logger.debug(
+                f"Structured upload notice ({struct_err}), initiating fallback to project root..."
+            )
+
+        if root_path.endswith(".model.lkml"):
+            content = re.sub(
+                r'include:\s*["\']/views/\*\*/\*\.view\.lkml["\']',
+                'include: "/*.view.lkml"',
+                content,
+            )
+
+        root_file_content = FileContent(path=root_path, content=content)
+        try:
+            sdk.update_file(
+                project_id=project_id,
+                file_content=root_file_content,
+            )
+        except Exception:
+            sdk.create_file(
+                project_id=project_id,
+                file_content=root_file_content,
+            )
+        successfully_pushed_paths.add(root_path)
 
     logger.info("Retrieving remote file inventory to enforce one-way mirror...")
     existing_remote = sdk.all_project_files(project_id=project_id) or []
@@ -122,7 +165,7 @@ def push(
                 f"Remote file '{rf_path}' has an extension not supported by Looker."
             )
         if (
-            rf_path not in local_paths
+            rf_path not in successfully_pushed_paths
             and not rf_path.endswith(".gitkeep")
             and rf_path != "manifest.lkml"
         ):
@@ -131,49 +174,6 @@ def push(
                 sdk.delete_file(project_id=project_id, file_path=rf_path)
             except Exception as dpe:
                 logger.debug(f"Deletion notice for {rf_path}: {dpe}")
-
-    for f in files_to_push:
-        structured_path = f["path"]
-        root_path = f["root_name"]
-        content = f["content"]
-
-        try:
-            logger.info(f"Uploading/Overwriting remote file: {structured_path}")
-            file_content = FileContent(path=structured_path, content=content)
-            try:
-                sdk.create_file(
-                    project_id=project_id,
-                    file_content=file_content,
-                )
-            except Exception:
-                pass
-            sdk.update_file(
-                project_id=project_id,
-                file_content=file_content,
-            )
-            continue
-        except Exception as struct_err:
-            logger.debug(
-                f"Structured upload notice ({struct_err}), initiating fallback to project root..."
-            )
-
-        if root_path.endswith(".model.lkml"):
-            content = content.replace(
-                'include: "/views/**/*.view.lkml"', 'include: "/*.view.lkml"'
-            )
-
-        root_file_content = FileContent(path=root_path, content=content)
-        try:
-            sdk.create_file(
-                project_id=project_id,
-                file_content=root_file_content,
-            )
-        except Exception:
-            pass
-        sdk.update_file(
-            project_id=project_id,
-            file_content=root_file_content,
-        )
 
     logger.info("Push completed successfully.")
 
@@ -239,6 +239,16 @@ def pull(
             )
             continue
         if rf_path.endswith(".gitkeep"):
+            continue
+
+        local_path = os.path.join(target_dir, rf_path)
+        resolved_local = os.path.abspath(local_path)
+        try:
+            if os.path.commonpath([target_dir, resolved_local]) != target_dir:
+                logger.warning(f"Path traversal detected and blocked: {rf_path}")
+                continue
+        except ValueError:
+            logger.warning(f"Path traversal detected and blocked: {rf_path}")
             continue
 
         try:

@@ -50,14 +50,11 @@ def test_push_command(tmp_path, mock_sdk, mock_auth):
         project_id="test_project", file_path="orphan_file.lkml"
     )
 
-    # Verify create and update
     expected_content = 'connection: "my_conn"\ninclude: "/views/**/*.view.lkml"'
     expected_fc = FileContent(
         path="models/test.model.lkml", content=expected_content
     )
-    mock_sdk.create_file.assert_called_with(
-        project_id="test_project", file_content=expected_fc
-    )
+    mock_sdk.create_file.assert_not_called()
     mock_sdk.update_file.assert_called_with(
         project_id="test_project", file_content=expected_fc
     )
@@ -190,4 +187,54 @@ def test_pull_warning(tmp_path, mock_sdk, mock_auth):
         
         # Verify unsupported local orphan was NOT deleted
         assert unsupported_local.exists()
+
+
+def test_pull_path_traversal(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+
+    mock_sdk.all_project_files.return_value = [
+        {"id": "../outside/traversal.lkml"},
+    ]
+    mock_sdk.get_file_content.return_value = "malicious content"
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth), patch(
+        "lkr.tools.lookml.logger.warning"
+    ) as mock_warn:
+        result = runner.invoke(app, ["tools", "lookml", "pull", str(project_dir)])
+        assert result.exit_code == 0
+
+        # Verify the file was not written outside
+        outside_file = outside_dir / "traversal.lkml"
+        assert not outside_file.exists()
+        mock_warn.assert_any_call(
+            "Path traversal detected and blocked: ../outside/traversal.lkml"
+        )
+
+
+def test_push_orphan_cleanup_after_upload(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+
+    views_dir = project_dir / "views"
+    views_dir.mkdir()
+
+    view_file = views_dir / "my_view.view.lkml"
+    view_file.write_text("view: my_view {}")
+
+    mock_sdk.all_project_files.return_value = [
+        {"id": "views/my_view.view.lkml"},
+        {"id": "my_view.view.lkml"},
+    ]
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
+        result = runner.invoke(app, ["tools", "lookml", "push", str(project_dir)])
+        assert result.exit_code == 0
+
+    mock_sdk.delete_file.assert_called_once_with(
+        project_id="test_project", file_path="my_view.view.lkml"
+    )
+
 
