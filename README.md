@@ -4,7 +4,7 @@ The `lkr` cli is a tool for interacting with Looker. It combines Looker's SDK an
 
 ## Usage
 
-`uv` makes everyone's life easier. Go [install it](https://docs.astral.sh/uv/getting-started/installation/). You can start using `lkr` by running `uvx --from lkr-dev-cli[all] lkr --help`.
+`uv` makes everyone's life easier. Go [install it](https://docs.astral.sh/uv/getting-started/installation/). You can start using `lkr` by running `uvx lkr-dev-cli --help`.
 
 Alternatively, you can install `lkr` with `pip install lkr-dev-cli[all]` and use commands directly like `lkr <command>`.
 
@@ -24,7 +24,7 @@ See the [prerequisites section](#oauth2-prerequisites)
 Login to `lkr`
 
 ```bash
-uvx --from lkr-dev-cli[all] lkr auth login
+uvx lkr-dev-cli auth login
 ```
 
 - Select a new instance
@@ -37,7 +37,7 @@ You will be redirected to the Looker OAuth authorization page, click Allow. If y
 If everything is successful, you will see `Successfully authenticated!`. Test it with
 
 ```bash
-uvx --from lkr-dev-cli[all] lkr auth whoami
+uvx lkr-dev-cli auth whoami
 ```
 
 ### Using API Key
@@ -45,7 +45,7 @@ uvx --from lkr-dev-cli[all] lkr auth whoami
 If you provide environment variables for `LOOKERSDK_CLIENT_ID`, `LOOKERSDK_CLIENT_SECRET`, and `LOOKERSDK_BASE_URL`, `lkr` will use the API key to authenticate and the commands.  We also support command line arguments to pass in the client id, client secret, and base url.
 
 ```bash
-uvx --from lkr-dev-cli[all]  lkr --client-id <your client id> --client-secret <your client secret> --base-url <your instance url> auth whoami
+uvx lkr-dev-cli --client-id <your client id> --client-secret <your client secret> --base-url <your instance url> auth whoami
 ```
 
 
@@ -84,8 +84,8 @@ Built into the `lkr` is an MCP server. Right now its tools are based on helping 
 {
   "mcpServers": {
     "lkr-mcp": {
-      "command": "uv",
-      "args": ["run", "--with", "lkr-dev-cli[all]", "lkr", "mcp", "run"]
+      "command": "uvx",
+      "args": ["lkr-dev-cli[all]", "mcp", "run"]
     },
     "lkr-mcp-docker": {
       "command": "docker",
@@ -386,7 +386,7 @@ By running this tool, an admin can proactively identify and fix permission gaps 
 This command should be run by a **Looker Admin**.
 
 ```bash
-uvx --from lkr-dev-cli[all] lkr tools schedule-download-deprecation
+uvx lkr-dev-cli[all] tools schedule-download-deprecation
 ```
 
 Options:
