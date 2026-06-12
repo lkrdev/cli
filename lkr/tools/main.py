@@ -9,12 +9,11 @@ from fastapi import FastAPI, Request
 from lkr.logger import structured_logger as logger
 from lkr.tools.classes import AttributeUpdaterResponse, UserAttributeUpdater
 from lkr.tools.permission_deprecation import schedule_download_deprecation
+from lkr.tools.lookml import lookml_group
 
 __all__ = ["group"]
 
 group = typer.Typer()
-from lkr.tools.lookml import lookml_group
-
 group.add_typer(lookml_group, name="lookml")
 
 

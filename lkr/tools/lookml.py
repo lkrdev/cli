@@ -2,7 +2,6 @@ import os
 from typing import Annotated, Any, Optional
 
 import typer
-from pydantic import BaseModel
 
 from lkr.auth_service import get_auth
 from lkr.extended_sdk_methods import (
