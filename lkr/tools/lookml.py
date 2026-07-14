@@ -87,6 +87,14 @@ def push(
             help="Looker project ID to push to (if different from folder name)",
         ),
     ] = None,
+    file_opt: Annotated[
+        Optional[str],
+        typer.Option(
+            "--file",
+            "-f",
+            help="Single file relative path (or absolute path) to push",
+        ),
+    ] = None,
     deploy: Annotated[
         bool,
         typer.Option("--deploy", help="Commit and deploy to production after push"),
@@ -97,38 +105,73 @@ def push(
 ):
     """
     Push local files to Looker, removing files on the instance that aren't being pushed.
+    If --file / -f is specified (or folder_name is a file), only that single file is pushed without deleting remote orphans.
     """
     auth = get_auth(ctx)
     sdk: ExtendedLooker40SDK = auth.get_current_sdk()
+
+    if file_opt is None and os.path.isfile(folder_name):
+        file_opt = folder_name
+        folder_name = os.path.dirname(os.path.abspath(folder_name))
+
     project_id = _resolve_project_id(folder_name, project_id_opt)
-
     lookml_dir = os.path.abspath(folder_name)
-    if not os.path.exists(lookml_dir):
-        logger.error(f"Local folder does not exist: {lookml_dir}")
-        raise typer.Exit(1)
 
-    logger.info(f"Reading local files from {lookml_dir} for project {project_id}...")
     files_to_push = []
-    for root, _, files in os.walk(lookml_dir):
-        if ".git" in root.split(os.sep):
-            continue
-        for file in files:
-            if file in (".gitignore", ".DS_Store"):
+    if file_opt:
+        full_path = file_opt if os.path.isabs(file_opt) else os.path.join(lookml_dir, file_opt)
+        full_path = os.path.abspath(full_path)
+        try:
+            if os.path.commonpath([lookml_dir, full_path]) != lookml_dir:
+                logger.error(f"Path traversal detected and blocked: {file_opt}")
+                raise typer.Exit(1)
+        except ValueError:
+            logger.error(f"Path traversal detected and blocked: {file_opt}")
+            raise typer.Exit(1)
+
+        if not os.path.exists(full_path):
+            logger.error(f"Local file does not exist: {full_path}")
+            raise typer.Exit(1)
+
+        filename = os.path.basename(full_path)
+        if not any(filename.endswith(ext) for ext in VALID_EXTENSIONS):
+            logger.error(f"Local file '{filename}' has an extension not supported by Looker.")
+            raise typer.Exit(1)
+
+        rel_path = os.path.relpath(full_path, lookml_dir).replace("\\", "/")
+        with open(full_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        files_to_push.append({
+            "path": rel_path,
+            "root_name": filename,
+            "content": content,
+        })
+    else:
+        if not os.path.exists(lookml_dir):
+            logger.error(f"Local folder does not exist: {lookml_dir}")
+            raise typer.Exit(1)
+
+        logger.info(f"Reading local files from {lookml_dir} for project {project_id}...")
+        for root, _, files in os.walk(lookml_dir):
+            if ".git" in root.split(os.sep):
                 continue
-            if any(file.endswith(ext) for ext in VALID_EXTENSIONS):
-                full_path = os.path.join(root, file)
-                rel_path = os.path.relpath(full_path, lookml_dir).replace("\\", "/")
-                with open(full_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                files_to_push.append({
-                    "path": rel_path,
-                    "root_name": file,
-                    "content": content,
-                })
-            else:
-                logger.warning(
-                    f"Local file '{file}' has an extension not supported by Looker and will be skipped."
-                )
+            for file in files:
+                if file in (".gitignore", ".DS_Store"):
+                    continue
+                if any(file.endswith(ext) for ext in VALID_EXTENSIONS):
+                    full_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(full_path, lookml_dir).replace("\\", "/")
+                    with open(full_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    files_to_push.append({
+                        "path": rel_path,
+                        "root_name": file,
+                        "content": content,
+                    })
+                else:
+                    logger.warning(
+                        f"Local file '{file}' has an extension not supported by Looker and will be skipped."
+                    )
 
     successfully_pushed_paths = set()
     for f in files_to_push:
@@ -185,24 +228,25 @@ def push(
             )
         successfully_pushed_paths.add(root_path)
 
-    logger.info("Retrieving remote file inventory to enforce one-way mirror...")
-    existing_remote = sdk.all_project_files(project_id=project_id) or []
-    for rf in existing_remote:
-        rf_path = _get_file_id(rf)
-        if not any(rf_path.endswith(ext) for ext in VALID_EXTENSIONS):
-            logger.warning(
-                f"Remote file '{rf_path}' has an extension not supported by Looker."
-            )
-        if (
-            rf_path not in successfully_pushed_paths
-            and not rf_path.endswith(".gitkeep")
-            and rf_path != "manifest.lkml"
-        ):
-            logger.info(f"Deleting remote orphan file: {rf_path}")
-            try:
-                sdk.delete_file(project_id=project_id, file_path=rf_path)
-            except Exception as dpe:
-                logger.debug(f"Deletion notice for {rf_path}: {dpe}")
+    if not file_opt:
+        logger.info("Retrieving remote file inventory to enforce one-way mirror...")
+        existing_remote = sdk.all_project_files(project_id=project_id) or []
+        for rf in existing_remote:
+            rf_path = _get_file_id(rf)
+            if not any(rf_path.endswith(ext) for ext in VALID_EXTENSIONS):
+                logger.warning(
+                    f"Remote file '{rf_path}' has an extension not supported by Looker."
+                )
+            if (
+                rf_path not in successfully_pushed_paths
+                and not rf_path.endswith(".gitkeep")
+                and rf_path != "manifest.lkml"
+            ):
+                logger.info(f"Deleting remote orphan file: {rf_path}")
+                try:
+                    sdk.delete_file(project_id=project_id, file_path=rf_path)
+                except Exception as dpe:
+                    logger.debug(f"Deletion notice for {rf_path}: {dpe}")
 
     logger.info("Push completed successfully.")
 
@@ -234,6 +278,14 @@ def pull(
             help="Looker project ID to pull from (if different from folder name)",
         ),
     ] = None,
+    file_opt: Annotated[
+        Optional[str],
+        typer.Option(
+            "--file",
+            "-f",
+            help="Single file relative path to pull from Looker",
+        ),
+    ] = None,
     deploy: Annotated[
         bool,
         typer.Option(
@@ -246,6 +298,7 @@ def pull(
 ):
     """
     Pull remote files from Looker to local disk, removing local files that aren't on the instance.
+    If --file / -f is specified, only that single file is pulled without deleting local orphans.
     """
     auth = get_auth(ctx)
     sdk: ExtendedLooker40SDK = auth.get_current_sdk()
@@ -254,75 +307,103 @@ def pull(
     target_dir = os.path.abspath(folder_name)
     os.makedirs(target_dir, exist_ok=True)
 
-    logger.info(
-        f"Retrieving remote files for project {project_id} to pull into {target_dir}..."
-    )
-    existing_remote = sdk.all_project_files(project_id=project_id) or []
-
-    remote_paths = set()
-    for rf in existing_remote:
-        rf_path = _get_file_id(rf)
-        if not any(rf_path.endswith(ext) for ext in VALID_EXTENSIONS):
-            logger.warning(
-                f"Remote file '{rf_path}' has an extension not supported by Looker."
-            )
-            continue
-        if rf_path.endswith(".gitkeep"):
-            continue
-
-        local_path = os.path.join(target_dir, rf_path)
-        resolved_local = os.path.abspath(local_path)
+    if file_opt:
+        full_path = file_opt if os.path.isabs(file_opt) else os.path.join(target_dir, file_opt)
+        resolved_local = os.path.abspath(full_path)
         try:
             if os.path.commonpath([target_dir, resolved_local]) != target_dir:
-                logger.warning(f"Path traversal detected and blocked: {rf_path}")
-                continue
+                logger.error(f"Path traversal detected and blocked: {file_opt}")
+                raise typer.Exit(1)
         except ValueError:
-            logger.warning(f"Path traversal detected and blocked: {rf_path}")
-            continue
+            logger.error(f"Path traversal detected and blocked: {file_opt}")
+            raise typer.Exit(1)
+
+        rf_path = os.path.relpath(resolved_local, target_dir).replace("\\", "/")
+        if not any(rf_path.endswith(ext) for ext in VALID_EXTENSIONS):
+            logger.error(
+                f"File '{rf_path}' has an extension not supported by Looker."
+            )
+            raise typer.Exit(1)
 
         try:
             content = sdk.get_file_content(project_id=project_id, file_path=rf_path)
         except Exception as e:
-            if "not found" in str(e).lower():
-                logger.debug(
-                    f"Remote file {rf_path} not found in dev workspace (likely a deleted ghost file in git tracking)."
-                )
-            else:
-                logger.error(f"Failed to fetch content for remote file {rf_path}: {e}")
-            continue
+            logger.error(f"Failed to fetch content for remote file {rf_path}: {e}")
+            raise typer.Exit(1)
 
-        remote_paths.add(rf_path)
-
-        local_path = os.path.join(target_dir, rf_path)
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        with open(local_path, "w", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(resolved_local), exist_ok=True)
+        with open(resolved_local, "w", encoding="utf-8") as f:
             f.write(content)
         logger.info(f"Pulled file: {rf_path}")
+    else:
+        logger.info(
+            f"Retrieving remote files for project {project_id} to pull into {target_dir}..."
+        )
+        existing_remote = sdk.all_project_files(project_id=project_id) or []
 
-    logger.info("Cleaning up local orphans not present on the Looker instance...")
-    for root, _, files in os.walk(target_dir):
-        if ".git" in root.split(os.sep):
-            continue
-        for file in files:
-            if file in (".gitignore", ".DS_Store"):
-                continue
-            if any(file.endswith(ext) for ext in VALID_EXTENSIONS):
-                full_path = os.path.join(root, file)
-                rel_path = os.path.relpath(full_path, target_dir).replace("\\", "/")
-                if (
-                    rel_path not in remote_paths
-                    and not rel_path.endswith(".gitkeep")
-                    and rel_path != "manifest.lkml"
-                ):
-                    logger.info(f"Deleting local orphan file: {rel_path}")
-                    try:
-                        os.remove(full_path)
-                    except Exception as err:
-                        logger.debug(f"Local deletion notice for {rel_path}: {err}")
-            else:
+        remote_paths = set()
+        for rf in existing_remote:
+            rf_path = _get_file_id(rf)
+            if not any(rf_path.endswith(ext) for ext in VALID_EXTENSIONS):
                 logger.warning(
-                    f"Local file '{file}' has an extension not supported by Looker and will not be synchronized or deleted."
+                    f"Remote file '{rf_path}' has an extension not supported by Looker."
                 )
+                continue
+            if rf_path.endswith(".gitkeep"):
+                continue
+
+            local_path = os.path.join(target_dir, rf_path)
+            resolved_local = os.path.abspath(local_path)
+            try:
+                if os.path.commonpath([target_dir, resolved_local]) != target_dir:
+                    logger.warning(f"Path traversal detected and blocked: {rf_path}")
+                    continue
+            except ValueError:
+                logger.warning(f"Path traversal detected and blocked: {rf_path}")
+                continue
+
+            try:
+                content = sdk.get_file_content(project_id=project_id, file_path=rf_path)
+            except Exception as e:
+                if "not found" in str(e).lower():
+                    logger.debug(
+                        f"Remote file {rf_path} not found in dev workspace (likely a deleted ghost file in git tracking)."
+                    )
+                else:
+                    logger.error(f"Failed to fetch content for remote file {rf_path}: {e}")
+                continue
+
+            remote_paths.add(rf_path)
+
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            with open(local_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            logger.info(f"Pulled file: {rf_path}")
+
+        logger.info("Cleaning up local orphans not present on the Looker instance...")
+        for root, _, files in os.walk(target_dir):
+            if ".git" in root.split(os.sep):
+                continue
+            for file in files:
+                if file in (".gitignore", ".DS_Store"):
+                    continue
+                if any(file.endswith(ext) for ext in VALID_EXTENSIONS):
+                    full_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(full_path, target_dir).replace("\\", "/")
+                    if (
+                        rel_path not in remote_paths
+                        and not rel_path.endswith(".gitkeep")
+                        and rel_path != "manifest.lkml"
+                    ):
+                        logger.info(f"Deleting local orphan file: {rel_path}")
+                        try:
+                            os.remove(full_path)
+                        except Exception as err:
+                            logger.debug(f"Local deletion notice for {rel_path}: {err}")
+                else:
+                    logger.warning(
+                        f"Local file '{file}' has an extension not supported by Looker and will not be synchronized or deleted."
+                    )
 
     logger.info("Pull completed successfully.")
 

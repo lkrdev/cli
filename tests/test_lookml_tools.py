@@ -265,4 +265,144 @@ def test_push_create_directory_recursively_fallback(tmp_path, mock_sdk, mock_aut
     assert mock_sdk.create_file.call_count == 2
 
 
+def test_push_single_file_option(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+
+    views_dir = project_dir / "views"
+    views_dir.mkdir()
+
+    view_file = views_dir / "target.view.lkml"
+    view_file.write_text("view: target {}")
+
+    other_file = views_dir / "other.view.lkml"
+    other_file.write_text("view: other {}")
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
+        result = runner.invoke(
+            app,
+            [
+                "tools",
+                "lookml",
+                "push",
+                str(project_dir),
+                "--file",
+                "views/target.view.lkml",
+            ],
+        )
+        assert result.exit_code == 0
+
+    # Verify update_file was called only for target.view.lkml
+    expected_fc = FileContent(
+        path="views/target.view.lkml", content="view: target {}"
+    )
+    mock_sdk.update_file.assert_called_once_with(
+        project_id="test_project", file_content=expected_fc
+    )
+    # Verify no orphan cleanup inventory check occurred
+    mock_sdk.all_project_files.assert_not_called()
+    mock_sdk.delete_file.assert_not_called()
+
+
+def test_push_file_as_argument(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+
+    view_file = project_dir / "standalone.view.lkml"
+    view_file.write_text("view: standalone {}")
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
+        result = runner.invoke(
+            app,
+            ["tools", "lookml", "push", str(view_file), "--project", "test_project"],
+        )
+        assert result.exit_code == 0
+
+    expected_fc = FileContent(
+        path="standalone.view.lkml", content="view: standalone {}"
+    )
+    mock_sdk.update_file.assert_called_once_with(
+        project_id="test_project", file_content=expected_fc
+    )
+    mock_sdk.all_project_files.assert_not_called()
+
+
+def test_pull_single_file_option(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+
+    local_orphan = project_dir / "orphan.view.lkml"
+    local_orphan.write_text("orphan content")
+
+    mock_sdk.get_file_content.return_value = "view: pulled_single {}"
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
+        result = runner.invoke(
+            app,
+            [
+                "tools",
+                "lookml",
+                "pull",
+                str(project_dir),
+                "-f",
+                "views/single.view.lkml",
+            ],
+        )
+        assert result.exit_code == 0
+
+    pulled_file = project_dir / "views" / "single.view.lkml"
+    assert pulled_file.exists()
+    assert pulled_file.read_text() == "view: pulled_single {}"
+
+    # Local orphan must NOT be deleted in single file pull mode
+    assert local_orphan.exists()
+    mock_sdk.all_project_files.assert_not_called()
+
+
+def test_push_single_file_path_traversal(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth), patch(
+        "lkr.tools.lookml.logger.error"
+    ) as mock_err:
+        result = runner.invoke(
+            app,
+            [
+                "tools",
+                "lookml",
+                "push",
+                str(project_dir),
+                "-f",
+                "../outside.view.lkml",
+            ],
+        )
+        assert result.exit_code == 1
+        mock_err.assert_called_with("Path traversal detected and blocked: ../outside.view.lkml")
+
+
+def test_pull_single_file_path_traversal(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth), patch(
+        "lkr.tools.lookml.logger.error"
+    ) as mock_err:
+        result = runner.invoke(
+            app,
+            [
+                "tools",
+                "lookml",
+                "pull",
+                str(project_dir),
+                "-f",
+                "../outside.view.lkml",
+            ],
+        )
+        assert result.exit_code == 1
+        mock_err.assert_called_with("Path traversal detected and blocked: ../outside.view.lkml")
+
+
+
+
 

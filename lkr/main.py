@@ -52,9 +52,30 @@ add_optional_typer_group(app, "lkr.codemode.main.group", "code-mode")
 add_optional_typer_group(app, "lkr.db_template.main.group", "db-template")
 
 
+def version_callback(value: bool):
+    if value:
+        import importlib.metadata
+
+        try:
+            version = importlib.metadata.version("lkr-dev-cli")
+        except importlib.metadata.PackageNotFoundError:
+            version = "0.0.0"
+        typer.echo(version)
+        raise typer.Exit()
+
+
 @app.callback()
 def callback(
     ctx: typer.Context,
+    version: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--version",
+            callback=version_callback,
+            is_eager=True,
+            help="Show the version and exit.",
+        ),
+    ] = None,
     client_id: Annotated[
         str | None, typer.Option(envvar="LOOKERSDK_CLIENT_ID")
     ] = None,
