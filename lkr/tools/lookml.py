@@ -121,6 +121,14 @@ def push(
     if file_opt:
         full_path = file_opt if os.path.isabs(file_opt) else os.path.join(lookml_dir, file_opt)
         full_path = os.path.abspath(full_path)
+        try:
+            if os.path.commonpath([lookml_dir, full_path]) != lookml_dir:
+                logger.error(f"Path traversal detected and blocked: {file_opt}")
+                raise typer.Exit(1)
+        except ValueError:
+            logger.error(f"Path traversal detected and blocked: {file_opt}")
+            raise typer.Exit(1)
+
         if not os.path.exists(full_path):
             logger.error(f"Local file does not exist: {full_path}")
             raise typer.Exit(1)
@@ -300,21 +308,21 @@ def pull(
     os.makedirs(target_dir, exist_ok=True)
 
     if file_opt:
-        rf_path = file_opt.replace("\\", "/")
+        full_path = file_opt if os.path.isabs(file_opt) else os.path.join(target_dir, file_opt)
+        resolved_local = os.path.abspath(full_path)
+        try:
+            if os.path.commonpath([target_dir, resolved_local]) != target_dir:
+                logger.error(f"Path traversal detected and blocked: {file_opt}")
+                raise typer.Exit(1)
+        except ValueError:
+            logger.error(f"Path traversal detected and blocked: {file_opt}")
+            raise typer.Exit(1)
+
+        rf_path = os.path.relpath(resolved_local, target_dir).replace("\\", "/")
         if not any(rf_path.endswith(ext) for ext in VALID_EXTENSIONS):
             logger.error(
                 f"File '{rf_path}' has an extension not supported by Looker."
             )
-            raise typer.Exit(1)
-
-        local_path = os.path.join(target_dir, rf_path)
-        resolved_local = os.path.abspath(local_path)
-        try:
-            if os.path.commonpath([target_dir, resolved_local]) != target_dir:
-                logger.error(f"Path traversal detected and blocked: {rf_path}")
-                raise typer.Exit(1)
-        except ValueError:
-            logger.error(f"Path traversal detected and blocked: {rf_path}")
             raise typer.Exit(1)
 
         try:

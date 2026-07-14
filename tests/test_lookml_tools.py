@@ -359,5 +359,50 @@ def test_pull_single_file_option(tmp_path, mock_sdk, mock_auth):
     mock_sdk.all_project_files.assert_not_called()
 
 
+def test_push_single_file_path_traversal(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth), patch(
+        "lkr.tools.lookml.logger.error"
+    ) as mock_err:
+        result = runner.invoke(
+            app,
+            [
+                "tools",
+                "lookml",
+                "push",
+                str(project_dir),
+                "-f",
+                "../outside.view.lkml",
+            ],
+        )
+        assert result.exit_code == 1
+        mock_err.assert_called_with("Path traversal detected and blocked: ../outside.view.lkml")
+
+
+def test_pull_single_file_path_traversal(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth), patch(
+        "lkr.tools.lookml.logger.error"
+    ) as mock_err:
+        result = runner.invoke(
+            app,
+            [
+                "tools",
+                "lookml",
+                "pull",
+                str(project_dir),
+                "-f",
+                "../outside.view.lkml",
+            ],
+        )
+        assert result.exit_code == 1
+        mock_err.assert_called_with("Path traversal detected and blocked: ../outside.view.lkml")
+
+
+
 
 
