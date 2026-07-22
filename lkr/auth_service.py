@@ -519,11 +519,7 @@ class SqlLiteAuth:
                 except Exception as e:
                     if is_auth_expired(e):
                         if sys.stdin.isatty():
-                            self._cli_confirm_refresh_token(current_auth, quiet=False, port=port)
-                            return self.get_current_sdk(
-                                prompt_refresh_invalid_token=False,
-                                port=port,
-                            )
+                            return self._cli_confirm_refresh_token(current_auth, quiet=False, port=port)
                     raise e
 
             return sdk
@@ -590,12 +586,13 @@ class SqlLiteAuth:
             if not token:
                 raise InvalidRefreshTokenError(current_auth.instance_name)
             else:
-                from lkr.logger import logger
-
                 logger.info(
                     f"Successfully refreshed token for {current_auth.instance_name}"
                 )
                 return self.get_current_sdk(prompt_refresh_invalid_token=False, port=port)
+        else:
+            logger.error("Token refresh cancelled by user.")
+            raise typer.Exit(1)
 
 
 class ApiKeyAuth:

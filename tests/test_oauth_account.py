@@ -116,3 +116,23 @@ def test_set_token_refreshes_lookedup_account(temp_db):
     assert row_active["access_token"] == "token-active"
     assert row_active["current_instance"] == 1
     conn.close()
+
+
+def test_oauth_callback_server_dual_stack():
+    import urllib.request
+    import threading
+    from lkr.auth.oauth import OAuthCallbackServer
+
+    server = OAuthCallbackServer(("localhost", 18888))
+    t = threading.Thread(target=server.serve_forever)
+    t.daemon = True
+    t.start()
+
+    try:
+        # Check IPv4 loopback
+        res1 = urllib.request.urlopen("http://127.0.0.1:18888/callback?code=testcode", timeout=1).read()
+        assert b"Successfully authenticated" in res1
+    finally:
+        server.shutdown()
+        server.server_close()
+

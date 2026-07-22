@@ -17,38 +17,39 @@ from lkr.logger import logger
 
 def kill_process_on_port(port: int, retries: int = 5, delay: float = 1) -> None:
     """Kill any process currently using the specified port."""
-    try:
-        # Try to create a socket binding to check if port is in use
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("localhost", port))
-        sock.close()
-        return  # Port is free, no need to kill anything
-    except socket.error:
-        # Port is in use, try to kill the process
-        if os.name == "posix":  # macOS/Linux
-            subprocess.run(
-                f"lsof -ti tcp:{port} | xargs kill -9",
-                shell=True,
-                capture_output=True,
-            )
-        elif os.name == "nt":  # Windows
-            subprocess.run(
-                f'for /f "tokens=5" %a in (\'netstat -aon ^| find ":{port}"\') do taskkill /F /PID %a',
-                shell=True,
-                capture_output=True,
-            )
-        # After killing, wait for the port to be free
-        for _ in range(retries):
+    def port_is_free() -> bool:
+        for family, host in [(socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")]:
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock = socket.socket(family, socket.SOCK_STREAM)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                sock.bind(("localhost", port))
+                sock.bind((host, port))
                 sock.close()
-                return
             except socket.error:
-                time.sleep(delay)
-        raise RuntimeError(f"Port {port} is still in use after killing process.")
+                return False
+        return True
+
+    if port_is_free():
+        return  # Port is free, no need to kill anything
+
+    # Port is in use, try to kill the process
+    if os.name == "posix":  # macOS/Linux
+        subprocess.run(
+            f"lsof -ti tcp:{port} | xargs kill -9",
+            shell=True,
+            capture_output=True,
+        )
+    elif os.name == "nt":  # Windows
+        subprocess.run(
+            f'for /f "tokens=5" %a in (\'netstat -aon ^| find ":{port}"\') do taskkill /F /PID %a',
+            shell=True,
+            capture_output=True,
+        )
+    # After killing, wait for the port to be free
+    for _ in range(retries):
+        if port_is_free():
+            return
+        time.sleep(delay)
+    raise RuntimeError(f"Port {port} is still in use after killing process.")
 
 
 class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
@@ -114,6 +115,19 @@ class OAuthCallbackServer(socketserver.TCPServer):
     allow_reuse_address = True
 
     def __init__(self, server_address):
+        # ponytail: try dual-stack IPv6 socket binding for localhost to support both ::1 and 127.0.0.1
+        host, port = server_address
+        if host in ("localhost", "127.0.0.1", "::1", ""):
+            try:
+                self.address_family = socket.AF_INET6
+                super().__init__(("::", port), OAuthCallbackHandler, bind_and_activate=False)
+                self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                self.server_bind()
+                self.server_activate()
+                self.auth_code: str | None = None
+                return
+            except Exception:
+                self.address_family = socket.AF_INET
         super().__init__(server_address, OAuthCallbackHandler)
         self.auth_code: str | None = None
 
