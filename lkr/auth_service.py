@@ -376,11 +376,22 @@ class CurrentAuth(BaseModel):
             datetime.fromisoformat(expires_at) + timedelta(days=30)
         ).isoformat()
         if self.from_db and new_token:
+            if new_token.refresh_token:
+                self.refresh_token = new_token.refresh_token
+            self.refresh_expires_at = refresh_expires_at
+            if new_token.access_token:
+                self.access_token = new_token.access_token
+            if new_token.token_type:
+                self.token_type = new_token.token_type
+            if new_token.expires_in:
+                self.expires_in = new_token.expires_in
             connection.execute(
-                "UPDATE auth SET access_token = ?, token_type = ?, expires_at = ? WHERE instance_name = ?",
+                "UPDATE auth SET access_token = ?, refresh_token = ?, refresh_expires_at = ?, token_type = ?, expires_at = ? WHERE instance_name = ?",
                 (
-                    new_token.access_token,
-                    new_token.token_type,
+                    self.access_token,
+                    self.refresh_token,
+                    self.refresh_expires_at,
+                    self.token_type,
                     expires_at,
                     self.instance_name,
                 ),
