@@ -16,19 +16,8 @@ The tool instantiates Looker SDK natively, searches all bound methods, and passe
 
 ## Continuous Usage
 
-### 1. Direct CLI Execution (Sandbox Mode)
-If you want to execute Python scripts or inline code directly against your Looker instance without setting up an MCP client, use the `sandbox` command:
-
-```bash
-# Execute inline Python code
-uvx lkr-dev-cli code-mode sandbox --code="return me()"
-
-# Execute Python script file
-uvx lkr-dev-cli code-mode sandbox --file=./path/to/script.py
-```
-
-### 2. Starting the Server
-To immediately trigger the MCP stdio listener, use:
+### 1. Starting the Server
+To immediately trigger the stdio listener, use:
 ```bash
 uvx -q lkr-dev-cli[codemode] code-mode run
 ```
