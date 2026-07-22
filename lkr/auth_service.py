@@ -488,14 +488,16 @@ class SqlLiteAuth:
             return current_auth.instance_name
         return None
 
-    def get_current_sdk(self, prompt_refresh_invalid_token: bool = True) -> Looker40SDK:
+    def get_current_sdk(
+        self, prompt_refresh_invalid_token: bool = True, port: int | None = None
+    ) -> Looker40SDK:
         current_auth = self._get_current_auth()
         if current_auth:
             if not current_auth.valid_refresh_token:
                 from lkr.exceptions import InvalidRefreshTokenError
 
                 if prompt_refresh_invalid_token:
-                    return self._cli_confirm_refresh_token(current_auth, quiet=True)
+                    return self._cli_confirm_refresh_token(current_auth, quiet=True, port=port)
                 else:
                     raise InvalidRefreshTokenError(current_auth.instance_name)
 
@@ -507,6 +509,7 @@ class SqlLiteAuth:
                 new_token_callback=refresh_current_token,
                 access_token=current_auth.to_access_token(),
                 use_production=current_auth.use_production,
+                port=port if port is not None else 8000,
             )
             if prompt_refresh_invalid_token:
                 import sys
@@ -516,9 +519,10 @@ class SqlLiteAuth:
                 except Exception as e:
                     if is_auth_expired(e):
                         if sys.stdin.isatty():
-                            self._cli_confirm_refresh_token(current_auth, quiet=False)
+                            self._cli_confirm_refresh_token(current_auth, quiet=False, port=port)
                             return self.get_current_sdk(
-                                prompt_refresh_invalid_token=False
+                                prompt_refresh_invalid_token=False,
+                                port=port,
                             )
                     raise e
 
@@ -547,7 +551,9 @@ class SqlLiteAuth:
             for row in rows
         ]
 
-    def _cli_confirm_refresh_token(self, current_auth: CurrentAuth, quiet: bool = True):
+    def _cli_confirm_refresh_token(
+        self, current_auth: CurrentAuth, quiet: bool = True, port: int | None = None
+    ):
         from typer import confirm
 
         from lkr.auth.oauth import OAuth2PKCE
@@ -574,7 +580,9 @@ class SqlLiteAuth:
 
             # Initialize OAuth2 PKCE flow
             oauth = OAuth2PKCE(
-                new_token_callback=add_auth, use_production=current_auth.use_production
+                new_token_callback=add_auth,
+                use_production=current_auth.use_production,
+                port=port,
             )
             login_response = oauth.initiate_login(origin)
             oauth.auth_code = login_response["auth_code"]
@@ -587,7 +595,7 @@ class SqlLiteAuth:
                 logger.info(
                     f"Successfully refreshed token for {current_auth.instance_name}"
                 )
-                return self.get_current_sdk(prompt_refresh_invalid_token=False)
+                return self.get_current_sdk(prompt_refresh_invalid_token=False, port=port)
 
 
 class ApiKeyAuth:

@@ -62,9 +62,9 @@ def login(
     auth = get_auth(ctx)
     all_instances = auth.list_auth()
 
-    def do_switch(instance_name: str):
+    def do_switch(instance_name: str, port: int | None = None):
         auth.set_current_instance(instance_name)
-        sdk = auth.get_current_sdk()
+        sdk = auth.get_current_sdk(port=port)
         if not sdk:
             logger.error("No looker instance currently authenticated")
             raise typer.Exit(1)
@@ -76,7 +76,7 @@ def login(
 
     if instance_name:
         if instance_name in [name for name, u, c, up in all_instances]:
-            do_switch(instance_name)
+            do_switch(instance_name, port=port)
             return
         else:
             logger.error(f"Instance '{instance_name}' not found")
@@ -99,7 +99,7 @@ def login(
             "Select instance to login/switch to", choices=options, pointer=">"
         ).ask()
         if picked != "_add_new_instance":
-            do_switch(picked)
+            do_switch(picked, port=port)
             return
         else:
             # Login flow for new instance
