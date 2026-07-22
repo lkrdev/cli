@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import types
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import List, Self, Tuple, Union
 
@@ -13,13 +14,13 @@ from looker_sdk.rtl.auth_session import AuthSession, CryptoHash, OAuthSession
 from looker_sdk.rtl.auth_token import AccessToken, AuthToken
 from looker_sdk.rtl.requests_transport import RequestsTransport
 from looker_sdk.rtl.transport import LOOKER_API_ID, HttpMethod
-from lkr.extended_sdk_methods import ExtendedLooker40SDK as Looker40SDK
 from pydantic import BaseModel, Field, computed_field
 from pydash import get
 
 from lkr.classes import LkrCtxObj, LookerApiKey
 from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID
 from lkr.custom_types import NewTokenCallback
+from lkr.extended_sdk_methods import ExtendedLooker40SDK as Looker40SDK
 from lkr.logger import logger
 
 __all__ = [
@@ -494,7 +495,7 @@ class SqlLiteAuth:
                 from lkr.exceptions import InvalidRefreshTokenError
 
                 if prompt_refresh_invalid_token:
-                    self._cli_confirm_refresh_token(current_auth, quiet=True)
+                    return self._cli_confirm_refresh_token(current_auth, quiet=True)
                 else:
                     raise InvalidRefreshTokenError(current_auth.instance_name)
 
@@ -561,17 +562,21 @@ class SqlLiteAuth:
             )
         )
         if confirmed:
+            parsed_url = urllib.parse.urlparse(current_auth.base_url)
+            origin = urllib.parse.urlunparse(
+                (parsed_url.scheme, parsed_url.netloc, "", "", "", "")
+            )
 
             def add_auth(token: Union[AccessToken, AuthToken]):
-                current_auth + token
-                current_auth.update_refresh_expires_at(self.conn, commit=False)
-                current_auth.set_token(self.conn, commit=True, new_token=token)
+                updated_auth = current_auth + token
+                updated_auth.update_refresh_expires_at(self.conn, commit=False)
+                updated_auth.set_token(self.conn, commit=True, new_token=token)
 
             # Initialize OAuth2 PKCE flow
             oauth = OAuth2PKCE(
                 new_token_callback=add_auth, use_production=current_auth.use_production
             )
-            login_response = oauth.initiate_login(current_auth.base_url)
+            login_response = oauth.initiate_login(origin)
             oauth.auth_code = login_response["auth_code"]
             token = oauth.exchange_code_for_token()
             if not token:

@@ -207,7 +207,10 @@ class OAuth2PKCE:
         oauth_url = self.auth_session.create_auth_code_request_url(
             "cors_api", self.state
         )
-        logger.debug(f"Constructed OAuth URL: {oauth_url}")
+        logger.info(f"Opening browser for authentication at {oauth_url}...")
+        logger.info(
+            f"Listening for OAuth callback on http://localhost:{self.port}/callback..."
+        )
 
         webbrowser.open(oauth_url)
 
