@@ -1,6 +1,7 @@
 import ast
 import inspect
 import json
+import keyword
 import os
 import re
 import sys
@@ -248,8 +249,17 @@ def sandbox(
         raise typer.Exit(1)
 
     if var:
-        # ponytail: inject key=value string assignments directly at start of script
-        var_defs = [f"{k.strip()} = {json.dumps(v)}" for k, v in (v_str.split("=", 1) for v_str in var if "=" in v_str)]
+        var_defs = []
+        for v_str in var:
+            if "=" not in v_str:
+                logger.error(f"Invalid variable format: '{v_str}'. Must be key=value.")
+                raise typer.Exit(1)
+            k, v = v_str.split("=", 1)
+            k = k.strip()
+            if not k.isidentifier() or keyword.iskeyword(k):
+                logger.error(f"Invalid variable name: '{k}'. Must be a valid Python identifier and not a keyword.")
+                raise typer.Exit(1)
+            var_defs.append(f"{k} = {json.dumps(v)}")
         code_to_run = "\n".join(var_defs) + "\n" + code_to_run
 
     global ctx_lkr
