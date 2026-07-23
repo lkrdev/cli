@@ -10,6 +10,7 @@ $ lkr [OPTIONS] COMMAND [ARGS]...
 
 **Options**:
 
+* `--version`: Show the version and exit.
 * `--client-id TEXT`: [env var: LOOKERSDK_CLIENT_ID]
 * `--client-secret TEXT`: [env var: LOOKERSDK_CLIENT_SECRET]
 * `--base-url TEXT`: [env var: LOOKERSDK_BASE_URL]
@@ -262,6 +263,7 @@ $ lkr tools lookml [OPTIONS] COMMAND [ARGS]...
 #### `lkr tools lookml push`
 
 Push local files to Looker, removing files on the instance that aren&#x27;t being pushed.
+If --file / -f is specified (or folder_name is a file), only that single file is pushed without deleting remote orphans.
 
 **Usage**:
 
@@ -276,6 +278,7 @@ $ lkr tools lookml push [OPTIONS] FOLDER_NAME
 **Options**:
 
 * `--project-id, --project TEXT`: Looker project ID to push to (if different from folder name)
+* `-f, --file TEXT`: Single file relative path (or absolute path) to push
 * `--deploy`: Commit and deploy to production after push
 * `--message TEXT`: Commit message when deploying  [default: push from lkr cli]
 * `--help`: Show this message and exit.
@@ -283,6 +286,7 @@ $ lkr tools lookml push [OPTIONS] FOLDER_NAME
 #### `lkr tools lookml pull`
 
 Pull remote files from Looker to local disk, removing local files that aren&#x27;t on the instance.
+If --file / -f is specified, only that single file is pulled without deleting local orphans.
 
 **Usage**:
 
@@ -297,6 +301,7 @@ $ lkr tools lookml pull [OPTIONS] FOLDER_NAME
 **Options**:
 
 * `--project-id, --project TEXT`: Looker project ID to pull from (if different from folder name)
+* `-f, --file TEXT`: Single file relative path to pull from Looker
 * `--deploy`: Commit and deploy to production on Looker after pull
 * `--message TEXT`: Commit message when deploying  [default: pull from lkr cli then commit and deploy]
 * `--help`: Show this message and exit.
@@ -335,7 +340,24 @@ $ lkr code-mode [OPTIONS] COMMAND [ARGS]...
 
 **Commands**:
 
+* `sandbox`
 * `run`
+
+### `lkr code-mode sandbox`
+
+**Usage**:
+
+```console
+$ lkr code-mode sandbox [OPTIONS]
+```
+
+**Options**:
+
+* `-c, --code TEXT`: Execute Python code directly in the sandbox
+* `-f, --file TEXT`: Execute Python code from a file in the sandbox
+* `--dev-mode`: Run in dev mode
+* `-v, --var TEXT`: Inject variable as key=value pair (e.g. -v project=my_project)
+* `--help`: Show this message and exit.
 
 ### `lkr code-mode run`
 

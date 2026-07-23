@@ -223,6 +223,9 @@ def sandbox(
     dev_mode: bool = typer.Option(
         False, "--dev-mode", help="Run in dev mode"
     ),
+    var: list[str] | None = typer.Option(
+        None, "--var", "-v", help="Inject variable as key=value pair (e.g. -v project=my_project)"
+    ),
 ):
     if not code and not file:
         logger.error("Must specify either --code or --file")
@@ -239,8 +242,15 @@ def sandbox(
         except Exception as e:
             logger.error(f"Failed to read file {file}: {e}")
             raise typer.Exit(1)
-    else:
+    elif code:
         code_to_run = code
+    else:
+        raise typer.Exit(1)
+
+    if var:
+        # ponytail: inject key=value string assignments directly at start of script
+        var_defs = [f"{k.strip()} = {json.dumps(v)}" for k, v in (v_str.split("=", 1) for v_str in var if "=" in v_str)]
+        code_to_run = "\n".join(var_defs) + "\n" + code_to_run
 
     global ctx_lkr
     ctx_lkr = (

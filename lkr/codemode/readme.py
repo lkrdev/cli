@@ -13,6 +13,7 @@ RULES & HINTS:
 6. **Efficiency**: Always use the `fields` parameter (e.g., `all_dashboards(fields="id,title")`) when listing many objects to prevent timeouts.
 7. **Nested Folders**: Use `folder_children(id)` to get sub-folders.
 8. **Search with Lookups**: If `help('pattern')` returns too many results and you want to see full details for all of them at once, use `search_with_lookups('pattern')`.
+9. **Injected CLI Variables**: When using `sandbox` with `--var key=value` flags, those variables are directly available in your code as top-level string constants.
 
 EXAMPLES:
 
