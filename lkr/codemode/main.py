@@ -1,6 +1,7 @@
 import ast
 import inspect
 import json
+import keyword
 import os
 import re
 import sys
@@ -223,6 +224,9 @@ def sandbox(
     dev_mode: bool = typer.Option(
         False, "--dev-mode", help="Run in dev mode"
     ),
+    var: list[str] | None = typer.Option(
+        None, "--var", "-v", help="Inject variable as key=value pair (e.g. -v project=my_project)"
+    ),
 ):
     if not code and not file:
         logger.error("Must specify either --code or --file")
@@ -239,8 +243,24 @@ def sandbox(
         except Exception as e:
             logger.error(f"Failed to read file {file}: {e}")
             raise typer.Exit(1)
-    else:
+    elif code:
         code_to_run = code
+    else:
+        raise typer.Exit(1)
+
+    if var:
+        var_defs = []
+        for v_str in var:
+            if "=" not in v_str:
+                logger.error(f"Invalid variable format: '{v_str}'. Must be key=value.")
+                raise typer.Exit(1)
+            k, v = v_str.split("=", 1)
+            k = k.strip()
+            if not k.isidentifier() or keyword.iskeyword(k):
+                logger.error(f"Invalid variable name: '{k}'. Must be a valid Python identifier and not a keyword.")
+                raise typer.Exit(1)
+            var_defs.append(f"{k} = {json.dumps(v)}")
+        code_to_run = "\n".join(var_defs) + "\n" + code_to_run
 
     global ctx_lkr
     ctx_lkr = (

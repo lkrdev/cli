@@ -25,6 +25,9 @@ uvx lkr-dev-cli code-mode sandbox --code="return me()"
 
 # Execute Python script file
 uvx lkr-dev-cli code-mode sandbox --file=./path/to/script.py
+
+# Execute Python script file with injected variables (--var / -v)
+uvx lkr-dev-cli code-mode sandbox --file=./path/to/script.py --var project=my_project --var connection=my_connection
 ```
 
 ### 2. Starting the Server
