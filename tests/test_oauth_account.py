@@ -96,7 +96,10 @@ def test_set_token_refreshes_lookedup_account(temp_db):
 
     # Refresh the token
     new_token = AccessToken(
-        access_token="token-refreshed", token_type="Bearer", expires_in=3600
+        access_token="token-refreshed",
+        refresh_token="refresh-target-new",
+        token_type="Bearer",
+        expires_in=3600,
     )
     curr.set_token(auth_service.conn, new_token=new_token, commit=True)
 
@@ -104,9 +107,10 @@ def test_set_token_refreshes_lookedup_account(temp_db):
     conn = sqlite3.connect(temp_db)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
-        "SELECT access_token, current_instance FROM auth WHERE instance_name = 'target-inst'"
+        "SELECT access_token, refresh_token, current_instance FROM auth WHERE instance_name = 'target-inst'"
     ).fetchone()
     assert row["access_token"] == "token-refreshed"
+    assert row["refresh_token"] == "refresh-target-new"
     assert row["current_instance"] == 0  # Still not active!
 
     # Verify that active-inst was NOT touched
