@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Looker Embed Container</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        #completion-indicator {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 1px;
+            height: 1px;
+        }
+    </style>
+</head>
+<body>
+    <iframe id="looker-iframe" src=""></iframe>
+    <script>
+        // Get the iframe URL from query parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const iframeUrl = urlParams.get('iframe_url');
+        const origin = new URL(iframeUrl).origin;
+        const dashboard = urlParams.get('dashboard_id');
+        const user_id = urlParams.get('user_id');
+        const task_id = urlParams.get('task_id');
+        
+        // Set the iframe source
+        document.getElementById('looker-iframe').src = iframeUrl;
+
+        // Track which events we've received
+        
+        const trackedEvents = new Set(['dashboard:loaded', 'dashboard:run:complete', 'dashboard:tile:complete', 'dashboard:run:start', 'dashboard:tile:start']);
+
+        // Listen for Looker embed events
+        window.addEventListener('message', function(event) {
+            if (event.origin !== origin) {
+                return;
+            }
+            const {type, ...data} = JSON.parse(event.data)
+            if (!trackedEvents.has(type)) {
+                return;
+            }
+            if (type) {
+                const now = new Date();
+                const eventData = {
+                    event_type: type,
+                    event_data: data,
+                    timestamp: now.toISOString(),
+                    duration_ms: now.getTime() - window.taskStart.getTime(),
+                    dashboard_id: dashboard,
+                    user_id: user_id,
+                    task_id: task_id
+                };
+                // Send event data to the server
+                fetch('/log_event', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(eventData)
+                });
+
+                // Track received events
+                if (type === 'dashboard:run:complete') {
+                    complete = document.createElement("div");
+                    complete.id = "completion-indicator";
+                    document.body.appendChild(complete);
+                }
+            }
+        });
+
+        // Store task start time
+        window.taskStart = new Date();
+    </script>
+</body>
+</html> 
