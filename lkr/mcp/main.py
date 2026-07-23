@@ -3,7 +3,7 @@ import sys
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, List, Literal, Self, Set
+from typing import Annotated, Literal, Self
 
 import duckdb
 import typer
@@ -77,7 +77,7 @@ def get_spectacles(
         ),
     ],
     fields: Annotated[
-        List[str],
+        list[str],
         Field(
             description="this should be the list of fields you want to return from the test query. If the user does not provide them, use all that have changed in your current context. The syntax of the field should be <view>.<field> name. The view will be the name of the view as it appears in the explore, or aliased from it with from or view_name"
         ),
@@ -87,7 +87,6 @@ def get_spectacles(
     run a spectacles query to validate the changes to the model
     """
     req = SpectaclesRequest(model=model, explore=explore, fields=fields)
-    global ctx_lkr
     if not ctx_lkr:
         # logger.error("No Looker context found")
         raise typer.Exit(1)
@@ -101,7 +100,7 @@ def get_spectacles(
             )
         )
         if query.id is None:
-            raise Exception("Failed to create query")
+            raise RuntimeError("Failed to create query")
 
         share_url = f"{sdk.auth.settings.base_url}/x/{query.client_id}"
         sql = sdk.run_query(query_id=query.id, result_format="sql")
@@ -118,14 +117,14 @@ SELECT * FROM (
             )
         )
         if create_query.slug is None:
-            raise Exception("Failed to create sql query")
+            raise RuntimeError("Failed to create sql query")
         result = sdk.run_sql_query(
             slug=create_query.slug, result_format="json", download="true"
         )
         return SpectaclesResponse(
             success=True, share_url=share_url, sql=returned_sql, result=result
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return SpectaclesResponse(
             success=False,
             error=str(e),
@@ -136,10 +135,10 @@ SELECT * FROM (
 
 
 class ConnectionRegistry(BaseModel):
-    connections: Set[str]
-    databases: Set[str]
-    schemas: Set[str]
-    tables: Set[str]
+    connections: set[str]
+    databases: set[str]
+    schemas: set[str]
+    tables: set[str]
     prefix: str = ""
 
     def append(self, obj: Connection | Database | Schema | Table) -> None:
@@ -187,8 +186,8 @@ class ConnectionRegistry(BaseModel):
             for row in results:
                 connection = Connection(connection=row[0])
                 self.connections.add(connection.fully_qualified_name)
-        except Exception as e:
-            logger.error(f"Error loading connections from {file}: {str(e)}")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Error loading connections from {file}: {e!s}")
             return
 
     def load_databases(self, dt_filter: datetime | None = None) -> None:
@@ -201,8 +200,8 @@ class ConnectionRegistry(BaseModel):
             for row in results:
                 database = Database(connection=row[0], database=row[1])
                 self.databases.add(database.fully_qualified_name)
-        except Exception as e:
-            logger.error(f"Error loading databases from {file}: {str(e)}")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Error loading databases from {file}: {e!s}")
             return
 
     def load_schemas(self, dt_filter: datetime | None = None) -> None:
@@ -217,8 +216,8 @@ class ConnectionRegistry(BaseModel):
                     connection=row[0], database=row[1], database_schema_name=row[2]
                 )
                 self.schemas.add(schema.fully_qualified_name)
-        except Exception as e:
-            logger.error(f"Error loading schemas from {file}: {str(e)}")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Error loading schemas from {file}: {e!s}")
             return
 
     def load_tables(self, dt_filter: datetime | None = None) -> None:
@@ -236,8 +235,8 @@ class ConnectionRegistry(BaseModel):
                     database_table_name=row[3],
                 )
                 self.tables.add(table.fully_qualified_name)
-        except Exception as e:
-            logger.error(f"Error loading tables from {file}: {str(e)}")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Error loading tables from {file}: {e!s}")
             return
 
     @classmethod
@@ -260,7 +259,6 @@ def populate_looker_connection_search_on_startup(ctx: typer.Context) -> None:
     """
     populate the looker connection search
     """
-    global current_instance
     # logger.debug("Populating looker connection search")
     sdk = get_mcp_sdk(ctx)
     if not current_instance:
@@ -281,7 +279,9 @@ def populate_looker_connection_search_on_startup(ctx: typer.Context) -> None:
             )
             continue
         logger.debug(f"Populating looker connection search for {connection.name}")
-        databases = ok(lambda: sdk.connection_databases(connection.name or ""), [])
+        databases = ok(
+            lambda c_name=connection.name: sdk.connection_databases(c_name or ""), []
+        )
         for database in databases:
             if registry.check("database", database):
                 logger.debug(
@@ -290,8 +290,8 @@ def populate_looker_connection_search_on_startup(ctx: typer.Context) -> None:
                 continue
             logger.debug(f"Populating looker connection search for {database}")
             schemas = ok(
-                lambda: sdk.connection_schemas(
-                    connection.name or "", database, cache=True, fields="name"
+                lambda c_name=connection.name, db=database: sdk.connection_schemas(
+                    c_name or "", db, cache=True, fields="name"
                 ),
                 [],
             )
@@ -306,10 +306,10 @@ def populate_looker_connection_search_on_startup(ctx: typer.Context) -> None:
                     continue
                 logger.debug(f"Populating looker connection search for {schema.name}.")
                 schema_tables = ok(
-                    lambda: sdk.connection_tables(
-                        connection.name,
-                        database=database,
-                        schema_name=schema.name,  # type: ignore
+                    lambda c_name=connection.name, db=database, s_name=schema.name: sdk.connection_tables(
+                        c_name,
+                        database=db,
+                        schema_name=s_name,
                         table_limit=100000,
                     ),
                     [],
@@ -325,11 +325,11 @@ def populate_looker_connection_search_on_startup(ctx: typer.Context) -> None:
                         # )
                         continue
                     schema_columns = ok(
-                        lambda: sdk.connection_columns(
-                            connection.name,
-                            database=database,
-                            schema_name=schema_name,
-                            table_names=table.name,
+                        lambda c_name=connection.name, db=database, s_name=schema_name, t_name=table.name: sdk.connection_columns(
+                            c_name,
+                            database=db,
+                            schema_name=s_name,
+                            table_names=t_name,
                             cache=True,
                         ),
                         [],
@@ -476,7 +476,7 @@ def search_fully_qualified_names(
             default=100,
         ),
     ] = 100,
-) -> List[Row]:
+) -> list[Row]:
     """
     Use lkr to search fully qualified columns which include connection, database, schema, table, column names, and data types
     Returns a list of matching rows with their BM25 scores. If no database, schema, or table is provided, all will be searched. When specified together, database, schema and table are filtered together using an AND.
@@ -498,10 +498,10 @@ def search_fully_qualified_names(
         FROM looker_connection_search
         WHERE score IS NOT NULL
     """
-    params = dict(
-        search_term=search_term.lower(),
-        limit=limit,
-    )
+    params = {
+        "search_term": search_term.lower(),
+        "limit": limit,
+    }
     if database:
         sql += " AND LOWER(database) = $database"
         params["database"] = database.lower()
@@ -561,7 +561,6 @@ def run(
 
 
 def check_for_database_search_file(ctx: typer.Context) -> None:
-    global current_instance
     if current_instance:
         file_loc = get_database_search_file(current_instance)
         populate_looker_connection_search_on_startup(ctx)
@@ -589,7 +588,7 @@ def validate_current_instance_database_search_file(
         thread = threading.Thread(
             target=check_for_database_search_file, args=(ctx,), daemon=not debug
         )
-        thread.daemon = True if not debug else False
+        thread.daemon = bool(not debug)
         thread.start()
     else:
         pass

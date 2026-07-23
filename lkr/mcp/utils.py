@@ -1,8 +1,9 @@
 # server.py
 import os
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Literal
 
 from lkr.logger import logger
 
@@ -35,15 +36,15 @@ def get_connection_registry_file(
 
 
 def now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def ok[T](func: Callable[[], T], default: T) -> T:
     try:
         return func()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         fname = getattr(func, "__name__", str(func))
-        logger.error(f"Error in {fname}: {str(e)}")
+        logger.error(f"Error in {fname}: {e!s}")
         return default
 
 

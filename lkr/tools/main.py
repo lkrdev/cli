@@ -1,6 +1,6 @@
-import os
 import csv
-from typing import Annotated, Optional
+import os
+from typing import Annotated
 
 import typer
 import uvicorn
@@ -8,8 +8,8 @@ from fastapi import FastAPI, Request
 
 from lkr.logger import structured_logger as logger
 from lkr.tools.classes import AttributeUpdaterResponse, UserAttributeUpdater
-from lkr.tools.permission_deprecation import schedule_download_deprecation
 from lkr.tools.lookml import lookml_group
+from lkr.tools.permission_deprecation import schedule_download_deprecation
 
 __all__ = ["group"]
 
@@ -18,7 +18,7 @@ group.add_typer(lookml_group, name="lookml")
 
 
 if not logger:
-    raise Exception("Logger is not available")
+    raise RuntimeError("Logger is not available")
 
 
 @group.command()
@@ -46,12 +46,12 @@ def user_attribute_updater(
             )
 
             if body.base_url not in whitelisted_base_urls:
-                raise Exception(f"Base URL {body.base_url} not whitelisted")
+                raise ValueError(f"Base URL {body.base_url} not whitelisted")
 
             return AttributeUpdaterResponse(
                 success=True, message="User attribute updated"
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return AttributeUpdaterResponse(success=False, message=str(e))
 
     @api.delete("/value")
@@ -65,7 +65,7 @@ def user_attribute_updater(
             return AttributeUpdaterResponse(
                 success=True, message="User attribute value deleted"
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return AttributeUpdaterResponse(success=False, message=str(e))
 
     @api.post("/value")
@@ -79,7 +79,7 @@ def user_attribute_updater(
             return AttributeUpdaterResponse(
                 success=True, message="User attribute value updated"
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return AttributeUpdaterResponse(success=False, message=str(e))
 
     @api.get("")
@@ -119,9 +119,9 @@ def schedule_download_deprecation_command(
     limit: Annotated[int, typer.Option(help="Search batch size")] = 500,
     model_offset: Annotated[int, typer.Option(help="Offset for model columns")] = 0,
     csv_output: Annotated[bool, typer.Option("--csv", help="Output as CSV instead of a table")] = False,
-    csv_file_name: Annotated[Optional[str], typer.Option("--csv-file-name", help="Name for the output CSV file (without extension)")] = "schedule_download_deprecation",
+    csv_file_name: Annotated[str | None, typer.Option("--csv-file-name", help="Name for the output CSV file (without extension)")] = "schedule_download_deprecation",
     unfiltered: Annotated[bool, typer.Option("--unfiltered", help="Show all rows, including those with no missing permissions")] = False,
-    email: Annotated[Optional[bool], typer.Option("--email", help="Use Email instead of Name")] = False,
+    email: Annotated[bool | None, typer.Option("--email", help="Use Email instead of Name")] = False,
 ):
     """
     Build a table of users and their scheduling/downloading permissions per model.

@@ -8,16 +8,16 @@ import sys
 import tempfile
 from contextlib import contextmanager
 
-import typer
 import pydantic_monty
+import typer
 from mcp.server.fastmcp import FastMCP
 
 from lkr.auth_service import get_auth, is_auth_expired
 from lkr.classes import LkrCtxObj
-from lkr.codemode.examples import EXAMPLES
-from lkr.codemode.help import search_help, lookup_function, search_with_lookups
-from lkr.codemode.readme import get_readme
 from lkr.codemode.constant import EXCLUDED_FUNCS
+from lkr.codemode.examples import EXAMPLES
+from lkr.codemode.help import lookup_function, search_help, search_with_lookups
+from lkr.codemode.readme import get_readme
 from lkr.codemode.type import lookup_type
 from lkr.logger import logger
 
@@ -88,7 +88,7 @@ def to_primitive(obj):
                     return _to_primitive(vars(o))
                 except TypeError:
                     return str(o)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     return str(o)
         finally:
             seen.remove(obj_id)
@@ -114,7 +114,6 @@ def run_python_code(code: str, dev_mode: bool = False) -> str:
     - Dev Mode: Set `dev_mode=True` to ensure you are in development mode before running code.
     """
     try:
-        global ctx_lkr
         ctx = (
             LkrCtxObj(
                 force_oauth=ctx_lkr.force_oauth,
@@ -173,7 +172,7 @@ def run_python_code(code: str, dev_mode: bool = False) -> str:
             tree = SDKAttributeRewriter().visit(tree)
             ast.fix_missing_locations(tree)
             code = ast.unparse(tree)
-        except Exception:
+        except Exception:  # noqa: BLE001
             # Fallback to regex if parsing fails
             code = re.sub(r"\bsdk\.([a-zA-Z_][a-zA-Z0-9_]*)\b", r"\1", code)
 
@@ -196,7 +195,7 @@ def run_python_code(code: str, dev_mode: bool = False) -> str:
                     output = json.dumps(result, indent=2, default=str)
             else:
                 output = ""
-        except Exception:
+        except Exception:  # noqa: BLE001
             output = repr(result)
             
         if printed_output:
@@ -205,11 +204,11 @@ def run_python_code(code: str, dev_mode: bool = False) -> str:
                 "result": result
             }, indent=2, default=str)
         return output
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error executing Monty: {e}")
         if is_auth_expired(e):
             return "Error: Your Looker OAuth session has expired. Please run 'lkr auth login' to re-authenticate."
-        return f"Error: {str(e)}"
+        return f"Error: {e!s}"
 
 
 @group.command(name="sandbox")
@@ -224,7 +223,7 @@ def sandbox(
     dev_mode: bool = typer.Option(
         False, "--dev-mode", help="Run in dev mode"
     ),
-    var: list[str] | None = typer.Option(
+    var: list[str] | None = typer.Option(  # noqa: B008
         None, "--var", "-v", help="Inject variable as key=value pair (e.g. -v project=my_project)"
     ),
 ):
@@ -240,7 +239,7 @@ def sandbox(
         try:
             with open(file, "r", encoding="utf-8") as f:
                 code_to_run = f.read()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to read file {file}: {e}")
             raise typer.Exit(1)
     elif code:

@@ -21,7 +21,7 @@ class LookerApiKey(BaseModel):
                 base_url=os.environ.get("LOOKERSDK_BASE_URL"),  # type: ignore
                 verify_ssl=verify_ssl,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
 
 
@@ -38,6 +38,6 @@ class LkrCtxObj(BaseModel):
         return "api_key" if self.api_key else "oauth"
 
     def __init__(self, api_key: LookerApiKey | None = None, *args, **kwargs):
-        super().__init__(api_key=api_key, *args, **kwargs)
+        super().__init__(*args, api_key=api_key, **kwargs)
         if not self.api_key:
             self.api_key = LookerApiKey.from_env()

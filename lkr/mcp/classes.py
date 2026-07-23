@@ -1,6 +1,6 @@
 # server.py
 from datetime import datetime
-from typing import Annotated, Any, List
+from typing import Annotated, Any
 
 import duckdb
 from pydantic import BaseModel, Field, computed_field
@@ -33,7 +33,7 @@ class SpectaclesRequest(BaseModel):
         ),
     ]
     fields: Annotated[
-        List[str],
+        list[str],
         Field(
             description="this should be the list of fields you want to return from the test query. If the user does not provide them, use all that have changed in your current context",
             default=[],

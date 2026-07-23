@@ -1,4 +1,4 @@
-from typing import Literal, Optional, Self, cast
+from typing import Literal, Self, cast
 
 from looker_sdk.sdk.api40.methods import Looker40SDK
 from looker_sdk.sdk.api40.models import (
@@ -14,35 +14,35 @@ from lkr.logger import logger
 
 
 class UserAttributeUpdater(BaseModel):
-    client_id: Optional[str] = Field(default=None, exclude=True)
-    client_secret: Optional[str] = Field(default=None, exclude=True)
-    base_url: Optional[str] = Field(default=None, exclude=False)
-    value: Optional[str] = Field(default=None, exclude=True)
-    user_attribute: Optional[str]
-    user_attribute_id: Optional[str] = None
+    client_id: str | None = Field(default=None, exclude=True)
+    client_secret: str | None = Field(default=None, exclude=True)
+    base_url: str | None = Field(default=None, exclude=False)
+    value: str | None = Field(default=None, exclude=True)
+    user_attribute: str | None
+    user_attribute_id: str | None = None
     update_type: Literal["group", "default", "user"]
-    group_name: Optional[str] = None
-    group_id: Optional[str] = None
-    looker_user_id: Optional[str] = None
-    external_user_id: Optional[str] = None
-    email: Optional[str] = None
+    group_name: str | None = None
+    group_id: str | None = None
+    looker_user_id: str | None = None
+    external_user_id: str | None = None
+    email: str | None = None
 
     @model_validator(mode="after")
     def check_variables(self) -> Self:
         if not (bool(self.user_attribute) or bool(self.user_attribute_id)):
             raise ValueError("Either user_attribute or user_attribute_id must be set")
-        if self.update_type == "group":
-            if not (bool(self.group_name) or bool(self.group_id)):
-                raise ValueError("Either group_name or group_id must be set")
-        if self.update_type == "user":
-            if not (
-                bool(self.looker_user_id)
-                or bool(self.external_user_id)
-                or bool(self.email)
-            ):
-                raise ValueError(
-                    "Either looker_user_id, external_user_id, or email must be set"
-                )
+        if self.update_type == "group" and not (
+            bool(self.group_name) or bool(self.group_id)
+        ):
+            raise ValueError("Either group_name or group_id must be set")
+        if self.update_type == "user" and not (
+            bool(self.looker_user_id)
+            or bool(self.external_user_id)
+            or bool(self.email)
+        ):
+            raise ValueError(
+                "Either looker_user_id, external_user_id, or email must be set"
+            )
         return self
 
     def get_request_authorization_for_value(self, headers: list[tuple[str, str]]):

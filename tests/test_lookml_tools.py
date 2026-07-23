@@ -3,8 +3,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from lkr.main import app
 from lkr.extended_sdk_methods import ExtendedLooker40SDK, FileContent
+from lkr.main import app
 
 runner = CliRunner()
 

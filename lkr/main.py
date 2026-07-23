@@ -1,5 +1,5 @@
 import os
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 
@@ -68,7 +68,7 @@ def version_callback(value: bool):
 def callback(
     ctx: typer.Context,
     version: Annotated[
-        Optional[bool],
+        bool | None,
         typer.Option(
             "--version",
             callback=version_callback,
@@ -88,7 +88,7 @@ def callback(
     = None,
     quiet: Annotated[bool, typer.Option("--quiet")] = False,
     force_oauth: Annotated[bool, typer.Option("--force-oauth")] = False,
-    dev: Annotated[Optional[bool], typer.Option("--dev")] = None,
+    dev: Annotated[bool | None, typer.Option("--dev")] = None,
     oauth_account: Annotated[
         str | None,
         typer.Option(

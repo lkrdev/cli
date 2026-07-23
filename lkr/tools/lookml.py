@@ -1,6 +1,6 @@
 import os
 import re
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 import typer
 
@@ -41,7 +41,7 @@ def _get_file_id(f: Any) -> str:
 
 
 def _resolve_project_id(
-    folder_name: Optional[str], project_id_opt: Optional[str]
+    folder_name: str | None, project_id_opt: str | None
 ) -> str:
     if project_id_opt:
         return project_id_opt
@@ -69,7 +69,7 @@ def _ensure_remote_directory(
                 project_id=project_id,
                 directory_path=current_path,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(f"Directory creation notice for '{current_path}': {e}")
 
 
@@ -80,7 +80,7 @@ def push(
         str, typer.Argument(help="Local folder name / Looker project ID to push")
     ],
     project_id_opt: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--project-id",
             "--project",
@@ -88,7 +88,7 @@ def push(
         ),
     ] = None,
     file_opt: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--file",
             "-f",
@@ -187,13 +187,13 @@ def push(
                     project_id=project_id,
                     file_content=file_content,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001
                 try:
                     sdk.create_file(
                         project_id=project_id,
                         file_content=file_content,
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001
                     _ensure_remote_directory(
                         sdk=sdk, project_id=project_id, file_path=structured_path
                     )
@@ -203,7 +203,7 @@ def push(
                     )
             successfully_pushed_paths.add(structured_path)
             continue
-        except Exception as struct_err:
+        except Exception as struct_err:  # noqa: BLE001
             logger.debug(
                 f"Structured upload notice ({struct_err}), initiating fallback to project root..."
             )
@@ -221,7 +221,7 @@ def push(
                 project_id=project_id,
                 file_content=root_file_content,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             sdk.create_file(
                 project_id=project_id,
                 file_content=root_file_content,
@@ -245,7 +245,7 @@ def push(
                 logger.info(f"Deleting remote orphan file: {rf_path}")
                 try:
                     sdk.delete_file(project_id=project_id, file_path=rf_path)
-                except Exception as dpe:
+                except Exception as dpe:  # noqa: BLE001
                     logger.debug(f"Deletion notice for {rf_path}: {dpe}")
 
     logger.info("Push completed successfully.")
@@ -257,7 +257,7 @@ def push(
                 exclude_none=True
             )
             sdk.commit(project_id=project_id, body=commit_req)
-        except Exception as commit_err:
+        except Exception as commit_err:  # noqa: BLE001
             logger.debug(f"Commit notice: {commit_err}")
 
         sdk.deploy_to_production(project_id=project_id)
@@ -271,7 +271,7 @@ def pull(
         str, typer.Argument(help="Local folder name / Looker project ID to pull into")
     ],
     project_id_opt: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--project-id",
             "--project",
@@ -279,7 +279,7 @@ def pull(
         ),
     ] = None,
     file_opt: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--file",
             "-f",
@@ -327,7 +327,7 @@ def pull(
 
         try:
             content = sdk.get_file_content(project_id=project_id, file_path=rf_path)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to fetch content for remote file {rf_path}: {e}")
             raise typer.Exit(1)
 
@@ -364,7 +364,7 @@ def pull(
 
             try:
                 content = sdk.get_file_content(project_id=project_id, file_path=rf_path)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 if "not found" in str(e).lower():
                     logger.debug(
                         f"Remote file {rf_path} not found in dev workspace (likely a deleted ghost file in git tracking)."
@@ -398,7 +398,7 @@ def pull(
                         logger.info(f"Deleting local orphan file: {rel_path}")
                         try:
                             os.remove(full_path)
-                        except Exception as err:
+                        except Exception as err:  # noqa: BLE001
                             logger.debug(f"Local deletion notice for {rel_path}: {err}")
                 else:
                     logger.warning(
@@ -416,7 +416,7 @@ def pull(
                 exclude_none=True
             )
             sdk.commit(project_id=project_id, body=commit_req)
-        except Exception as commit_err:
+        except Exception as commit_err:  # noqa: BLE001
             logger.debug(f"Commit notice: {commit_err}")
 
         sdk.deploy_to_production(project_id=project_id)
@@ -427,11 +427,11 @@ def pull(
 def deploy_cmd(
     ctx: typer.Context,
     folder_name: Annotated[
-        Optional[str],
+        str | None,
         typer.Argument(help="Local folder name / Looker project ID to deploy"),
     ] = None,
     project_id: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--project-id",
             "--project",
@@ -460,7 +460,7 @@ def deploy_cmd(
             project_id=resolved_project_id,
             body=commit_req,
         )
-    except Exception as commit_err:
+    except Exception as commit_err:  # noqa: BLE001
         logger.debug(f"Commit notice: {commit_err}")
 
     sdk.deploy_to_production(project_id=resolved_project_id)

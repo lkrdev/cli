@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Test to ensure that all dependency combinations resolve to the same lock file.
 
@@ -12,14 +11,15 @@ This test also verifies that the UserAttributeUpdater can be imported, instantia
 with only the base dependencies (no extras installed).
 """
 
+import hashlib
+import os
+import shutil
 import subprocess
 import tempfile
-import shutil
-import hashlib
-from pathlib import Path
-import pytest
 import tomllib
-import os
+from pathlib import Path
+
+import pytest
 
 
 def get_file_hash(file_path: Path) -> str:
@@ -44,7 +44,7 @@ def discover_individual_extras(project_root: Path) -> list[str]:
     optional_deps = data.get("project", {}).get("optional-dependencies", {})
     
     # Get all extras except 'all'
-    individual_extras = [extra for extra in optional_deps.keys() if extra != "all"]
+    individual_extras = [extra for extra in optional_deps if extra != "all"]
     
     if not individual_extras:
         raise ValueError("No individual extras found in pyproject.toml")
@@ -124,7 +124,7 @@ def test_dependency_resolution_consistency():
             
         except subprocess.CalledProcessError as e:
             pytest.fail(f"uv sync failed: {e.stderr}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             pytest.fail(f"Test failed with error: {e}")
 
 
@@ -228,11 +228,25 @@ print(updater.model_dump_json())
     assert '"update_type":"default"' in output
 
 
+def test_no_internal_artifact_foundry_in_uv_lock():
+    """Verify that uv.lock does not contain corporate internal artifact-foundry references."""
+    project_root = Path(__file__).parent.parent
+    lock_file = project_root / "uv.lock"
+    if not lock_file.exists():
+        pytest.skip("uv.lock not found")
+    content = lock_file.read_text(encoding="utf-8")
+    assert "artifact-foundry-prod" not in content, (
+        "uv.lock contains references to 'artifact-foundry-prod' corporate mirror! "
+        "Run `UV_INDEX_URL=https://pypi.org/simple uv lock` to re-lock against public PyPI."
+    )
+
+
 if __name__ == "__main__":
     # Run the tests directly if script is executed
     test_dependency_resolution_consistency()
     test_individual_extras_consistency()
     test_user_attribute_updater_base_deps_only("./tmp")
+    test_no_internal_artifact_foundry_in_uv_lock()
     print("All tests passed!") 
 
 

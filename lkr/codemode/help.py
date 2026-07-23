@@ -1,7 +1,8 @@
-import re
 import inspect
 import json
 import os
+import re
+
 from lkr.codemode.constant import EXCLUDED_FUNCS
 
 _operation_map = None
@@ -22,8 +23,8 @@ def _get_operation_map():
         with open(swagger_path, 'r') as f:
             swagger = json.load(f)
             paths = swagger.get('paths', {})
-            for path, path_item in paths.items():
-                for method, op in path_item.items():
+            for path_item in paths.values():
+                for op in path_item.values():
                     if isinstance(op, dict) and 'operationId' in op:
                         op_id = op['operationId']
                         summary = op.get('summary', '')
@@ -95,7 +96,7 @@ def _get_matches(query: str, external_funcs: dict, sdk) -> list:
                 params = list(sig.parameters.keys())
                 if any(pattern.search(p) for p in params):
                     hit_in_params = True
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
                 
         # Search in return type fields (Outputs)
@@ -111,7 +112,7 @@ def _get_matches(query: str, external_funcs: dict, sdk) -> list:
                     if matching_fields:
                         hit_in_output = True
                         output_fields = matching_fields
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
                 
         if hit_in_name or matching_lines or hit_in_params or hit_in_output:
@@ -133,11 +134,11 @@ def _get_type_matches(query: str) -> list:
         pattern = re.compile(re.escape(query), re.IGNORECASE)
 
     try:
-        from lkr.codemode.type import _get_swagger_data, _get_ext_definitions
+        from lkr.codemode.type import _get_ext_definitions, _get_swagger_data
         swagger = _get_swagger_data()
         definitions = dict(swagger.get('definitions', {}))
         definitions.update(_get_ext_definitions())
-    except Exception:
+    except Exception:  # noqa: BLE001
         return []
 
     matches = []
@@ -217,7 +218,7 @@ def search_with_lookups(query: str, external_funcs: dict, sdk) -> list:
         try:
             from lkr.codemode.type import lookup_type
             results.append(lookup_type(m['name']))
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
     return results
 
@@ -230,7 +231,7 @@ def lookup_function(name: str, external_funcs: dict, sdk) -> str:
             res = lookup_type(name)
             if not res.startswith("Type '"):
                 return res
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
         return f"Function or type '{name}' not found."
         
@@ -279,5 +280,5 @@ Inputs:
 Outputs:
 {outputs_str}
 """
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return f"Function: {name}\n\nDocstring:\n{doc}\n\n(Could not inspect signature: {e})"

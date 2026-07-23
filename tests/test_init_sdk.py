@@ -1,10 +1,11 @@
 import sqlite3
 from unittest.mock import MagicMock, patch
+
 import pytest
 
-from lkr_dev_cli import init_sdk
 from lkr.auth_service import ApiKeyApiSettings, SqlLiteAuth
 from lkr.classes import LkrCtxObj, LookerApiKey
+from lkr_dev_cli import init_sdk
 
 
 def test_init_sdk_explicit_args(monkeypatch):
@@ -96,13 +97,15 @@ def test_init_sdk_db_auth_fallback(tmp_path, monkeypatch):
     conn.close()
 
     mock_sdk = MagicMock()
-    with patch(
-        "lkr.auth_service.SqlLiteAuth.get_current_sdk", return_value=mock_sdk
-    ) as mock_get_sdk:
-        with patch("lkr.auth_service.os.path.expanduser", return_value=str(db_path)):
-            sdk = init_sdk(instance_name="my_db_instance")
-            assert sdk == mock_sdk
-            mock_get_sdk.assert_called_once()
+    with (
+        patch(
+            "lkr.auth_service.SqlLiteAuth.get_current_sdk", return_value=mock_sdk
+        ) as mock_get_sdk,
+        patch("lkr.auth_service.os.path.expanduser", return_value=str(db_path)),
+    ):
+        sdk = init_sdk(instance_name="my_db_instance")
+        assert sdk == mock_sdk
+        mock_get_sdk.assert_called_once()
 
 
 def test_sqlite_auth_match_instance_name(tmp_path, monkeypatch):

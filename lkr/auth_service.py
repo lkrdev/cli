@@ -2,8 +2,8 @@ import json
 import os
 import sqlite3
 import types
-from datetime import datetime, timedelta, timezone
-from typing import List, Self, Tuple, Union
+from datetime import UTC, datetime, timedelta
+from typing import Self, Union
 
 import requests
 import typer
@@ -13,21 +13,21 @@ from looker_sdk.rtl.auth_session import AuthSession, CryptoHash, OAuthSession
 from looker_sdk.rtl.auth_token import AccessToken, AuthToken
 from looker_sdk.rtl.requests_transport import RequestsTransport
 from looker_sdk.rtl.transport import LOOKER_API_ID, HttpMethod
-from lkr.extended_sdk_methods import ExtendedLooker40SDK as Looker40SDK
 from pydantic import BaseModel, Field, computed_field
 from pydash import get
 
 from lkr.classes import LkrCtxObj, LookerApiKey
 from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID
 from lkr.custom_types import NewTokenCallback
+from lkr.extended_sdk_methods import ExtendedLooker40SDK as Looker40SDK
 from lkr.logger import logger
 
 __all__ = [
-    "get_auth",
     "ApiKeyAuthSession",
     "DbOAuthSession",
-    "is_auth_expired",
+    "get_auth",
     "init_sdk",
+    "is_auth_expired",
 ]
 
 
@@ -138,7 +138,7 @@ class DbOAuthSession(OAuthSession):
         if not self.use_production:
             try:
                 self._switch_to_dev_mode()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Failed to switch to development mode: {e}")
                 raise typer.Exit(1)
         self.new_token_callback(self.token)
@@ -223,9 +223,7 @@ def monkey_patch_prepare_request(session: requests.Session):
             x.headers.pop(LOOKER_API_ID)
         return x
 
-    setattr(
-        session, "prepare_request", types.MethodType(prepare_request, session)
-    )
+    session.prepare_request = types.MethodType(prepare_request, session)  # type: ignore
 
 
 class MonkeyPatchTransport(RequestsTransport):
@@ -269,7 +267,7 @@ class CurrentAuth(BaseModel):
     refresh_token: str
     refresh_expires_at: str = Field(
         default_factory=lambda: (
-            datetime.now(timezone.utc) + timedelta(days=30)
+            datetime.now(UTC) + timedelta(days=30)
         ).isoformat()
     )
     token_type: str
@@ -283,23 +281,23 @@ class CurrentAuth(BaseModel):
         if not self.refresh_expires_at:
             return False
         return datetime.fromisoformat(self.refresh_expires_at).replace(
-            tzinfo=timezone.utc
-        ) > (datetime.now(timezone.utc) + timedelta(hours=24))
+            tzinfo=UTC
+        ) > (datetime.now(UTC) + timedelta(hours=24))
 
     @computed_field
     @property
     def expires_at(self) -> str:
         return (
-            datetime.now(timezone.utc) + timedelta(seconds=self.expires_in)
+            datetime.now(UTC) + timedelta(seconds=self.expires_in)
         ).isoformat()
 
-    def __add__(self, other: Union[AccessToken, AuthToken]) -> Self:
+    def __add__(self, other: AccessToken | AuthToken) -> Self:
         self.access_token = other.access_token or ""
         self.refresh_token = other.refresh_token or ""
         self.token_type = other.token_type or ""
         self.expires_in = other.expires_in or 0
         self.refresh_expires_at = (
-            datetime.now(timezone.utc) + timedelta(days=30)
+            datetime.now(UTC) + timedelta(days=30)
         ).isoformat()
         return self
 
@@ -307,7 +305,7 @@ class CurrentAuth(BaseModel):
     def from_access_token(
         cls,
         *,
-        access_token: Union[AccessToken, AuthToken],
+        access_token: AccessToken | AuthToken,
         instance_name: str,
         base_url: str,
         use_production: bool,
@@ -327,8 +325,8 @@ class CurrentAuth(BaseModel):
     def from_db_row(cls, row: sqlite3.Row) -> "CurrentAuth":
         expires_at_dt = datetime.fromisoformat(row["expires_at"])
         if expires_at_dt.tzinfo is None:
-            expires_at_dt = expires_at_dt.replace(tzinfo=timezone.utc)
-        now_utc = datetime.now(timezone.utc)
+            expires_at_dt = expires_at_dt.replace(tzinfo=UTC)
+        now_utc = datetime.now(UTC)
         expires_in = int((expires_at_dt - now_utc).total_seconds())
         return cls(
             instance_name=row["instance_name"],
@@ -364,11 +362,11 @@ class CurrentAuth(BaseModel):
         self,
         connection: sqlite3.Connection,
         *,
-        new_token: Union[AccessToken, AuthToken] | None = None,
+        new_token: AccessToken | AuthToken | None = None,
         commit: bool = True,
     ):
         expires_at = (
-            datetime.now(timezone.utc)
+            datetime.now(UTC)
             + timedelta(seconds=(new_token.expires_in or 0) if new_token else 0)
         ).isoformat()
         refresh_expires_at = (
@@ -450,7 +448,7 @@ class SqlLiteAuth:
         self,
         instance_name: str,
         base_url: str,
-        access_token: Union[AuthToken, AccessToken],
+        access_token: AuthToken | AccessToken,
         use_production: bool,
     ):
         self.conn.execute("UPDATE auth SET current_instance = 0")
@@ -505,7 +503,7 @@ class SqlLiteAuth:
                 else:
                     raise InvalidRefreshTokenError(current_auth.instance_name)
 
-            def refresh_current_token(token: Union[AccessToken, AuthToken]):
+            def refresh_current_token(token: AccessToken | AuthToken):
                 current_auth.set_token(self.conn, new_token=token, commit=True)
 
             sdk = init_oauth_sdk(
@@ -520,13 +518,12 @@ class SqlLiteAuth:
                 try:
                     sdk.auth.authenticate({})
                 except Exception as e:
-                    if is_auth_expired(e):
-                        if sys.stdin.isatty():
-                            self._cli_confirm_refresh_token(current_auth, quiet=False)
-                            return self.get_current_sdk(
-                                prompt_refresh_invalid_token=False
-                            )
-                    raise e
+                    if is_auth_expired(e) and sys.stdin.isatty():
+                        self._cli_confirm_refresh_token(current_auth, quiet=False)
+                        return self.get_current_sdk(
+                            prompt_refresh_invalid_token=False
+                        )
+                    raise
 
             return sdk
 
@@ -538,7 +535,7 @@ class SqlLiteAuth:
         self.conn.execute("DELETE FROM auth WHERE instance_name = ?", (instance_name,))
         self.conn.commit()
 
-    def list_auth(self) -> List[Tuple[str, str, bool, bool]]:
+    def list_auth(self) -> list[tuple[str, str, bool, bool]]:
         cursor = self.conn.execute(
             "SELECT instance_name, base_url, current_instance, use_production FROM auth ORDER BY instance_name ASC"
         )
@@ -569,7 +566,7 @@ class SqlLiteAuth:
         )
         if confirmed:
 
-            def add_auth(token: Union[AccessToken, AuthToken]):
+            def add_auth(token: AccessToken | AuthToken):
                 current_auth + token
                 current_auth.update_refresh_expires_at(self.conn, commit=False)
                 current_auth.set_token(self.conn, commit=True, new_token=token)
@@ -607,7 +604,7 @@ class ApiKeyAuth:
         self,
         instance_name: str,
         base_url: str,
-        access_token: Union[AuthToken, AccessToken],
+        access_token: AuthToken | AccessToken,
         use_production: bool,
     ):
         raise NotImplementedError("ApiKeyAuth does not support adding auth")
@@ -615,7 +612,7 @@ class ApiKeyAuth:
     def delete_auth(self, instance_name: str):
         raise NotImplementedError("ApiKeyAuth does not support deleting auth")
 
-    def list_auth(self) -> List[Tuple[str, str, bool, bool]]:
+    def list_auth(self) -> list[tuple[str, str, bool, bool]]:
         raise NotImplementedError("ApiKeyAuth does not support listing auth")
 
     def set_current_instance(self, instance_name: str):

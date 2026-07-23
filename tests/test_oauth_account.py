@@ -1,9 +1,11 @@
 import sqlite3
+
 import pytest
 import typer
 from looker_sdk.rtl.auth_token import AccessToken
-from lkr.classes import LkrCtxObj
+
 from lkr.auth_service import SqlLiteAuth
+from lkr.classes import LkrCtxObj
 
 
 @pytest.fixture

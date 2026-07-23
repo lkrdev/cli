@@ -1,7 +1,9 @@
 import inspect
 import json
 import os
+
 from pydantic import BaseModel
+
 import lkr.extended_sdk_methods.classes as ext_classes
 
 _swagger_data = None
@@ -23,7 +25,7 @@ def _get_swagger_data():
     try:
         with open(swagger_path, 'r') as f:
             _swagger_data = json.load(f)
-    except Exception:
+    except Exception:  # noqa: BLE001
         _swagger_data = {}
         
     return _swagger_data
@@ -63,7 +65,7 @@ def _get_ext_definitions() -> dict:
                         prop_type = t.__name__
                     elif t is bool:
                         prop_type = "boolean"
-                    elif hasattr(t, '__origin__') and getattr(t, '__origin__') in (list, set):
+                    elif hasattr(t, '__origin__') and t.__origin__ in (list, set):
                         is_array = True
                         sub_args = getattr(t, '__args__', ())
                         for sub_t in sub_args:

@@ -1,19 +1,19 @@
 import warnings
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 __all__ = [
-    "FileContent",
     "Directory",
-    "ProjectGeneratorColumn",
-    "ProjectGeneratorTable",
-    "ProjectGenerationSemGenInput",
-    "ProjectGenerationRequest",
+    "FileContent",
     "GenerateLookMLParameters",
-    "SelectedTable",
     "GenerateLookMLWithNewFilesResponse",
     "ProjectCommitRequest",
+    "ProjectGenerationRequest",
+    "ProjectGenerationSemGenInput",
+    "ProjectGeneratorColumn",
+    "ProjectGeneratorTable",
+    "SelectedTable",
 ]
 
 
@@ -40,9 +40,9 @@ with warnings.catch_warnings():
 
         schema: str = Field(..., description="The fully qualified schema or dataset the table is in.")
         table_name: str = Field(..., description="Name of the table.")
-        primary_key: Optional[str] = Field(None, description="Name of the column that is the primary key for this table.")
-        base_view: Optional[bool] = Field(None, description="Whether to use this table as a base view in Explore. Defaults to True.")
-        columns: Optional[list[ProjectGeneratorColumn]] = Field(None, description="The columns to be used from this table. None will use all columns, and an empty list will use no columns.")
+        primary_key: str | None = Field(None, description="Name of the column that is the primary key for this table.")
+        base_view: bool | None = Field(None, description="Whether to use this table as a base view in Explore. Defaults to True.")
+        columns: list[ProjectGeneratorColumn] | None = Field(None, description="The columns to be used from this table. None will use all columns, and an empty list will use no columns.")
 
     class SelectedTable(BaseModel):
         connection: str
@@ -54,16 +54,16 @@ with warnings.catch_warnings():
 class ProjectGenerationSemGenInput(BaseModel):
     """Input parameters for the semantic generation of LookML."""
 
-    user_intention: Optional[str] = Field(None, description="A high-level description of what the user is trying to model.")
-    questions: Optional[str] = Field(None, description="Specific questions the user wants to answer with the data.")
-    user_instructions: Optional[str] = Field(None, description="Open-ended instructions provided by the user.")
+    user_intention: str | None = Field(None, description="A high-level description of what the user is trying to model.")
+    questions: str | None = Field(None, description="Specific questions the user wants to answer with the data.")
+    user_instructions: str | None = Field(None, description="Open-ended instructions provided by the user.")
 
 
 class ProjectGenerationRequest(BaseModel):
     """Request body for LookML generation."""
 
-    tables: Optional[list[ProjectGeneratorTable]] = Field(None, description="Tables for which to generate LookML.")
-    semantic_generation_input: Optional[ProjectGenerationSemGenInput] = Field(None, description="Input parameters for the semantic generation of LookML.")
+    tables: list[ProjectGeneratorTable] | None = Field(None, description="Tables for which to generate LookML.")
+    semantic_generation_input: ProjectGenerationSemGenInput | None = Field(None, description="Input parameters for the semantic generation of LookML.")
 
 
 class GenerateLookMLParameters(BaseModel):
@@ -75,9 +75,9 @@ class GenerateLookMLParameters(BaseModel):
     model_name: str = Field(..., description="Name of model or Explore file to generate.")
     folder_name: str = Field(..., description="Path of the folder to place generated files.")
     file_type_for_explores: str = Field(..., description="What type of file to place Explores in, if any. Valid values are model, explore, none. Defaults to model.")
-    generate_descriptions: Optional[bool] = Field(None, description="Generate descriptions for columns that have them in BigQuery. Defaults to True.")
-    generate_helper_text: Optional[bool] = Field(None, description="Generate helper text for LookML.")
-    prefixes: Optional[str] = Field(None, description="Case sensitive table prefixes to be ignored when naming view files.")
+    generate_descriptions: bool | None = Field(None, description="Generate descriptions for columns that have them in BigQuery. Defaults to True.")
+    generate_helper_text: bool | None = Field(None, description="Generate helper text for LookML.")
+    prefixes: str | None = Field(None, description="Case sensitive table prefixes to be ignored when naming view files.")
 
 
 class GenerateLookMLWithNewFilesResponse(BaseModel):
@@ -90,9 +90,9 @@ class GenerateLookMLWithNewFilesResponse(BaseModel):
 class ProjectCommitRequest(BaseModel):
     """Request body for LookML project commit."""
 
-    files: Optional[list[str]] = Field(
+    files: list[str] | None = Field(
         None,
         description="List of files to commit. If omitted or passed as None, Looker automatically stages and commits all modified, newly added, and deleted LookML files in the project's current development workspace.",
     )
-    message: Optional[str] = Field(None, description="Commit message")
-    amend: Optional[bool] = Field(None, description="Amend the last commit")
+    message: str | None = Field(None, description="Commit message")
+    amend: bool | None = Field(None, description="Amend the last commit")

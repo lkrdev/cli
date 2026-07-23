@@ -1,6 +1,9 @@
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
+
 from lkr.tools.permission_deprecation import schedule_download_deprecation
+
 
 @pytest.fixture
 def mock_sdk():

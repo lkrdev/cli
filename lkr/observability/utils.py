@@ -1,7 +1,6 @@
 import random
 import re
-from datetime import datetime, timezone
-from typing import Dict, List, Tuple
+from datetime import UTC, datetime
 
 from pydash import set_
 
@@ -27,7 +26,7 @@ def invalid_attribute_format(attr: str) -> bool:
     return False
 
 
-def check_random_int_format(val: str) -> Tuple[bool, str | None]:
+def check_random_int_format(val: str) -> tuple[bool, str | None]:
     if re.match(r"^random\.randint\(\d+,\d+\)$", val):
         # check if #  random.randint(0, 1000000) 0 and 100000 are integers
         numbers = re.findall(r"\d+", val.split("(")[1])
@@ -45,9 +44,11 @@ def check_random_int_format(val: str) -> Tuple[bool, str | None]:
 
 
 def format_attributes(
-    attributes: List[str] = [], seperator: str = ":"
-) -> Dict[str, str]:
-    formatted_attributes: Dict[str, str] = {}
+    attributes: list[str] | None = None, seperator: str = ":"
+) -> dict[str, str]:
+    if attributes is None:
+        attributes = []
+    formatted_attributes: dict[str, str] = {}
     if attributes:
         for attr in attributes:
             valid = True
@@ -72,7 +73,7 @@ def format_attributes(
 
 
 def now():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def ms_diff(start: datetime):

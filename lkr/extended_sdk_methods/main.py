@@ -1,4 +1,4 @@
-from typing import Any, Optional, Union, cast
+from typing import Any, cast
 
 from looker_sdk.rtl import transport
 from looker_sdk.sdk.api40.methods import Looker40SDK
@@ -8,26 +8,26 @@ from lkr.extended_sdk_methods.classes import (
     FileContent,
     GenerateLookMLParameters,
     GenerateLookMLWithNewFilesResponse,
+    ProjectCommitRequest,
     ProjectGenerationRequest,
     ProjectGenerationSemGenInput,
     ProjectGeneratorColumn,
     ProjectGeneratorTable,
     SelectedTable,
-    ProjectCommitRequest,
 )
 
 __all__ = [
+    "Directory",
     "ExtendedLooker40SDK",
     "FileContent",
-    "Directory",
-    "ProjectGeneratorColumn",
-    "ProjectGeneratorTable",
-    "ProjectGenerationSemGenInput",
-    "ProjectGenerationRequest",
     "GenerateLookMLParameters",
-    "SelectedTable",
     "GenerateLookMLWithNewFilesResponse",
     "ProjectCommitRequest",
+    "ProjectGenerationRequest",
+    "ProjectGenerationSemGenInput",
+    "ProjectGeneratorColumn",
+    "ProjectGeneratorTable",
+    "SelectedTable",
 ]
 
 
@@ -48,8 +48,8 @@ class ExtendedLooker40SDK(Looker40SDK):
         self,
         path: str,
         structure: Any = None,
-        query_params: Optional[Any] = None,
-        transport_options: Optional[transport.TransportOptions] = None,
+        query_params: Any | None = None,
+        transport_options: transport.TransportOptions | None = None,
     ) -> Any:
         """DELETE method corrected to include query_params."""
         params = self._convert_query_params(query_params) if query_params else None
@@ -66,8 +66,8 @@ class ExtendedLooker40SDK(Looker40SDK):
     def all_project_files(
         self,
         project_id: str,
-        fields: Optional[str] = None,
-        transport_options: Optional[transport.TransportOptions] = None,
+        fields: str | None = None,
+        transport_options: transport.TransportOptions | None = None,
     ) -> Any:
         """Get all files in a project."""
         project_id = self.encode_path_param(project_id)
@@ -83,7 +83,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         self,
         project_id: str,
         file_path: str,
-        transport_options: Optional[transport.TransportOptions] = None,
+        transport_options: transport.TransportOptions | None = None,
     ) -> str:
         """Get file content."""
         project_id = self.encode_path_param(project_id)
@@ -102,8 +102,8 @@ class ExtendedLooker40SDK(Looker40SDK):
     def create_file(
         self,
         project_id: str,
-        file_content: Union[FileContent, dict, Any],
-        transport_options: Optional[transport.TransportOptions] = None,
+        file_content: FileContent | dict | Any,
+        transport_options: transport.TransportOptions | None = None,
     ) -> Any:
         """Create a new file in a project."""
         project_id = self.encode_path_param(project_id)
@@ -119,8 +119,8 @@ class ExtendedLooker40SDK(Looker40SDK):
     def update_file(
         self,
         project_id: str,
-        file_content: Union[FileContent, dict, Any],
-        transport_options: Optional[transport.TransportOptions] = None,
+        file_content: FileContent | dict | Any,
+        transport_options: transport.TransportOptions | None = None,
     ) -> Any:
         """Update a file in a project."""
         project_id = self.encode_path_param(project_id)
@@ -137,7 +137,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         self,
         project_id: str,
         file_path: str,
-        transport_options: Optional[transport.TransportOptions] = None,
+        transport_options: transport.TransportOptions | None = None,
     ) -> None:
         """Delete a file in a project."""
         project_id = self.encode_path_param(project_id)
@@ -154,7 +154,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         self,
         project_id: str,
         directory_path: str,
-        transport_options: Optional[transport.TransportOptions] = None,
+        transport_options: transport.TransportOptions | None = None,
     ) -> Any:
         """Create a project directory."""
         project_id = self.encode_path_param(project_id)
@@ -171,7 +171,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         self,
         project_id: str,
         directory_path: str,
-        transport_options: Optional[transport.TransportOptions] = None,
+        transport_options: transport.TransportOptions | None = None,
     ) -> Any:
         """Delete a project directory."""
         project_id = self.encode_path_param(project_id)
@@ -187,15 +187,15 @@ class ExtendedLooker40SDK(Looker40SDK):
     def generate_lookml(
         self,
         project_id: str,
-        body: Union[ProjectGenerationRequest, dict, Any],
+        body: ProjectGenerationRequest | dict | Any,
         connection: str,
         model_name: str,
         folder_name: str,
         file_type_for_explores: str,
-        generate_descriptions: Optional[bool] = None,
-        generate_helper_text: Optional[bool] = None,
-        prefixes: Optional[str] = None,
-        transport_options: Optional[transport.TransportOptions] = None,
+        generate_descriptions: bool | None = None,
+        generate_helper_text: bool | None = None,
+        prefixes: str | None = None,
+        transport_options: transport.TransportOptions | None = None,
     ) -> str:
         """Generate LookML in a project.
 
@@ -241,15 +241,15 @@ class ExtendedLooker40SDK(Looker40SDK):
     def generate_lookml_with_new_files(
         self,
         project_id: str,
-        body: Union[ProjectGenerationRequest, dict, Any],
+        body: ProjectGenerationRequest | dict | Any,
         connection: str,
         model_name: str,
         folder_name: str,
         file_type_for_explores: str,
-        generate_descriptions: Optional[bool] = None,
-        generate_helper_text: Optional[bool] = None,
-        prefixes: Optional[str] = None,
-        transport_options: Optional[transport.TransportOptions] = None,
+        generate_descriptions: bool | None = None,
+        generate_helper_text: bool | None = None,
+        prefixes: str | None = None,
+        transport_options: transport.TransportOptions | None = None,
     ) -> GenerateLookMLWithNewFilesResponse:
         """Generate LookML in a project and return the API response along with newly created files.
 
@@ -316,8 +316,8 @@ class ExtendedLooker40SDK(Looker40SDK):
     def commit(
         self,
         project_id: str,
-        body: Optional[Union[ProjectCommitRequest, dict, Any]] = None,
-        transport_options: Optional[transport.TransportOptions] = None,
+        body: ProjectCommitRequest | dict | Any | None = None,
+        transport_options: transport.TransportOptions | None = None,
     ) -> str:
         """Commit changes to the project's git repository.
 

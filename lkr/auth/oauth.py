@@ -8,7 +8,7 @@ import threading
 import time
 import urllib.parse
 import webbrowser
-from typing import Optional, TypedDict, cast
+from typing import TypedDict, cast
 from urllib.parse import parse_qs
 
 from lkr.custom_types import NewTokenCallback
@@ -24,19 +24,21 @@ def kill_process_on_port(port: int, retries: int = 5, delay: float = 1) -> None:
         sock.bind(("localhost", port))
         sock.close()
         return  # Port is free, no need to kill anything
-    except socket.error:
+    except OSError:
         # Port is in use, try to kill the process
         if os.name == "posix":  # macOS/Linux
             subprocess.run(
                 f"lsof -ti tcp:{port} | xargs kill -9",
                 shell=True,
                 capture_output=True,
+                check=False,
             )
         elif os.name == "nt":  # Windows
             subprocess.run(
                 f'for /f "tokens=5" %a in (\'netstat -aon ^| find ":{port}"\') do taskkill /F /PID %a',
                 shell=True,
                 capture_output=True,
+                check=False,
             )
         # After killing, wait for the port to be free
         for _ in range(retries):
@@ -46,7 +48,7 @@ def kill_process_on_port(port: int, retries: int = 5, delay: float = 1) -> None:
                 sock.bind(("localhost", port))
                 sock.close()
                 return
-            except socket.error:
+            except OSError:
                 time.sleep(delay)
         raise RuntimeError(f"Port {port} is still in use after killing process.")
 
@@ -91,9 +93,7 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
                 f"Looker OAuth returned error: {error} - {error_description}"
             )
             self.wfile.write(
-                f"OAuth Authentication Failed: {error} - {error_description}. You can close this window.".encode(
-                    "utf-8"
-                )
+                f"OAuth Authentication Failed: {error} - {error_description}. You can close this window.".encode()
             )
             threading.Thread(target=server.shutdown).start()
         else:
@@ -107,7 +107,6 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         """Suppress logging of requests"""
-        pass
 
 
 class OAuthCallbackServer(socketserver.TCPServer):
@@ -119,8 +118,8 @@ class OAuthCallbackServer(socketserver.TCPServer):
 
 
 class LoginResponse(TypedDict):
-    auth_code: Optional[str]
-    code_verifier: Optional[str]
+    auth_code: str | None
+    code_verifier: str | None
 
 
 class OAuth2PKCE:
@@ -132,7 +131,7 @@ class OAuth2PKCE:
     ):
         from lkr.auth_service import DbOAuthSession
 
-        self.auth_code: Optional[str] = None
+        self.auth_code: str | None = None
         self.state = secrets.token_urlsafe(16)
         self.new_token_callback: NewTokenCallback = new_token_callback
         self.auth_session: DbOAuthSession | None = None
@@ -181,9 +180,7 @@ class OAuth2PKCE:
                 else:
                     raise
         if not server_created:
-            import logging
-
-            logging.error(
+            logger.error(
                 f"Failed to bind to port {self.port} after waiting: {last_exception}"
             )
             raise RuntimeError(

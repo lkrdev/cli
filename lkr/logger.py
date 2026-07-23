@@ -1,6 +1,7 @@
 import logging
 import os
 from typing import Any
+
 from lkr.custom_types import LogLevel
 
 STRUCT_LOG_AVAILABLE = True

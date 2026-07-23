@@ -1,5 +1,6 @@
+import builtins
 import urllib.parse
-from typing import Annotated, List, Union
+from typing import Annotated
 
 import typer
 from looker_sdk.rtl.auth_token import AccessToken, AuthToken
@@ -82,7 +83,7 @@ def login(
             logger.error(f"Instance '{instance_name}' not found")
             raise typer.Exit(1)
     else:
-        options: List[questionary.Choice] = []
+        options: builtins.list[questionary.Choice] = []
         max_name_length = 0
         for name, url, current, up in all_instances:
             max_name_length = max(max_name_length, len(name))
@@ -139,7 +140,7 @@ def login(
                 "Instance name must be set before adding auth."
             )
 
-            def auth_callback(token: Union[AuthToken, AccessToken]):
+            def auth_callback(token: AuthToken | AccessToken):
                 auth.add_auth(instance_name, origin, token, use_production)
 
             oauth = OAuth2PKCE(
@@ -166,9 +167,9 @@ def login(
                     else:
                         logger.error("Failed to exchange authorization code for tokens")
                         raise typer.Exit(1)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.error(
-                        f"Failed to exchange authorization code for tokens: {str(e)}"
+                        f"Failed to exchange authorization code for tokens: {e!s}"
                     )
                     raise typer.Exit(1)
             else:
@@ -249,7 +250,7 @@ def whoami(ctx: typer.Context):
         if "invalid_grant" in str(e) or "token expired" in str(e):
             logger.error("Your Looker OAuth session has expired. Please run 'lkr auth login' to re-authenticate.")
             raise typer.Exit(1)
-        raise e
+        raise
 
 
 @group.command()

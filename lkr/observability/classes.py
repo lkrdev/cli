@@ -1,5 +1,6 @@
-from datetime import datetime, timezone
-from typing import Annotated, Any, Dict, List, MutableMapping, Optional
+from collections.abc import MutableMapping
+from datetime import UTC, datetime
+from typing import Annotated, Any
 from urllib.parse import urljoin
 
 import typer
@@ -20,7 +21,7 @@ DEFAULT_PERMISSIONS = [
 
 
 def now():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class EmbedSDKObj(BaseModel):
@@ -37,15 +38,15 @@ class EmbedSDKObj(BaseModel):
         default=None, description="The timezone of the user"
     )
     permissions: Annotated[
-        List[str], Field(description="The permissions of the user")
+        list[str], Field(description="The permissions of the user")
     ] = DEFAULT_PERMISSIONS
-    models: Annotated[List[str], Field(description="The models of the user")] = []
-    group_ids: Annotated[List[str], Field(description="The group ids of the user")] = []
-    external_group_id: Optional[str] = Field(
+    models: Annotated[list[str], Field(description="The models of the user")] = []
+    group_ids: Annotated[list[str], Field(description="The group ids of the user")] = []
+    external_group_id: str | None = Field(
         default=None, description="The external group id of the user"
     )
     user_attributes: MutableMapping[str, str] = {}
-    secret_id: Optional[str] = Field(
+    secret_id: str | None = Field(
         default=None, description="The secret id of the user"
     )
 
@@ -95,8 +96,8 @@ class ObservabilityCtxObj(BaseModel):
     base_url: str | None = Field(
         default=None, description="The base url of the looker instance"
     )
-    events: Dict[str, List[LogEvent]] = dict()
-    start_at: Dict[str, datetime] = dict()
+    events: dict[str, list[LogEvent]] = {}
+    start_at: dict[str, datetime] = {}
     timeout: int = 5 * 60  # 5 minutes
     origin: str = Field(default="", description="The origin of the request")
     external_user_id: str | None = None
@@ -132,7 +133,7 @@ class ObservabilityCtxObj(BaseModel):
             self.start_at[session_id] = now()
         event_at = now()
         e = LogEvent(
-            event_type=":".join([self.event_prefix, event_type]),
+            event_type=f"{self.event_prefix}:{event_type}",
             event_at=event_at,
             time_since_start=float(
                 (event_at - self.start_at[session_id]).total_seconds()

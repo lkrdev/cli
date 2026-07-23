@@ -1,12 +1,14 @@
-from typing import Any, cast
 import json
 import os
 import tempfile
+from typing import Any, cast
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
-from typer.testing import CliRunner
 from looker_sdk.rtl.auth_session import AuthSession
 from looker_sdk.rtl.transport import Transport
+from typer.testing import CliRunner
+
 from lkr.codemode.main import run_python_code
 from lkr.extended_sdk_methods import ExtendedLooker40SDK
 from lkr.main import app
@@ -153,7 +155,7 @@ def test_lookup_type_recursion():
     }
     
     original_get_swagger = lkr.codemode.type._get_swagger_data
-    setattr(lkr.codemode.type, "_get_swagger_data", lambda: mock_swagger)
+    lkr.codemode.type._get_swagger_data = lambda: mock_swagger  # type: ignore
     
     try:
         code = """
@@ -163,7 +165,7 @@ return lookup_type('Node')
         assert result.count("Type: Node") == 1
         assert "child: Node (Ref)" in result
     finally:
-        setattr(lkr.codemode.type, "_get_swagger_data", original_get_swagger)
+        lkr.codemode.type._get_swagger_data = original_get_swagger
 
 def test_basic_usage():
     code = """
@@ -285,7 +287,7 @@ return {"status": "clean"}
     assert "This should be trapped" in data["stdout"]
     assert "Also checking" in data["stdout"]
     
-    out, err = capfd.readouterr()
+    out, _err = capfd.readouterr()
     assert out == ""
 
 runner = CliRunner()

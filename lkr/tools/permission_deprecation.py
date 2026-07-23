@@ -1,7 +1,9 @@
-import typer
-from typing import List, Optional, Set, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
+
+import typer
 from pydantic import BaseModel
+
 from lkr.auth_service import get_auth
 from lkr.logger import logger
 
@@ -19,20 +21,20 @@ TARGET_PERMISSIONS = frozenset([
 class AuditRow(BaseModel):
     user_id: str
     name: str
-    email: Optional[str] = None
-    instance_wide: List[str]
-    model_permissions: Dict[str, Optional[List[str]]] # model_name -> missing permissions. None if no 'access_data'.
+    email: str | None = None
+    instance_wide: list[str]
+    model_permissions: dict[str, list[str] | None] # model_name -> missing permissions. None if no 'access_data'.
     has_target_perms: bool
 
 class DeprecationAuditResult(BaseModel):
-    model_names: List[str] # The columns
-    rows: List[AuditRow]
+    model_names: list[str] # The columns
+    rows: list[AuditRow]
 
 def schedule_download_deprecation(
     ctx: typer.Context,
     limit: int = 500,
     unfiltered: bool = False,
-) -> Optional[DeprecationAuditResult]:
+) -> DeprecationAuditResult | None:
     """
     Build a audit result of users and their scheduling/downloading permissions per model.
     """
@@ -62,7 +64,7 @@ def schedule_download_deprecation(
                 has_access_data = True
             elif role.permission_set.permissions:
                 role_perms = set(role.permission_set.permissions)
-                target_perms_in_role = set([p for p in TARGET_PERMISSIONS if p in role_perms])
+                target_perms_in_role = {p for p in TARGET_PERMISSIONS if p in role_perms}
                 has_access_data = "access_data" in role_perms
         
         role_models = set()
@@ -128,7 +130,7 @@ def schedule_download_deprecation(
         name = f"{user.first_name or ''} {user.last_name or ''}".strip()
         
         user_role_ids = user.role_ids or []
-        user_instance_perms: Set[str] = set()
+        user_instance_perms: set[str] = set()
         # Track permissions per model
         user_model_perms = {m: set() for m in model_names}
         # Track if user has access_data per model
@@ -165,14 +167,14 @@ def schedule_download_deprecation(
                 # User has access_data and some target perms instance-wide
                 # List missing target perms for this model
                 missing = user_instance_perms - user_model_perms[m_name]
-                model_results[m_name] = sorted(list(missing))
+                model_results[m_name] = sorted(missing)
                     
         audit_rows.append(
             AuditRow(
                 user_id=str(user_id),
                 name=name,
                 email=user.email if isinstance(user.email, str) else None,
-                instance_wide=sorted(list(user_instance_perms)),
+                instance_wide=sorted(user_instance_perms),
                 model_permissions=model_results,
                 has_target_perms=len(user_instance_perms) > 0,
             )

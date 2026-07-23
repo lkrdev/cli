@@ -26,28 +26,26 @@ from lkr.observability.classes import (
 
 app = FastAPI(title="observability")
 
-DEFAULT_PERMISSIONS = set(
-    [
+DEFAULT_PERMISSIONS = {
         "access_data",
         "see_user_dashboards",
         "see_lookml_dashboards",
         "see_looks",
         "explore",
-    ]
-)
+    }
 
 
 observability_ctx = ObservabilityCtxObj()
 
 if not structured_logger:
-    raise Exception("Structured logger is not available")
+    raise RuntimeError("Structured logger is not available")
 
 def get_embed_sdk_obj(
     dashboard_id: str = Query(...),
     external_user_id: str = Query(...),
-    group_ids: list[str] = Query(default=[]),
-    permissions: list[str] = Query(default=list(DEFAULT_PERMISSIONS)),
-    models: list[str] = Query(default=[]),
+    group_ids: list[str] = Query(default=[]),  # noqa: B008
+    permissions: list[str] = Query(default=list(DEFAULT_PERMISSIONS)),  # noqa: B008
+    models: list[str] = Query(default=[]),  # noqa: B008
     session_length: int = Query(default=10 * 60 * 50),
     first_name: str = Query(default=None),
     last_name: str = Query(default=None),
@@ -64,7 +62,7 @@ def get_embed_sdk_obj(
             user_attributes=user_attributes,
         )
         return None
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
     return EmbedSDKObj(
         dashboard_id=dashboard_id,
@@ -104,31 +102,31 @@ def settings():
             )
             if not embed_domain_ok:
                 return JSONResponse(
-                    content=dict(
-                        embed_domain=observability_ctx.origin,
-                        domain_allowlist=settings.embed_config.domain_allowlist,
-                        ok=False,
-                        message="Embed domain not in allowlist",
-                    ),
+                    content={
+                        "embed_domain": observability_ctx.origin,
+                        "domain_allowlist": settings.embed_config.domain_allowlist,
+                        "ok": False,
+                        "message": "Embed domain not in allowlist",
+                    },
                     status_code=400,
                 )
             elif not settings.embed_config.embed_enabled:
                 return JSONResponse(
-                    content=dict(
-                        embed_domain=observability_ctx.origin,
-                        domain_allowlist=settings.embed_config.domain_allowlist,
-                        ok=False,
-                        message="Embed is not enabled",
-                    ),
+                    content={
+                        "embed_domain": observability_ctx.origin,
+                        "domain_allowlist": settings.embed_config.domain_allowlist,
+                        "ok": False,
+                        "message": "Embed is not enabled",
+                    },
                     status_code=400,
                 )
             else:
                 return JSONResponse(
-                    content=dict(
-                        embed_domain=observability_ctx.origin,
-                        domain_allowlist=settings.embed_config.domain_allowlist,
-                        ok=True,
-                    ),
+                    content={
+                        "embed_domain": observability_ctx.origin,
+                        "domain_allowlist": settings.embed_config.domain_allowlist,
+                        "ok": True,
+                    },
                     status_code=200,
                 )
 
@@ -136,7 +134,7 @@ def settings():
 @app.get("/health")
 def health_check(
     request: Request,
-    params: EmbedSDKObj | None = Depends(get_embed_sdk_obj),
+    params: EmbedSDKObj | None = Depends(get_embed_sdk_obj),  # noqa: B008
     open: bool = Query(default=False),
 ):
     """
@@ -146,7 +144,7 @@ def health_check(
     if not params:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid parameters: {str(request.query_params)}",
+            detail=f"Invalid parameters: {request.query_params!s}",
         )
     session_id = str(uuid4())
     redirect = False
@@ -225,7 +223,7 @@ def health_check(
                 "health_check_error",
                 session_id,
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         observability_ctx.log_event(
             {**params.model_dump(mode="json"), "error": str(e)},
             "health_check_error",
@@ -237,8 +235,8 @@ def health_check(
         )
         if driver:
             driver.quit()
-        if not redirect:
-            return observability_ctx.get_events(session_id)
+    if not redirect:
+        return observability_ctx.get_events(session_id)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -255,7 +253,7 @@ group = typer.Typer(name="observability")
 
 @group.command()
 def embed(
-    ctx: typer.Context = typer.Option(..., help="Context to use for observability"),
+    ctx: typer.Context = typer.Option(..., help="Context to use for observability"),  # noqa: B008
     host: str = typer.Option("0.0.0.0", help="Host to bind to", envvar="HOST"),
     port: int = typer.Option(8080, help="Port to bind to", envvar="PORT"),
     timeout: int = typer.Option(

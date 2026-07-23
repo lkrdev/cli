@@ -1,14 +1,15 @@
 from unittest.mock import MagicMock, patch
+
 from lkr.extended_sdk_methods.main import (
     ExtendedLooker40SDK,
     GenerateLookMLParameters,
     GenerateLookMLWithNewFilesResponse,
+    ProjectCommitRequest,
     ProjectGenerationRequest,
     ProjectGenerationSemGenInput,
     ProjectGeneratorColumn,
     ProjectGeneratorTable,
     SelectedTable,
-    ProjectCommitRequest,
 )
 
 
