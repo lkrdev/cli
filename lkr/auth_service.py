@@ -377,9 +377,9 @@ class CurrentAuth(BaseModel):
         if self.from_db and new_token:
             if new_token.refresh_token:
                 self.refresh_token = new_token.refresh_token
+                self.refresh_expires_at = refresh_expires_at
             self.access_token = new_token.access_token or self.access_token
             self.token_type = new_token.token_type or self.token_type
-            self.refresh_expires_at = refresh_expires_at
             connection.execute(
                 "UPDATE auth SET access_token = ?, refresh_token = ?, refresh_expires_at = ?, token_type = ?, expires_at = ? WHERE instance_name = ?",
                 (
