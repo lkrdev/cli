@@ -11,14 +11,12 @@ This skill teaches AI agents how to execute Python code and Looker SDK operation
 
 ## Mental Model
 
-Instead of exposing hundreds of separate tool definitions (which bloats context windows), `lkr code-mode sandbox` runs Python code inside the **Monty sandbox** with direct access to all Looker SDK methods as global functions.
+Instead of exposing hundreds of separate tool definitions (which bloats context windows), `lkr code-mode sandbox` runs Python code inside the Monty sandbox with direct access to all Looker SDK methods as global functions.
 
-- **No SDK Instantiation**: All Looker SDK methods are pre-bound as globals (e.g. `me()`, `folder(id)`, `run_inline_query()`, `all_dashboards()`) or accessible via `sdk.<method>()` (e.g. `sdk.me()`).
-- **No Imports Required**: Do not write `import looker_sdk`.
-- **Primitive Return Values**: Returned Looker models are plain Python dictionaries and lists. Access properties with `dict["key"]` (e.g. `user["id"]`), not attribute dot notation (`user.id`).
-- **Return Values Directly**: Always `return` the final result. Avoid `print()` statements so the output is cleanly structured JSON.
-
----
+- No SDK instantiation needed. Looker SDK methods are pre-bound as globals (such as `me()`, `folder(id)`, `run_inline_query()`, `all_dashboards()`) or accessible via `sdk.<method>()` (such as `sdk.me()`).
+- No imports required. Do not write `import looker_sdk`.
+- Return values are plain Python dictionaries and lists. Access properties with dictionary keys (`user["id"]`), not attribute dot notation (`user.id`).
+- Always return the final result. Avoid `print()` statements so the output is cleanly structured JSON.
 
 ## Installation
 
@@ -28,11 +26,9 @@ Install into your agent workspace using `npx skills`:
 npx skills add lkrdev/cli --skill lkr-code-mode
 ```
 
----
+## Command Discovery and CLI Help
 
-## Command Discovery & CLI Help
-
-When inspecting CLI options, authentication subcommands, or sandbox parameters:
+Inspect CLI options, authentication subcommands, or sandbox parameters:
 
 ```bash
 # General CLI help
@@ -52,11 +48,9 @@ uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --help
 uv run lkr code-mode sandbox --help
 ```
 
----
-
 ## Command Execution Syntax
 
-### 1. Direct Inline Code Execution (`--code` / `-c`)
+### Direct Inline Code Execution (`--code` / `-c`)
 
 ```bash
 # In local repository workspace:
@@ -66,9 +60,9 @@ uv run lkr code-mode sandbox --code="return me()"
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --code="return me()"
 ```
 
-### 2. Script File Execution (`--file` / `-f`)
+### Script File Execution (`--file` / `-f`)
 
-You can run script files directly or execute the pre-built scripts located in `scripts/`:
+Run standalone script files directly or execute pre-built scripts located in `scripts/`:
 
 ```bash
 # Execute pre-built helper scripts:
@@ -80,7 +74,7 @@ uv run lkr code-mode sandbox --file=./skills/lkr-code-mode/scripts/traverse_fold
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --file=./path/to/script.py
 ```
 
-### 3. Injected Variables (`--var` / `-v`)
+### Injected Variables (`--var` / `-v`)
 
 Inject string variables into the sandbox as top-level Python identifiers:
 
@@ -93,30 +87,64 @@ Inside `script.py`, `project` and `folder_id` are directly accessible as global 
 
 ```python
 # script.py
-p = project  # "my_project"
+p = project
 f = folder(folder_id)
 return {"project": p, "folder_name": f.get("name")}
 ```
 
-### 4. Development Mode (`--dev-mode`)
+### Development Mode (`--dev-mode`)
 
-Run operations in Looker Development Mode (workspace context):
+Run operations in Looker Development Mode:
 
 ```bash
 uv run lkr code-mode sandbox --dev-mode --code="return all_projects()"
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode --code="return all_projects()"
 ```
 
----
+## Authentication Workflow and Pre-Flight Checks
 
-## Authentication Options
+Perform this check once per conversation when establishing the Looker connection. Once verified or when an active session exists, subsequent sandbox commands reuse the session directly.
 
-`lkr` / `lkr-dev-cli` supports multiple authentication mechanisms. Pass flags before the `code-mode` subcommand:
+### Step 1: Prompt for Authentication Preference
 
-### 1. Named OAuth Profiles (`--oauth-account`)
+Prompt the user to choose their preferred authentication method:
+- OAuth (Interactive user session)
+- API Key (`LOOKERSDK_*` environment variables)
 
-Use a specific saved OAuth profile from the local credential store:
+### Step 2: Session Management and Verification
 
+Check existing credentials and verify connectivity:
+
+```bash
+# List configured OAuth accounts
+uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli auth list
+uv run lkr auth list
+
+# Verify current authentication and active user
+uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli auth whoami
+uv run lkr auth whoami
+```
+
+### Step 3: OAuth Pre-Flight Verification and Login Flow
+
+If OAuth is selected and no active account is configured, perform this setup once:
+
+1. Prompt the user for their Looker instance URL (e.g. `https://mycompany.looker.com`).
+2. Run a pre-flight `GET` check against the instance auth endpoint before opening a browser:
+   ```
+   https://<instance_url>/auth?client_id=lkr-cli&redirect_uri=YOUR_REDIRECT_URI&response_type=code&scope=api&state=YOUR_UNIQUE_STATE_STRING&code_challenge=CHALLENGE_STRING&code_challenge_method=S256
+   ```
+3. If the response HTML contains "The OAuth client was not found", inform the user that `lkr-cli` is not registered on their Looker instance and link them to the configuration guide at [https://www.lkr.dev/docs/tools/cli/#oauth2-prerequisites](https://www.lkr.dev/docs/tools/cli/#oauth2-prerequisites).
+4. If the client is detected (the response returns "redirect_uri mismatch"), run the interactive login command:
+   ```bash
+   uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli auth login
+   ```
+
+### Step 4: Authentication Execution Options
+
+Execute codemode directly via CLI (`lkr-dev-cli code-mode sandbox --code="..."`) instead of running an MCP server. Pass `--oauth-account` or `uvx --env-file=.env` so credentials stay out of version-controlled files:
+
+#### Named OAuth Profiles (`--oauth-account`)
 ```bash
 # Local workspace execution:
 uv run lkr --oauth-account=abc code-mode sandbox --code="return me()"
@@ -125,10 +153,7 @@ uv run lkr --oauth-account=abc code-mode sandbox --code="return me()"
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli --oauth-account=abc code-mode sandbox --code="return me()"
 ```
 
-### 2. Custom Environment File (`--env-file`)
-
-Load credentials and configuration from a specific `.env` file:
-
+#### Custom Environment File (`--env-file`)
 ```bash
 # Passed to uvx directly:
 uvx --env-file .env --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --code="return me()"
@@ -137,28 +162,21 @@ uvx --env-file .env --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox
 uv run lkr --env-file=.env code-mode sandbox --code="return me()"
 ```
 
-### 3. Force OAuth Flow (`--force-oauth`)
-
-Forces PKCE OAuth authentication flow even if API keys are configured:
-
+#### Force OAuth Flow (`--force-oauth`)
 ```bash
 uv run lkr --force-oauth code-mode sandbox --code="return me()"
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli --force-oauth code-mode sandbox --code="return me()"
 ```
 
-### 4. Standard Environment Variables
-
-Set standard Looker SDK environment variables in the execution environment:
+#### Standard Environment Variables
 - `LOOKERSDK_BASE_URL`: Looker instance API URL (e.g. `https://your-instance.looker.com:19999` or `https://your-instance.looker.com`)
 - `LOOKERSDK_CLIENT_ID`: API3 client ID
 - `LOOKERSDK_CLIENT_SECRET`: API3 client secret
 - `LOOKERSDK_VERIFY_SSL`: `true` or `false` (default: `true`)
 
----
-
 ## SDK Discovery Builtins
 
-When exploring available methods, schemas, and types in the Looker SDK, use these built-in sandbox functions:
+Use these built-in sandbox functions to explore available Looker SDK methods, schemas, and types:
 
 | Function | Description | Example |
 | :--- | :--- | :--- |
@@ -170,64 +188,69 @@ When exploring available methods, schemas, and types in the Looker SDK, use thes
 | `examples()` | Built-in SDK code recipes | `return examples()` |
 | `readme()` | Full reference documentation | `return readme()` |
 
----
-
 ## Bundled Helper Scripts (`scripts/`)
 
 Pre-packaged scripts are located in `scripts/`:
 
-- **[`scripts/personal_folder_dashboards.py`](file:///usr/local/google/home/bryanweber/lkrdev/cli/skills/lkr-code-mode/scripts/personal_folder_dashboards.py)**: Inspects `me()`, extracts `personal_folder_id`, and returns personal folder dashboards.
-- **[`scripts/order_items_query.py`](file:///usr/local/google/home/bryanweber/lkrdev/cli/skills/lkr-code-mode/scripts/order_items_query.py)**: Runs an inline query on `thelook` / `order_items` with `created_year` and `users.count` filtered by `status: Returned`.
-- **[`scripts/traverse_folders.py`](file:///usr/local/google/home/bryanweber/lkrdev/cli/skills/lkr-code-mode/scripts/traverse_folders.py)**: Recursively collects dashboards and looks across all subfolders.
-- **[`scripts/readme.py`](file:///usr/local/google/home/bryanweber/lkrdev/cli/skills/lkr-code-mode/scripts/readme.py)**: Reference documentation generator.
-- **[`scripts/examples.py`](file:///usr/local/google/home/bryanweber/lkrdev/cli/skills/lkr-code-mode/scripts/examples.py)**: Built-in code examples collection.
-
----
+- [scripts/personal_folder_dashboards.py](./scripts/personal_folder_dashboards.py): Inspects `me()`, extracts `personal_folder_id`, and returns personal folder dashboards.
+- [scripts/order_items_query.py](./scripts/order_items_query.py): Runs an inline query on `thelook` / `order_items` with `created_year` and `users.count` filtered by `status: Returned`.
+- [scripts/traverse_folders.py](./scripts/traverse_folders.py): Recursively collects dashboards and looks across all subfolders.
+- [scripts/readme.py](./scripts/readme.py): Reference documentation generator.
+- [scripts/examples.py](./scripts/examples.py): Built-in code examples collection.
 
 ## Common Looker SDK Recipes
 
-### Recipe 1: Inspect User & Personal Folder Dashboards
+### Inspect User and Personal Folder Dashboards
 
 Get the authenticated user, inspect their `personal_folder_id`, and retrieve all dashboards in their personal folder:
 
 ```python
 user = me()
-personal_folder_id = user["personal_folder_id"]
+if not user:
+    return {"error": "Unable to retrieve current user metadata."}
 
-# Fetch folder content
+personal_folder_id = user.get("personal_folder_id")
+if not personal_folder_id:
+    return {"error": "User does not have a personal folder configured."}
+
 personal_folder = folder(personal_folder_id)
+if not personal_folder:
+    return {"error": f"Unable to retrieve folder with ID {personal_folder_id}."}
 
-# Return personal folder dashboards
 return {
     "user_id": user.get("id"),
     "user_email": user.get("email"),
     "personal_folder_id": personal_folder_id,
-    "dashboards": personal_folder.get("dashboards", [])
+    "dashboards": personal_folder.get("dashboards", []),
 }
 ```
 
-### Recipe 2: Recursively Traverse Folders for Dashboards & Looks
+### Recursively Traverse Folders for Dashboards and Looks
 
 Traverse a personal folder and all nested subfolders to gather all dashboards and looks:
 
 ```python
 def get_all_items(folder_id):
+    if not folder_id:
+        return {"dashboards": [], "looks": []}
     f = folder(folder_id)
-    items = {
-        "dashboards": f.get("dashboards", []),
-        "looks": f.get("looks", [])
-    }
-    for child in folder_children(folder_id):
-        child_items = get_all_items(child["id"])
+    if not f:
+        return {"dashboards": [], "looks": []}
+    items = {"dashboards": f.get("dashboards", []), "looks": f.get("looks", [])}
+    children = folder_children(folder_id) or []
+    for child in children:
+        child_items = get_all_items(child.get("id"))
         items["dashboards"].extend(child_items["dashboards"])
         items["looks"].extend(child_items["looks"])
     return items
 
 user_data = me()
+if not user_data or not user_data.get("personal_folder_id"):
+    return {"dashboards": [], "looks": []}
 return get_all_items(user_data["personal_folder_id"])
 ```
 
-### Recipe 3: Run an Inline Explore Query on `thelook` (`order_items`)
+### Run an Inline Explore Query on `thelook` (`order_items`)
 
 Execute an inline query on model `thelook`, explore `order_items`, with fields `order_items.created_year` and `users.count`, filtered by `order_items.status: Returned`:
 
@@ -239,18 +262,18 @@ return run_inline_query(
         "view": "order_items",
         "fields": [
             "order_items.created_year",
-            "users.count"
+            "users.count",
         ],
         "filters": {
-            "order_items.status": "Returned"
+            "order_items.status": "Returned",
         },
         "sorts": ["order_items.created_year desc"],
-        "limit": "500"
-    }
+        "limit": "500",
+    },
 )
 ```
 
-### Recipe 4: Inspect LookML Models and Explores
+### Inspect LookML Models and Explores
 
 Inspect model configuration and extract available fields (dimensions and measures) from an explore:
 
@@ -267,11 +290,11 @@ return {
     "total_dimensions": len(dimensions),
     "total_measures": len(measures),
     "sample_dimensions": dimensions[:5],
-    "sample_measures": measures[:5]
+    "sample_measures": measures[:5],
 }
 ```
 
-### Recipe 5: Manage LookML Projects & Git Branches
+### Manage LookML Projects and Git Branches
 
 List all LookML projects and inspect git branch state:
 
@@ -283,11 +306,11 @@ branches = git_branches(project_name) if project_name else []
 return {
     "projects": projects,
     "selected_project": project_name,
-    "branches": branches
+    "branches": branches,
 }
 ```
 
-### Recipe 6: Search Dashboards with Field Filtering
+### Search Dashboards with Field Filtering
 
 Always specify `fields` when querying collections on large instances to prevent timeouts:
 
@@ -295,16 +318,14 @@ Always specify `fields` when querying collections on large instances to prevent 
 return search_dashboards(
     title="Marketing%",
     fields="id,title,folder,user_id,created_at",
-    limit=20
+    limit=20,
 )
 ```
 
----
-
 ## Agent Guidelines for Non-Interactive Execution
 
-1. **Verify Auth First**: When starting a multi-step task, run `me()` first to verify connection and credentials before executing heavy operations.
-2. **Use Dictionary Indexing**: Responses are JSON primitives. Write `dash["title"]` instead of `dash.title`.
-3. **Prevent Timeouts with `fields`**: Large Looker instances contain thousands of folders and dashboards. Always filter returned attributes (e.g. `fields="id,title"`).
-4. **Dev Mode Isolation**: When testing or making changes against LookML files or dev branches, pass `--dev-mode` on the CLI.
-5. **No `print()` Output**: Always `return` structured objects (dicts/lists/strings). Avoid `print()` statements.
+- Run `me()` once early in a task to verify authentication before executing multiple operations.
+- Responses are JSON primitives. Write `dash["title"]` instead of `dash.title`.
+- Always filter returned attributes with `fields` (e.g. `fields="id,title"`) when querying large instances.
+- Pass `--dev-mode` on the CLI when making changes against LookML files or personal dev branches.
+- Always return structured objects (dicts, lists, strings). Do not use `print()` statements.
