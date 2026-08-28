@@ -87,6 +87,16 @@ uvx lkr-dev-cli code-mode sandbox --code="return me()"
 uvx lkr-dev-cli code-mode sandbox --file=./path/to/script.py
 ```
 
+### Agent Skill (`lkr-code-mode`)
+
+For AI coding agents (Gemini CLI, Claude Code, Cursor, Copilot), this repository includes an installable skill under [`skills/lkr-code-mode`](./skills/lkr-code-mode) (and [`.agents/skills/lkr-code-mode`](./.agents/skills/lkr-code-mode)) that teaches agents how to work with the `lkr code-mode sandbox` non-interactively, including authentication options, CLI discovery commands, bundled helper scripts, and Looker SDK recipes.
+
+Install into your agent environment using `npx skills`:
+
+```bash
+npx skills add lkrdev/cli --skill lkr-code-mode
+```
+
 For detailed options, safe primitive transformations, MCP server configurations, and PKCE recovery, view the full [Code Mode Docs](./codemode.md).
 
 ## MCP

@@ -1,11 +1,13 @@
+"""Built-in Looker Code Mode examples."""
+
 EXAMPLES = [
     [
         "Find all dashboard-related methods",
-        "return [m for m in dir() if 'dashboard' in m.lower()]"
+        "return [m for m in dir() if 'dashboard' in m.lower()]",
     ],
     [
         "Get the description of a specific method",
-        "return help('search_dashboards')"
+        "return help('search_dashboards')",
     ],
     [
         "Get personal folder dashboards",
@@ -28,7 +30,7 @@ return personal_folder.get("dashboards", [])""",
 )""",
     ],
     [
-        "List personal dashboards",
+        "List personal dashboards & looks (recursive)",
         """def get_all_items(folder_id):
     f = folder(folder_id)
     items = {"dashboards": f.get("dashboards", []), "looks": f.get("looks", [])}
