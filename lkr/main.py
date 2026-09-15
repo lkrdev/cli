@@ -20,13 +20,16 @@ app.add_typer(auth_group, name="auth")
 IMPORT_ERROR = None
 
 
-def add_optional_typer_group(app, import_path, group_name, extra_message=None):
+def add_optional_typer_group(
+    app, import_path, group_name, extra_message=None, extra_name=None
+):
     try:
         module_path, attr = import_path.rsplit(".", 1)
         mod = __import__(module_path, fromlist=[attr])
         group = getattr(mod, attr)
         app.add_typer(group, name=group_name)
     except ModuleNotFoundError as import_error:
+        extra = extra_name or group_name
 
         @app.command(
             name=group_name,
@@ -37,7 +40,7 @@ def add_optional_typer_group(app, import_path, group_name, extra_message=None):
             },
         )
         def fallback(import_error=import_error):
-            msg = f"{group_name} tools (dependencies not available, try installing optional dependencies: lkr-dev-cli\\[{group_name}])"
+            msg = f"{group_name} tools (dependencies not available, try installing optional dependencies: lkr-dev-cli\\[{extra}])"
             if extra_message:
                 msg += f" {extra_message}"
             logger.error(msg)
@@ -48,7 +51,9 @@ def add_optional_typer_group(app, import_path, group_name, extra_message=None):
 add_optional_typer_group(app, "lkr.mcp.main.group", "mcp")
 add_optional_typer_group(app, "lkr.observability.main.group", "observability")
 add_optional_typer_group(app, "lkr.tools.main.group", "tools")
-add_optional_typer_group(app, "lkr.codemode.main.group", "code-mode")
+add_optional_typer_group(
+    app, "lkr.codemode.main.group", "code-mode", extra_name="codemode"
+)
 add_optional_typer_group(app, "lkr.db_template.main.group", "db-template")
 
 

@@ -29,6 +29,10 @@ codemode = [
     "pydantic-monty==0.0.23",
     "mcp[cli]>=1.27.2,<2"
 ]
+code-mode = [
+    "pydantic-monty==0.0.23",
+    "mcp[cli]>=1.27.2,<2"
+]
 observability = [
     "fastapi[standard]>=0.136.3",
     "selenium>=4.34.0"
@@ -62,4 +66,7 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["lkr", "lkr_dev_cli"]
+
+[tool.uv]
+index-url = "https://pypi.org/simple"
 
