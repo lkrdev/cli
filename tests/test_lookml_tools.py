@@ -403,6 +403,77 @@ def test_pull_single_file_path_traversal(tmp_path, mock_sdk, mock_auth):
         mock_err.assert_called_with("Path traversal detected and blocked: ../outside.view.lkml")
 
 
+def test_push_reset_and_new_model(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+    model_file = project_dir / "my_new.model.lkml"
+    model_file.write_text('connection: "new_conn"\ninclude: "*.view.lkml"')
+
+    mock_sdk.all_project_files.return_value = []
+    mock_sdk.all_lookml_models.return_value = []
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
+        result = runner.invoke(
+            app, ["tools", "lookml", "push", str(project_dir), "--deploy"]
+        )
+        assert result.exit_code == 0
+
+    # reset_project_to_production called once before push
+    mock_sdk.reset_project_to_production.assert_called_once_with(
+        project_id="test_project"
+    )
+    mock_sdk.create_lookml_model.assert_called_once()
+    created_body = mock_sdk.create_lookml_model.call_args.kwargs["body"]
+    assert created_body.name == "my_new"
+    assert created_body.project_name == "test_project"
+    assert created_body.allowed_db_connection_names == ["new_conn"]
+
+
+def test_push_no_reset(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+    view_file = project_dir / "orders.view.lkml"
+    view_file.write_text("view: orders {}")
+
+    mock_sdk.all_project_files.return_value = []
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
+        result = runner.invoke(
+            app, ["tools", "lookml", "push", str(project_dir), "--no-reset", "--deploy"]
+        )
+        assert result.exit_code == 0
+
+    mock_sdk.reset_project_to_production.assert_not_called()
+
+
+def test_push_update_lookml_model_on_connection_change(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+    model_file = project_dir / "existing.model.lkml"
+    model_file.write_text('connection: "updated_conn"\ninclude: "*.view.lkml"')
+
+    mock_sdk.all_project_files.return_value = []
+    mock_sdk.all_lookml_models.return_value = [
+        {
+            "name": "existing",
+            "project_name": "test_project",
+            "allowed_db_connection_names": ["old_conn"],
+        }
+    ]
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
+        result = runner.invoke(
+            app, ["tools", "lookml", "push", str(project_dir), "--no-reset"]
+        )
+        assert result.exit_code == 0
+
+    mock_sdk.update_lookml_model.assert_called_once()
+    updated_kwargs = mock_sdk.update_lookml_model.call_args.kwargs
+    assert updated_kwargs["lookml_model_name"] == "existing"
+    assert "updated_conn" in updated_kwargs["body"].allowed_db_connection_names
+
+
+
 
 
 

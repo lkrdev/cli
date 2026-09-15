@@ -506,17 +506,24 @@ class SqlLiteAuth:
             def refresh_current_token(token: AccessToken | AuthToken):
                 current_auth.set_token(self.conn, new_token=token, commit=True)
 
+            target_use_production = (
+                False if not self.ctx.use_production else current_auth.use_production
+            )
             sdk = init_oauth_sdk(
                 current_auth.base_url,
                 new_token_callback=refresh_current_token,
                 access_token=current_auth.to_access_token(),
-                use_production=current_auth.use_production,
+                use_production=target_use_production,
             )
             if prompt_refresh_invalid_token:
                 import sys
 
                 try:
                     sdk.auth.authenticate({})
+                    if not target_use_production and isinstance(
+                        sdk.auth, DbOAuthSession
+                    ):
+                        sdk.auth._switch_to_dev_mode()
                 except Exception as e:
                     if is_auth_expired(e) and sys.stdin.isatty():
                         self._cli_confirm_refresh_token(current_auth, quiet=False)

@@ -345,3 +345,33 @@ class ExtendedLooker40SDK(Looker40SDK):
                 transport_options=transport_options,
             ),
         )
+
+    def create_developer_copy(
+        self,
+        project_id: str,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> str:
+        """Create/initialize a developer workspace copy for a Looker project.
+
+        Calls POST /projects/{project_id}/developer_copy.
+
+        Args:
+            project_id: Id of project.
+            transport_options: Optional transport options.
+
+        Returns:
+            str: API response.
+        """
+        project_id = self.encode_path_param(project_id)
+        path = f"/projects/{project_id}/developer_copy"
+        return cast(
+            str,
+            self.post(
+                path=path,
+                structure=str,
+                transport_options=transport_options,
+            ),
+        )
+
+    developer_copy = create_developer_copy
+

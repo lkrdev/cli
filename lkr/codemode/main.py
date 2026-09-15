@@ -98,7 +98,9 @@ def to_primitive(obj):
 
 
 @mcp.tool()
-def run_python_code(code: str, dev_mode: bool = False) -> str:
+def run_python_code(
+    code: str, dev_mode: bool = False, allow_update_session: bool = False
+) -> str:
     """
     Execute Python code safely with access to all Looker SDK methods as global functions.
     Capture the result. 
@@ -138,6 +140,27 @@ def run_python_code(code: str, dev_mode: bool = False) -> str:
                         return to_primitive(res)
                     return wrapper
                 external_funcs[name] = make_wrapper(method)
+
+        if not allow_update_session:
+            def _blocked_update_session(*args, **kwargs):
+                raise RuntimeError(
+                    "update_session is disabled in code-mode by default because calling update_session "
+                    "affects anyone using this OAuth token/session. "
+                    "Use --dev-mode on the CLI with Client ID and Client Secret auth, "
+                    "login to an OAuth account pinned to dev, "
+                    "or pass --allow-update-session to explicitly allow calling update_session."
+                )
+
+            external_funcs["update_session"] = _blocked_update_session
+        elif orig_session := external_funcs.get("update_session"):
+
+            def _warn_update_session(*args, **kwargs):
+                logger.warning(
+                    "WARNING: Calling update_session will affect API clients using this access token"
+                )
+                return orig_session(*args, **kwargs)
+
+            external_funcs["update_session"] = _warn_update_session
 
         # Provide helper functions for the LLM to explore the SDK
         external_funcs['dir'] = lambda: list(external_funcs.keys())
@@ -223,6 +246,11 @@ def sandbox(
     dev_mode: bool = typer.Option(
         False, "--dev-mode", help="Run in dev mode"
     ),
+    allow_update_session: bool = typer.Option(
+        False,
+        "--allow-update-session",
+        help="Allow calling update_session inside code-mode",
+    ),
     var: list[str] | None = typer.Option(  # noqa: B008
         None, "--var", "-v", help="Inject variable as key=value pair (e.g. -v project=my_project)"
     ),
@@ -267,7 +295,11 @@ def sandbox(
         if (ctx and ctx.obj and "ctx_lkr" in ctx.obj)
         else LkrCtxObj(force_oauth=False)
     )
-    result = run_python_code(code_to_run, dev_mode=dev_mode)
+    result = run_python_code(
+        code_to_run,
+        dev_mode=dev_mode,
+        allow_update_session=allow_update_session,
+    )
     typer.echo(result)
 
 

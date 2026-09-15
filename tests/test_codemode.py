@@ -60,6 +60,10 @@ class MockLookerSDK(ExtendedLooker40SDK):
             ]
         return []
 
+    def update_session(self, body=None, *args, **kwargs):
+        """Update session workspace."""
+        return {"workspace_id": body.get("workspace_id", "dev") if isinstance(body, dict) else "dev"}
+
 
 @pytest.fixture(autouse=True)
 def mock_get_mcp_sdk():
@@ -205,7 +209,7 @@ return "\\n".join(res)
 
 def test_extended_sdk_methods_present():
     code = """
-methods = ['all_project_files', 'get_file_content', 'create_file', 'update_file', 'delete_file', 'create_project_directory', 'delete_project_directory', 'generate_lookml', 'generate_lookml_with_new_files', 'commit']
+methods = ['all_project_files', 'get_file_content', 'create_file', 'update_file', 'delete_file', 'create_project_directory', 'delete_project_directory', 'generate_lookml', 'generate_lookml_with_new_files', 'commit', 'create_developer_copy', 'developer_copy']
 for m in methods:
     if m not in dir():
         return "Missing " + m
@@ -322,3 +326,43 @@ def test_cli_code_mode_sandbox_both_error():
 def test_cli_code_mode_sandbox_neither_error():
     result = runner.invoke(app, ["code-mode", "sandbox"])
     assert result.exit_code == 1
+
+
+def test_update_session_blocked_by_default():
+    code = """
+update_session(body={"workspace_id": "dev"})
+"""
+    result = run_python_code(code)
+    assert "update_session is disabled in code-mode by default" in result
+    assert "calling update_session affects anyone using this OAuth token/session" in result
+
+
+def test_update_session_allowed_with_flag(caplog):
+    code = """
+res = update_session(body={"workspace_id": "dev"})
+return res["workspace_id"]
+"""
+    result = run_python_code(code, allow_update_session=True)
+    assert result == "dev"
+    assert "Calling update_session will affect API clients using this access token" in caplog.text
+
+
+def test_cli_code_mode_sandbox_update_session_blocked():
+    result = runner.invoke(
+        app,
+        ["code-mode", "sandbox", "--code", 'update_session(body={"workspace_id": "dev"})'],
+    )
+    assert "update_session is disabled in code-mode by default" in result.stdout
+    assert (
+        "Calling update_session affects anyone using this access token" in result.stdout
+    )
+
+
+def test_cli_code_mode_sandbox_update_session_allowed():
+    result = runner.invoke(
+        app,
+        ["code-mode", "sandbox", "--allow-update-session", "--code", 'return update_session(body={"workspace_id": "dev"})["workspace_id"]'],
+    )
+    assert result.exit_code == 0
+    assert "dev" in result.stdout
+
