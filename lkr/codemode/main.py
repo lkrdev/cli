@@ -199,34 +199,36 @@ def run_python_code(
             # Fallback to regex if parsing fails
             code = re.sub(r"\bsdk\.([a-zA-Z_][a-zA-Z0-9_]*)\b", r"\1", code)
 
-        m = pydantic_monty.Monty(code)
-        
-        # Use low-level OS stdout capture to ensure any print() statements
-        # in Rust or sub-interpreters don't corrupt the JSON-RPC stream
-        with capture_os_stdout() as cap:
-            result = m.run(external_functions=external_funcs)
-        
-        printed_output = cap.output
-        
-        # m.run() returns the evaluated result of the last expression (which is already a primitive)
-        try:
-            # Use JSON for nice formatting if it's a dict/list
-            if result is not None:
-                if isinstance(result, str):
-                    output = result
+        collector = pydantic_monty.CollectString()
+        with pydantic_monty.Monty() as m, m.checkout() as session, capture_os_stdout() as cap:
+            # Use low-level OS stdout capture and CollectString to ensure print() statements
+            # don't corrupt the JSON-RPC stream
+            result = session.feed_run(
+                code,
+                external_lookup=external_funcs,
+                print_callback=collector,
+            )
+            printed_output = collector.output or cap.output
+                
+            # session.feed_run() returns the evaluated result of the last expression
+            try:
+                # Use JSON for nice formatting if it's a dict/list
+                if result is not None:
+                    if isinstance(result, str):
+                        output = result
+                    else:
+                        output = json.dumps(result, indent=2, default=str)
                 else:
-                    output = json.dumps(result, indent=2, default=str)
-            else:
-                output = ""
-        except Exception:  # noqa: BLE001
-            output = repr(result)
+                    output = ""
+            except Exception:  # noqa: BLE001
+                output = repr(result)
             
-        if printed_output:
-            return json.dumps({
-                "stdout": printed_output,
-                "result": result
-            }, indent=2, default=str)
-        return output
+            if printed_output:
+                return json.dumps({
+                    "stdout": printed_output,
+                    "result": result
+                }, indent=2, default=str)
+            return output
     except Exception as e:  # noqa: BLE001
         logger.error(f"Error executing Monty: {e}")
         if is_auth_expired(e):
