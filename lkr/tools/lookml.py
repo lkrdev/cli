@@ -3,6 +3,7 @@ import re
 from typing import Annotated, Any
 
 import typer
+from looker_sdk.sdk.api40 import models as models40
 
 from lkr.auth_service import get_auth
 from lkr.extended_sdk_methods import (
@@ -73,6 +74,86 @@ def _ensure_remote_directory(
             logger.debug(f"Directory creation notice for '{current_path}': {e}")
 
 
+def _ensure_model_configuration(
+    sdk: ExtendedLooker40SDK, project_id: str, files_to_push: list[dict[str, str]]
+) -> None:
+    model_files = [
+        f for f in files_to_push if f["root_name"].endswith(".model.lkml")
+    ]
+    if not model_files:
+        return
+
+    try:
+        raw_models = sdk.all_lookml_models() or []
+        existing_models: dict[str, Any] = {
+            str(m.get("name") if isinstance(m, dict) else getattr(m, "name", "")): m
+            for m in raw_models
+            if (m.get("name") if isinstance(m, dict) else getattr(m, "name", None))
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"Could not fetch existing LookML models: {e}")
+        existing_models = {}
+
+    for mf in model_files:
+        root_name = mf["root_name"]
+        content = mf["content"]
+        model_name = root_name[: -len(".model.lkml")]
+
+        match = re.search(
+            r'^\s*connection:\s*["\']?([^"\'\s;#]+)["\']?', content, re.MULTILINE
+        )
+        conn_name = match.group(1).strip() if match else None
+
+        existing = existing_models.get(model_name)
+        if not existing:
+            logger.info(f"Creating LookML model configuration for '{model_name}'...")
+            allowed_conns = [conn_name] if conn_name else []
+            body = models40.WriteLookmlModel(
+                name=model_name,
+                project_name=project_id,
+                allowed_db_connection_names=allowed_conns,
+            )
+            try:
+                sdk.create_lookml_model(body=body)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"Notice creating LookML model '{model_name}': {e}")
+        else:
+            existing_proj = (
+                existing.get("project_name")
+                if isinstance(existing, dict)
+                else getattr(existing, "project_name", None)
+            )
+            raw_allowed = (
+                existing.get("allowed_db_connection_names")
+                if isinstance(existing, dict)
+                else getattr(existing, "allowed_db_connection_names", None)
+            ) or []
+            allowed_conns = [str(c) for c in raw_allowed]
+
+            needs_update = False
+            if existing_proj and existing_proj != project_id:
+                needs_update = True
+            if conn_name and conn_name not in allowed_conns:
+                allowed_conns.append(conn_name)
+                needs_update = True
+
+            if needs_update:
+                logger.info(
+                    f"Updating LookML model configuration for '{model_name}'..."
+                )
+                body = models40.WriteLookmlModel(
+                    name=model_name,
+                    project_name=project_id,
+                    allowed_db_connection_names=allowed_conns,
+                )
+                try:
+                    sdk.update_lookml_model(
+                        lookml_model_name=model_name, body=body
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.debug(f"Notice updating LookML model '{model_name}': {e}")
+
+
 @lookml_group.command(name="push")
 def push(
     ctx: typer.Context,
@@ -99,6 +180,13 @@ def push(
         bool,
         typer.Option("--deploy", help="Commit and deploy to production after push"),
     ] = False,
+    reset: Annotated[
+        bool,
+        typer.Option(
+            "--reset/--no-reset",
+            help="Reset developer workspace to production before pushing",
+        ),
+    ] = True,
     message: Annotated[
         str, typer.Option("--message", help="Commit message when deploying")
     ] = "push from lkr cli",
@@ -116,6 +204,28 @@ def push(
 
     project_id = _resolve_project_id(folder_name, project_id_opt)
     lookml_dir = os.path.abspath(folder_name)
+
+    try:
+        sdk.update_session(models40.WriteApiSession(workspace_id="dev"))
+    except Exception as sess_err:  # noqa: BLE001
+        logger.debug(f"Session switch notice: {sess_err}")
+
+    if reset:
+        logger.info(
+            f"Resetting developer workspace to production for project {project_id}..."
+        )
+        try:
+            sdk.reset_project_to_production(project_id=project_id)
+        except Exception as reset_err:  # noqa: BLE001
+            logger.debug(
+                f"Reset to production notice ({reset_err}), attempting developer_copy first..."
+            )
+            try:
+                sdk.create_developer_copy(project_id=project_id)
+                sdk.reset_project_to_production(project_id=project_id)
+            except Exception as copy_err:  # noqa: BLE001
+                logger.debug(f"Developer copy / reset notice: {copy_err}")
+
 
     files_to_push = []
     if file_opt:
@@ -247,6 +357,10 @@ def push(
                     sdk.delete_file(project_id=project_id, file_path=rf_path)
                 except Exception as dpe:  # noqa: BLE001
                     logger.debug(f"Deletion notice for {rf_path}: {dpe}")
+
+    _ensure_model_configuration(
+        sdk=sdk, project_id=project_id, files_to_push=files_to_push
+    )
 
     logger.info("Push completed successfully.")
 

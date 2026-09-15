@@ -242,3 +242,29 @@ def test_commit_no_body():
         _, kwargs = mock_post.call_args
         assert kwargs["path"] == "/projects/test_proj/commit"
         assert kwargs["body"] is None
+
+
+def test_create_developer_copy():
+    mock_auth = MagicMock()
+    mock_auth.settings.base_url = "https://example.looker.com"
+    sdk = ExtendedLooker40SDK(
+        auth=mock_auth,
+        deserialize=MagicMock(),
+        serialize=MagicMock(),
+        transport=MagicMock(),
+        api_version="4.0",
+    )
+
+    with patch.object(sdk, "post") as mock_post:
+        mock_post.return_value = "copy created"
+
+        res = sdk.create_developer_copy(project_id="test_proj")
+
+        assert res == "copy created"
+        mock_post.assert_called_once_with(
+            path="/projects/test_proj/developer_copy",
+            structure=str,
+            transport_options=None,
+        )
+        assert sdk.developer_copy == sdk.create_developer_copy
+
