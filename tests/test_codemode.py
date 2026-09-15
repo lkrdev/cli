@@ -353,9 +353,8 @@ def test_cli_code_mode_sandbox_update_session_blocked():
         ["code-mode", "sandbox", "--code", 'update_session(body={"workspace_id": "dev"})'],
     )
     assert "update_session is disabled in code-mode by default" in result.stdout
-    assert (
-        "Calling update_session affects anyone using this access token" in result.stdout
-    )
+    assert "calling update_session affects anyone using this OAuth token/session" in result.stdout
+
 
 
 def test_cli_code_mode_sandbox_update_session_allowed():

@@ -55,8 +55,8 @@ base_url_val = ver_info.get("web_server_url") or ver_info.get("api_server_url") 
 
 all_conns = all_connections()  # ty: ignore[unresolved-reference]
 conn = None
-for c in all_conns:
-    if isinstance(c, dict) and c.get("name") == connection_name:
+for c in (all_conns or []):
+    if c.get("name") == connection_name:
         conn = c
         break
 
