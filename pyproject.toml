@@ -26,7 +26,7 @@ mcp = [
     "fastapi[standard]>=0.136.3"
 ]
 codemode = [
-    "pydantic-monty",
+    "pydantic-monty==0.0.23",
     "mcp[cli]>=1.27.2,<2"
 ]
 observability = [
@@ -41,7 +41,7 @@ all = [
     "fastapi[standard]>=0.136.3",
     "selenium>=4.34.0",
     "duckdb>=1.3.1",
-    "pydantic-monty"
+    "pydantic-monty==0.0.23"
 ]
 
 [project.scripts]
