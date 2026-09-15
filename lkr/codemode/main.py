@@ -200,14 +200,15 @@ def run_python_code(
             code = re.sub(r"\bsdk\.([a-zA-Z_][a-zA-Z0-9_]*)\b", r"\1", code)
 
         collector = pydantic_monty.CollectString()
-        with pydantic_monty.Monty() as m, m.checkout() as session, capture_os_stdout() as cap:
+        with pydantic_monty.Monty() as m, m.checkout() as session:
             # Use low-level OS stdout capture and CollectString to ensure print() statements
             # don't corrupt the JSON-RPC stream
-            result = session.feed_run(
-                code,
-                external_lookup=external_funcs,
-                print_callback=collector,
-            )
+            with capture_os_stdout() as cap:
+                result = session.feed_run(
+                    code,
+                    external_lookup=external_funcs,
+                    print_callback=collector,
+                )
             printed_output = collector.output or cap.output
                 
             # session.feed_run() returns the evaluated result of the last expression
