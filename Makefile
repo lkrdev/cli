@@ -9,6 +9,9 @@ test-deps:
 codemode-test:
 	uv run pytest tests/test_codemode.py
 
+schema-rs:
+	cargo build --release --manifest-path lkr/schema/rust/Cargo.toml && cp lkr/schema/rust/target/release/lib_schema_rs.so lkr/schema/_schema_rs.so
+
 
 download-swagger:
 	uv run python lkr/codemode/download_swagger.py
