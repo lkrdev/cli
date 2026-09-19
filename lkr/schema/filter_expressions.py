@@ -54,7 +54,7 @@ FILTER_EXPRESSION_DEFS: dict[str, Any] = {
             r"|\d+\s+(?:second|minute|hour|day|week|month|quarter|fiscal\s+quarter|year|fiscal\s+year)s?(?:\s+(?:ago|from\s+now))?(?:\s+for\s+\d+\s+(?:second|minute|hour|day|week|month|quarter|fiscal\s+quarter|year|fiscal\s+year)s?)?"
             r"|(?:FY)?\d{4}(?:[-/]\d{2}(?:[-/]\d{2}(?:\s+\d{2}:\d{2}(?::\d{2})?)?)?|-Q[1-4])?(?:\s+(?:to\s+.+|for\s+\d+\s+(?:second|minute|hour|day|week|month|quarter|year)s?))?"
             r"|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)"
-            r")(?:,\s*.+)*$"
+            r")(?:,\s*[^,]+)*$"
         ),
         "examples": [
             "today",

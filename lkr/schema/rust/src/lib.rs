@@ -250,22 +250,21 @@ impl RustExploreValidator {
         &self,
         raw_val: Value,
     ) -> (bool, Vec<String>, Vec<String>, Option<String>) {
-        let Some(root_obj) = raw_val.as_object() else {
-            return (
-                false,
-                vec!["$: expected query payload to be a JSON object".to_string()],
-                Vec::new(),
-                None,
-            );
+        let mut root_obj = match raw_val {
+            Value::Object(obj) => obj,
+            _ => {
+                return (
+                    false,
+                    vec!["$: expected query payload to be a JSON object".to_string()],
+                    Vec::new(),
+                    None,
+                );
+            }
         };
 
         let mut payload: Map<String, Value> = Map::new();
-        if let Some(body_val) = root_obj.get("body") {
-            for (k, v) in root_obj {
-                if k != "body" {
-                    payload.insert(k.clone(), v.clone());
-                }
-            }
+        if let Some(body_val) = root_obj.remove("body") {
+            payload = root_obj;
             payload
                 .entry("result_format".to_string())
                 .or_insert_with(|| Value::String("json".to_string()));
@@ -283,7 +282,7 @@ impl RustExploreValidator {
                 "result_format".to_string(),
                 Value::String("json".to_string()),
             );
-            payload.insert("body".to_string(), Value::Object(Self::sanitize_body(root_obj)));
+            payload.insert("body".to_string(), Value::Object(Self::sanitize_body(&root_obj)));
         }
 
         payload
@@ -476,12 +475,16 @@ impl RustExploreValidator {
                             ));
                         }
                     }
-                    if let Some(f_obj) = obj.get("filters").and_then(|v| v.as_object()) {
-                        self.validate_filter_map(
-                            f_obj,
-                            &format!("{}.filters", item_path),
-                            &mut errors,
-                        );
+                    if let Some(filters_val) = obj.get("filters") {
+                        if let Some(f_obj) = filters_val.as_object() {
+                            self.validate_filter_map(
+                                f_obj,
+                                &format!("{}.filters", item_path),
+                                &mut errors,
+                            );
+                        } else if !filters_val.is_null() {
+                            errors.push(format!("{}.filters: expected object", item_path));
+                        }
                     }
                 } else if has_tc {
                     let has_expr = obj

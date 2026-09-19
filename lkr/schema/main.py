@@ -39,7 +39,14 @@ def _load_explore_data(
     explore_file: Path | None = None,
 ) -> dict[str, Any]:
     if explore_file is not None:
-        return json.loads(explore_file.read_text(encoding="utf-8"))
+        try:
+            return json.loads(explore_file.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            logger.error(f"Explore file not found: {explore_file}")
+            raise typer.Exit(1)
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in explore file {explore_file}: {e}")
+            raise typer.Exit(1)
 
     from lkr.codemode.main import to_primitive
 
