@@ -20,7 +20,7 @@ coverage-py:
 	uv run pytest tests/test_schema.py --cov=lkr.schema --cov=scripts.schema --cov-report=term-missing --cov-report=xml:coverage.xml
 
 coverage-rs:
-	RUSTFLAGS="-C instrument-coverage" LLVM_PROFILE_FILE="lkr/schema/rust/target/cov-%p-%m.profraw" cargo test --no-default-features --manifest-path lkr/schema/rust/Cargo.toml
+	RUSTFLAGS="-C instrument-coverage" LLVM_PROFILE_FILE="target/cov-%p-%m.profraw" cargo test --no-default-features --manifest-path lkr/schema/rust/Cargo.toml
 
 coverage: test-rs coverage-py coverage-rs
 

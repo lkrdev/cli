@@ -6,3 +6,4 @@ tmp
 lkr/schema/rust/target/
 coverage.xml
 .coverage
+*.profraw
