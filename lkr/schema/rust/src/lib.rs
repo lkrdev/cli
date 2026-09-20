@@ -5,6 +5,8 @@ use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+pub type ValidationOutcome = (bool, Vec<String>, Vec<String>, Option<String>);
+
 static FIELD_REF_RE: OnceLock<Regex> = OnceLock::new();
 static SORT_ITEM_RE: OnceLock<Regex> = OnceLock::new();
 
@@ -246,10 +248,7 @@ impl RustExploreValidator {
         }
     }
 
-    fn validate_single_value(
-        &self,
-        raw_val: Value,
-    ) -> (bool, Vec<String>, Vec<String>, Option<String>) {
+    fn validate_single_value(&self, raw_val: Value) -> ValidationOutcome {
         let mut root_obj = match raw_val {
             Value::Object(obj) => obj,
             _ => {
@@ -921,10 +920,7 @@ impl RustExploreValidator {
         })
     }
 
-    pub fn validate_json(
-        &self,
-        query_json: &str,
-    ) -> PyResult<(bool, Vec<String>, Vec<String>, Option<String>)> {
+    pub fn validate_json(&self, query_json: &str) -> PyResult<ValidationOutcome> {
         let val: Value = serde_json::from_str(query_json).map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("Invalid query JSON: {}", e))
         })?;
@@ -935,7 +931,7 @@ impl RustExploreValidator {
         &self,
         py: Python<'_>,
         queries_json: Vec<String>,
-    ) -> PyResult<Vec<(bool, Vec<String>, Vec<String>, Option<String>)>> {
+    ) -> PyResult<Vec<ValidationOutcome>> {
         let results = py.allow_threads(|| {
             queries_json
                 .par_iter()
@@ -959,3 +955,109 @@ fn _schema_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustExploreValidator>()?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn sample_schema() -> String {
+        json!({
+            "$defs": {
+                "StringFilterExpression": { "type": "string" },
+                "NumberFilterExpression": { "type": "string", "pattern": "^-?\\d+$" }
+            },
+            "properties": {
+                "result_format": { "type": "string", "enum": ["json", "csv"] },
+                "limit": { "type": "integer", "default": 500 },
+                "body": {
+                    "type": "object",
+                    "properties": {
+                        "model": { "type": "string", "const": "thelook" },
+                        "view": { "type": "string", "const": "order_items" },
+                        "fields": { "type": "array", "items": { "type": "string", "enum": ["order_items.status", "order_items.total_sale_price"] } },
+                        "pivots": { "type": "array", "items": { "type": "string", "enum": ["order_items.status"] } },
+                        "filters": {
+                            "type": "object",
+                            "properties": {
+                                "order_items.status": { "$ref": "#/$defs/StringFilterExpression" },
+                                "order_items.total_sale_price": { "$ref": "#/$defs/NumberFilterExpression" }
+                            }
+                        },
+                        "sorts": { "type": "array" },
+                        "limit": { "type": "string", "default": "500" },
+                        "column_limit": { "type": "string" },
+                        "subtotals": { "type": "array" },
+                        "dynamic_fields": { "type": "array" },
+                        "filter_expression": { "type": "string" }
+                    }
+                }
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn test_sanitize_body_strips_read_only_and_coerces_limits() {
+        let mut raw = Map::new();
+        raw.insert("id".to_string(), json!(123));
+        raw.insert("slug".to_string(), json!("abc"));
+        raw.insert("client_id".to_string(), json!("cid"));
+        raw.insert("limit".to_string(), json!(100));
+        raw.insert("column_limit".to_string(), json!(50));
+        raw.insert("model".to_string(), json!("thelook"));
+
+        let cleaned = RustExploreValidator::sanitize_body(&raw);
+        assert!(!cleaned.contains_key("id"));
+        assert!(!cleaned.contains_key("slug"));
+        assert!(!cleaned.contains_key("client_id"));
+        assert_eq!(cleaned.get("limit"), Some(&json!("100")));
+        assert_eq!(cleaned.get("column_limit"), Some(&json!("50")));
+        assert_eq!(cleaned.get("model"), Some(&json!("thelook")));
+    }
+
+    #[test]
+    fn test_validate_single_value_and_edge_cases() {
+        let val = RustExploreValidator::from_schema_json(&sample_schema()).unwrap();
+
+        // Non-object root payload
+        let (ok, errs, _, _) = val.validate_single_value(json!(["not_an_object"]));
+        assert!(!ok);
+        assert!(errs[0].contains("expected query payload to be a JSON object"));
+
+        // Non-object body payload
+        let (ok, errs, _, _) = val.validate_single_value(json!({"body": "not_an_object"}));
+        assert!(!ok);
+        assert!(errs[0].contains("$.body: expected object"));
+
+        // CustomMeasure with non-object filters rejected
+        let (ok, errs, _, _) = val.validate_single_value(json!({
+            "body": {
+                "model": "thelook",
+                "view": "order_items",
+                "fields": ["cm1"],
+                "dynamic_fields": [{
+                    "measure": "cm1",
+                    "based_on": "order_items.total_sale_price",
+                    "filters": "invalid_non_object"
+                }]
+            }
+        }));
+        assert!(!ok);
+        assert!(errs.iter().any(|e| e.contains(".filters: expected object")));
+
+        // column_limit without pivots emits warning and remains valid
+        let (ok, errs, warns, _) = val.validate_single_value(json!({
+            "body": {
+                "model": "thelook",
+                "view": "order_items",
+                "fields": ["order_items.status"],
+                "column_limit": "50"
+            }
+        }));
+        assert!(ok, "errs: {:?}", errs);
+        assert_eq!(warns.len(), 1);
+        assert!(warns[0].contains("$.body.column_limit"));
+    }
+}
+

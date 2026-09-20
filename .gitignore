@@ -4,3 +4,5 @@ __pycache__
 tmp
 .env
 lkr/schema/rust/target/
+coverage.xml
+.coverage

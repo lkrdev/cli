@@ -211,9 +211,31 @@ def test_build_dynamic_fields_schema():
     assert len(df["items"]["oneOf"]) == 3
 
 
-def test_schema_generate_and_validate_pipeline():
+def test_schema_generate_and_validate_pipeline(tmp_path: Path):
     order_items_path = Path("tmp/order_items.json")
-    assert order_items_path.exists(), "tmp/order_items.json must exist"
+    if not order_items_path.exists():
+        order_items_path = tmp_path / "order_items.json"
+        order_items_path.write_text(
+            json.dumps(
+                {
+                    "fields": {
+                        "dimensions": [
+                            {"name": "order_items.created_year", "type": "date_year", "is_timeframe": True, "hidden": False},
+                            {"name": "order_items.created_date", "type": "date_date", "is_timeframe": True, "hidden": False},
+                            {"name": "order_items.status", "type": "string", "hidden": False},
+                            {"name": "order_items.sale_price", "type": "number", "is_numeric": True, "hidden": False},
+                            {"name": "users.over_21", "type": "yesno", "hidden": False},
+                        ],
+                        "measures": [
+                            {"name": "users.count", "type": "count", "is_numeric": True, "hidden": False},
+                        ],
+                        "filters": [],
+                        "parameters": [],
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
 
     data = json.loads(order_items_path.read_text(encoding="utf-8"))
     body_schema = build_query_body_schema("thelook", "order_items", data)
@@ -725,6 +747,69 @@ def test_expression_and_custom_filter_field_validator_on_small_schema() -> None:
     assert col_limit_warn_res.valid is True
     assert len(col_limit_warn_res.warnings) == 1
     assert "$.body.column_limit" in col_limit_warn_res.warnings[0]
+
+
+def test_vgr_edge_cases(tmp_path: Path) -> None:
+    # 1. Missing --explore-file exits with code 1 cleanly
+    missing_res = runner.invoke(
+        app,
+        [
+            "schema",
+            "generate",
+            "--model=thelook",
+            "--explore=order_items",
+            f"--explore-file={tmp_path / 'does_not_exist.json'}",
+        ],
+    )
+    assert missing_res.exit_code == 1
+
+    # 2. Invalid JSON in --explore-file exits with code 1 cleanly
+    bad_file = tmp_path / "corrupt.json"
+    bad_file.write_text("{not valid json", encoding="utf-8")
+    bad_json_res = runner.invoke(
+        app,
+        [
+            "schema",
+            "generate",
+            "--model=thelook",
+            "--explore=order_items",
+            f"--explore-file={bad_file}",
+        ],
+    )
+    assert bad_json_res.exit_code == 1
+
+    # 3. Non-object CustomMeasure.filters rejected with explicit error
+    schema = build_explore_query_schema("thelook", "order_items", MOCK_EXPLORE)
+    non_obj_filters_res = validate_query(
+        {
+            "body": {
+                "model": "thelook",
+                "view": "order_items",
+                "fields": ["cm_bad_filters"],
+                "dynamic_fields": [
+                    {
+                        "measure": "cm_bad_filters",
+                        "based_on": "order_items.total_sale_price",
+                        "filters": "not_an_object",
+                    }
+                ],
+            }
+        },
+        schema,
+    )
+    assert non_obj_filters_res.valid is False
+    assert any(
+        "$.body.dynamic_fields[0].filters: expected object" in e
+        for e in non_obj_filters_res.errors
+    )
+
+    # 4. DateTimeFilterExpression multi-comma input completes without backtracking
+    dt_pat = re.compile(
+        FILTER_EXPRESSION_DEFS["DateTimeFilterExpression"]["pattern"]
+    )
+    assert dt_pat.match("today, yesterday, 7 days, this month")
+    assert not dt_pat.match("invalid_prefix," + "a," * 40 + "!")
+
 
 
 
