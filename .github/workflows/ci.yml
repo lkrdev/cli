@@ -40,9 +40,10 @@ jobs:
           cargo test --no-default-features --manifest-path lkr/schema/rust/Cargo.toml
           make schema-rs
 
-      - name: Run pytest with coverage
+      - name: Run pytest
         run: |
-          uv run pytest tests/ -v --cov=lkr.schema --cov=scripts.schema --cov-report=term-missing
+          uv run pytest tests/ -v
+          uv run pytest tests/test_schema.py -v --cov=lkr.schema --cov=scripts.schema --cov-report=term-missing
 
       - name: Run ruff
         run: |
