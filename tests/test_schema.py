@@ -810,6 +810,47 @@ def test_vgr_edge_cases(tmp_path: Path) -> None:
     assert dt_pat.match("today, yesterday, 7 days, this month")
     assert not dt_pat.match("invalid_prefix," + "a," * 40 + "!")
 
+    # 5. CLI lkr schema validate accepts a JSON array of queries (batch validation)
+    explore_path = tmp_path / "mock_explore.json"
+    explore_path.write_text(json.dumps(MOCK_EXPLORE), encoding="utf-8")
+    valid_arr = [
+        {"model": "thelook", "view": "order_items", "fields": ["order_items.status"]},
+        {"model": "thelook", "view": "order_items", "fields": ["order_items.total_sale_price"]},
+    ]
+    arr_ok_res = runner.invoke(
+        app,
+        [
+            "schema",
+            "validate",
+            f"--explore-file={explore_path}",
+            f"--query={json.dumps(valid_arr)}",
+        ],
+    )
+    assert arr_ok_res.exit_code == 0
+    arr_ok_data = json.loads(arr_ok_res.stdout)
+    assert isinstance(arr_ok_data, list)
+    assert len(arr_ok_data) == 2
+    assert all(item["valid"] is True for item in arr_ok_data)
+
+    mixed_arr = [
+        {"model": "thelook", "view": "order_items", "fields": ["order_items.status"]},
+        {"model": "thelook", "view": "order_items", "fields": ["order_items.secret_id"]},
+    ]
+    arr_fail_res = runner.invoke(
+        app,
+        [
+            "schema",
+            "validate",
+            f"--explore-file={explore_path}",
+            f"--query={json.dumps(mixed_arr)}",
+        ],
+    )
+    assert arr_fail_res.exit_code == 1
+    arr_fail_data = json.loads(arr_fail_res.stdout)
+    assert arr_fail_data[0]["valid"] is True
+    assert arr_fail_data[1]["valid"] is False
+
+
 
 
 

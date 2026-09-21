@@ -8,7 +8,7 @@ from lkr.auth_service import get_auth
 from lkr.classes import LkrCtxObj
 from lkr.logger import logger
 from lkr.schema.builder import build_explore_query_schema
-from lkr.schema.validator import validate_query
+from lkr.schema.validator import validate_batch_queries, validate_query
 
 __all__ = [
     "generate_command",
@@ -162,10 +162,15 @@ def validate_command(
     elif schema_file is not None:
         schema_data = json.loads(schema_file.read_text(encoding="utf-8"))
     else:
-        body_obj = (
-            query_payload.get("body")
-            if isinstance(query_payload.get("body"), dict)
+        first_item = (
+            query_payload[0]
+            if isinstance(query_payload, list) and query_payload
             else query_payload
+        )
+        body_obj = (
+            first_item.get("body")
+            if isinstance(first_item, dict) and isinstance(first_item.get("body"), dict)
+            else first_item
         )
         resolved_model = model or (
             body_obj.get("model") if isinstance(body_obj, dict) else None
@@ -185,7 +190,13 @@ def validate_command(
             resolved_model, resolved_explore, explore_data
         )
 
-    result = validate_query(query_payload, schema_data)
-    typer.echo(json.dumps(result.to_dict(), indent=2))
-    if not result.valid:
-        raise typer.Exit(1)
+    if isinstance(query_payload, list):
+        results = validate_batch_queries(query_payload, schema_data)
+        typer.echo(json.dumps([r.to_dict() for r in results], indent=2))
+        if not all(r.valid for r in results):
+            raise typer.Exit(1)
+    else:
+        result = validate_query(query_payload, schema_data)
+        typer.echo(json.dumps(result.to_dict(), indent=2))
+        if not result.valid:
+            raise typer.Exit(1)

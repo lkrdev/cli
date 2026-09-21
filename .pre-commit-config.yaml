@@ -3,6 +3,7 @@ repos:
     rev: 0.7.12
     hooks:
       - id: uv-lock
+        args: ["--default-index", "https://pypi.org/simple"]
   - repo: local
     hooks:
       - id: ruff-check
