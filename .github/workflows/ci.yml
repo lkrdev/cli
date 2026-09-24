@@ -15,6 +15,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt, llvm-tools-preview
+
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
@@ -29,9 +34,16 @@ jobs:
         run: |
           uv sync --extra all
 
-      - name: Run with pytest
+      - name: Run Rust clippy, unit tests, and build extension
+        run: |
+          cargo clippy --manifest-path lkr/schema/rust/Cargo.toml -- -D warnings
+          cargo test --no-default-features --manifest-path lkr/schema/rust/Cargo.toml
+          make schema-rs
+
+      - name: Run pytest
         run: |
           uv run pytest tests/ -v
+          uv run pytest tests/test_schema.py -v --cov=lkr.schema --cov=scripts.schema --cov-report=term-missing
 
       - name: Run ruff
         run: |
@@ -40,4 +52,3 @@ jobs:
       - name: Run ty
         run: |
           uv run ty check
-

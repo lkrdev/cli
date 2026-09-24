@@ -11,14 +11,14 @@ $ lkr [OPTIONS] COMMAND [ARGS]...
 **Options**:
 
 * `--version`: Show the version and exit.
-* `--client-id TEXT`: [env var: LOOKERSDK_CLIENT_ID]
-* `--client-secret TEXT`: [env var: LOOKERSDK_CLIENT_SECRET]
-* `--base-url TEXT`: [env var: LOOKERSDK_BASE_URL]
-* `--log-level [DEBUG|INFO|WARNING|ERROR|CRITICAL]`: [env var: LOG_LEVEL]
+* `--client-id <str>`: [env var: LOOKERSDK_CLIENT_ID]
+* `--client-secret <str>`: [env var: LOOKERSDK_CLIENT_SECRET]
+* `--base-url <str>`: [env var: LOOKERSDK_BASE_URL]
+* `--log-level <DEBUG|INFO|WARNING|ERROR|CRITICAL>`: [env var: LOG_LEVEL]
 * `--quiet`
 * `--force-oauth`
 * `--dev`
-* `--oauth-account TEXT`: OAuth account to lookup in DB and use regardless of what&#x27;s active
+* `--oauth-account <str>`: OAuth account to lookup in DB and use regardless of what&#x27;s active
 * `--install-completion`: Install completion for the current shell.
 * `--show-completion`: Show completion for the current shell, to copy it or customize the installation.
 * `--help`: Show this message and exit.
@@ -27,6 +27,7 @@ $ lkr [OPTIONS] COMMAND [ARGS]...
 
 * `db-template`
 * `auth`: Authentication commands for LookML Repository
+* `schema`: Generate and validate strongly-typed...
 * `mcp`
 * `observability`
 * `tools`
@@ -42,7 +43,7 @@ $ lkr db-template [OPTIONS]
 
 **Options**:
 
-* `--import-error TEXT`: [default: No module named &#x27;lkr.db_template.main&#x27;]
+* `--import-error <str>`: [default: No module named &#x27;lkr.db_template.main&#x27;]
 
 ## `lkr auth`
 
@@ -77,8 +78,8 @@ $ lkr auth login [OPTIONS]
 
 **Options**:
 
-* `-I, --instance-name TEXT`: Name of the Looker instance to login or switch to
-* `-p, --port INTEGER RANGE`: Port to run the local OAuth redirect web server on  [1&lt;=x&lt;=65535]
+* `-I, --instance-name <str>`: Name of the Looker instance to login or switch to
+* `-p, --port <int range>`: Port to run the local OAuth redirect web server on  [1&lt;=x&lt;=65535]
 * `--help`: Show this message and exit.
 
 ### `lkr auth logout`
@@ -93,7 +94,7 @@ $ lkr auth logout [OPTIONS]
 
 **Options**:
 
-* `--instance-name TEXT`: Name of the Looker instance to logout from. If not provided, logs out from all instances.
+* `--instance-name <str>`: Name of the Looker instance to logout from. If not provided, logs out from all instances.
 * `--all`: Logout from all instances
 * `--help`: Show this message and exit.
 
@@ -123,6 +124,64 @@ $ lkr auth list [OPTIONS]
 
 **Options**:
 
+* `--help`: Show this message and exit.
+
+## `lkr schema`
+
+Generate and validate strongly-typed Looker Explore query schemas
+
+**Usage**:
+
+```console
+$ lkr schema [OPTIONS] COMMAND [ARGS]...
+```
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+**Commands**:
+
+* `generate`: Generate a strongly-typed run_inline_query...
+* `validate`: Validate a query (--query or --query-file)...
+
+### `lkr schema generate`
+
+Generate a strongly-typed run_inline_query JSON Schema for --model and --explore.
+
+**Usage**:
+
+```console
+$ lkr schema generate [OPTIONS]
+```
+
+**Options**:
+
+* `-m, --model <str>`: LookML model name  [required]
+* `-e, --explore <str>`: LookML explore name  [required]
+* `-f, --explore-file <path>`: Path to a local lookml_model_explore JSON file (e.g. tmp/order_items.json)
+* `-o, --output <path>`: Optional file path to write the generated JSON schema
+* `--help`: Show this message and exit.
+
+### `lkr schema validate`
+
+Validate a query (--query or --query-file) against an Explore schema.
+
+**Usage**:
+
+```console
+$ lkr schema validate [OPTIONS]
+```
+
+**Options**:
+
+* `-m, --model <str>`: LookML model name
+* `-e, --explore <str>`: LookML explore name
+* `-f, --explore-file <path>`: Path to a local lookml_model_explore JSON file (e.g. tmp/order_items.json)
+* `--schema <str>`: Inline JSON schema string (optional; if omitted, generates schema from --model and --explore)
+* `--schema-file <path>`: Path to a generated JSON schema file (optional; if omitted, generates schema from --model and --explore)
+* `-q, --query <str>`: Inline query JSON string (either full run_inline_query payload or body WriteQuery)
+* `--query-file <path>`: Path to a query JSON file (either full run_inline_query payload or body WriteQuery)
 * `--help`: Show this message and exit.
 
 ## `lkr mcp`
@@ -182,10 +241,10 @@ $ lkr observability embed [OPTIONS]
 
 **Options**:
 
-* `--host TEXT`: Host to bind to  [env var: HOST; default: 0.0.0.0]
-* `--port INTEGER`: Port to bind to  [env var: PORT; default: 8080]
-* `--timeout INTEGER`: Timeout for the health check  [env var: TIMEOUT; default: 120]
-* `--event-prefix TEXT`: Event prefix  [env var: EVENT_PREFIX; default: lkr-observability]
+* `--host <str>`: Host to bind to  [env var: HOST; default: 0.0.0.0]
+* `--port <int>`: Port to bind to  [env var: PORT; default: 8080]
+* `--timeout <int>`: Timeout for the health check  [env var: TIMEOUT; default: 120]
+* `--event-prefix <str>`: Event prefix  [env var: EVENT_PREFIX; default: lkr-observability]
 * `--help`: Show this message and exit.
 
 ## `lkr tools`
@@ -216,8 +275,8 @@ $ lkr tools user-attribute-updater [OPTIONS]
 
 **Options**:
 
-* `--host TEXT`: [env var: HOST; default: 127.0.0.1]
-* `--port INTEGER`: [env var: PORT; default: 8080]
+* `--host <str>`: [env var: HOST; default: 127.0.0.1]
+* `--port <int>`: [env var: PORT; default: 8080]
 * `--help`: Show this message and exit.
 
 ### `lkr tools schedule-download-deprecation`
@@ -232,10 +291,10 @@ $ lkr tools schedule-download-deprecation [OPTIONS]
 
 **Options**:
 
-* `--limit INTEGER`: Search batch size  [default: 500]
-* `--model-offset INTEGER`: Offset for model columns  [default: 0]
+* `--limit <int>`: Search batch size  [default: 500]
+* `--model-offset <int>`: Offset for model columns  [default: 0]
 * `--csv`: Output as CSV instead of a table
-* `--csv-file-name TEXT`: Name for the output CSV file (without extension)  [default: schedule_download_deprecation]
+* `--csv-file-name <str>`: Name for the output CSV file (without extension)  [default: schedule_download_deprecation]
 * `--unfiltered`: Show all rows, including those with no missing permissions
 * `--email`: Use Email instead of Name
 * `--help`: Show this message and exit.
@@ -268,19 +327,20 @@ If --file / -f is specified (or folder_name is a file), only that single file is
 **Usage**:
 
 ```console
-$ lkr tools lookml push [OPTIONS] FOLDER_NAME
+$ lkr tools lookml push [OPTIONS] {folder_name}
 ```
 
 **Arguments**:
 
-* `FOLDER_NAME`: Local folder name / Looker project ID to push  [required]
+* `folder_name`: Local folder name / Looker project ID to push  [required]
 
 **Options**:
 
-* `--project-id, --project TEXT`: Looker project ID to push to (if different from folder name)
-* `-f, --file TEXT`: Single file relative path (or absolute path) to push
+* `--project-id, --project <str>`: Looker project ID to push to (if different from folder name)
+* `-f, --file <str>`: Single file relative path (or absolute path) to push
 * `--deploy`: Commit and deploy to production after push
-* `--message TEXT`: Commit message when deploying  [default: push from lkr cli]
+* `--reset / --no-reset`: Reset developer workspace to production before pushing  [default: reset]
+* `--message <str>`: Commit message when deploying  [default: push from lkr cli]
 * `--help`: Show this message and exit.
 
 #### `lkr tools lookml pull`
@@ -291,19 +351,19 @@ If --file / -f is specified, only that single file is pulled without deleting lo
 **Usage**:
 
 ```console
-$ lkr tools lookml pull [OPTIONS] FOLDER_NAME
+$ lkr tools lookml pull [OPTIONS] {folder_name}
 ```
 
 **Arguments**:
 
-* `FOLDER_NAME`: Local folder name / Looker project ID to pull into  [required]
+* `folder_name`: Local folder name / Looker project ID to pull into  [required]
 
 **Options**:
 
-* `--project-id, --project TEXT`: Looker project ID to pull from (if different from folder name)
-* `-f, --file TEXT`: Single file relative path to pull from Looker
+* `--project-id, --project <str>`: Looker project ID to pull from (if different from folder name)
+* `-f, --file <str>`: Single file relative path to pull from Looker
 * `--deploy`: Commit and deploy to production on Looker after pull
-* `--message TEXT`: Commit message when deploying  [default: pull from lkr cli then commit and deploy]
+* `--message <str>`: Commit message when deploying  [default: pull from lkr cli then commit and deploy]
 * `--help`: Show this message and exit.
 
 #### `lkr tools lookml deploy`
@@ -313,17 +373,17 @@ Commit dev workspace and deploy Looker project to production.
 **Usage**:
 
 ```console
-$ lkr tools lookml deploy [OPTIONS] [FOLDER_NAME]
+$ lkr tools lookml deploy [OPTIONS] [folder_name]
 ```
 
 **Arguments**:
 
-* `[FOLDER_NAME]`: Local folder name / Looker project ID to deploy
+* `folder_name`: Local folder name / Looker project ID to deploy
 
 **Options**:
 
-* `--project-id, --project TEXT`: Looker project ID to deploy (if folder_name not specified)
-* `--message TEXT`: Commit message  [default: commit and deploy from lkr cli]
+* `--project-id, --project <str>`: Looker project ID to deploy (if folder_name not specified)
+* `--message <str>`: Commit message  [default: commit and deploy from lkr cli]
 * `--help`: Show this message and exit.
 
 ## `lkr code-mode`
@@ -353,10 +413,11 @@ $ lkr code-mode sandbox [OPTIONS]
 
 **Options**:
 
-* `-c, --code TEXT`: Execute Python code directly in the sandbox
-* `-f, --file TEXT`: Execute Python code from a file in the sandbox
+* `-c, --code <str>`: Execute Python code directly in the sandbox
+* `-f, --file <str>`: Execute Python code from a file in the sandbox
 * `--dev-mode`: Run in dev mode
-* `-v, --var TEXT`: Inject variable as key=value pair (e.g. -v project=my_project)
+* `--allow-update-session`: Allow calling update_session inside code-mode
+* `-v, --var <str>`: Inject variable as key=value pair (e.g. -v project=my_project)
 * `--help`: Show this message and exit.
 
 ### `lkr code-mode run`

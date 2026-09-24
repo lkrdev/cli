@@ -3,3 +3,7 @@ __pycache__
 .venv
 tmp
 .env
+lkr/schema/rust/target/
+coverage.xml
+.coverage
+*.profraw

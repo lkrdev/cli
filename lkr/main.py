@@ -7,6 +7,7 @@ from lkr.auth.main import group as auth_group
 from lkr.classes import LkrCtxObj
 from lkr.custom_types import LogLevel
 from lkr.logger import logger
+from lkr.schema.main import group as schema_group
 
 app = typer.Typer(
     name="lkr",
@@ -16,6 +17,7 @@ app = typer.Typer(
 )
 
 app.add_typer(auth_group, name="auth")
+app.add_typer(schema_group, name="schema")
 
 IMPORT_ERROR = None
 
