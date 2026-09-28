@@ -1,7 +1,7 @@
 import json
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import requests
@@ -92,9 +92,9 @@ def _upsert_agent_publication_artifact(
 ) -> dict[str, Any]:
     """Create or update the Looker Artifact tracking publications for agent_id."""
     version, doc = _get_agent_artifact(sdk, agent_id)
-    proj = (project_number or "default").strip()
-    loc = (location or "global").strip().lower()
-    eng = (engine_id or "default").strip()
+    proj = str(project_number).strip() if project_number else "default"
+    loc = str(location).strip().lower() if location else "global"
+    eng = str(engine_id).strip() if engine_id else "default"
     pub_key = f"{proj}:{loc}:{eng}"
 
     existing_pub = doc["publications"].get(pub_key, {})
@@ -113,7 +113,7 @@ def _upsert_agent_publication_artifact(
         "message": message,
         "platform_agent_id": resolved_platform_id,
         "name": resolved_name,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
     }
 
     update_item = models40.UpdateArtifact(
@@ -173,7 +173,8 @@ def _search_artifacts_source(
             parsed = (
                 json.loads(raw_val) if isinstance(raw_val, str) else raw_val
             )
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"Skipping invalid artifact JSON for '{key}': {e}")
             continue
         if not isinstance(parsed, dict):
             continue
@@ -269,7 +270,12 @@ def _search_method_a_discovery_engine(
                             if isinstance(raw_card, str)
                             else raw_card
                         )
-                    except Exception:  # noqa: BLE001
+                    except Exception as e:  # noqa: BLE001
+                        logger.debug(
+                            f"Skipping invalid A2A agent card JSON: {e}"
+                        )
+                        continue
+                    if not isinstance(card, dict):
                         continue
                     match = LOOKER_A2A_URL_RE.match(card.get("url", ""))
                     if not match:
@@ -607,7 +613,11 @@ def publish_agent_command(
                 "--validate requires --project-number, --location, and --engine-id."
             )
             raise typer.Exit(1)
-        val_res = sdk.validate_gemini_enterprise_metadata(body=body)
+        try:
+            val_res = sdk.validate_gemini_enterprise_metadata(body=body)
+        except Exception as e:
+            logger.error(f"Failed to validate Gemini Enterprise metadata: {e}")
+            raise typer.Exit(1) from e
         if not val_res.get("success"):
             logger.error(
                 f"Gemini Enterprise metadata validation failed: {val_res.get('message')}"
@@ -624,8 +634,10 @@ def publish_agent_command(
                 ge_cfg = sdk.get_gemini_enablement()
                 if isinstance(ge_cfg, dict):
                     sa_email = ge_cfg.get("ai_ge_service_account_email")
-            except Exception:
-                pass
+            except Exception as ge_err:  # noqa: BLE001
+                logger.debug(
+                    f"Could not fetch Gemini enablement config: {ge_err}"
+                )
             sa_desc = (
                 f"the Looker service account ({sa_email})"
                 if sa_email
@@ -711,7 +723,11 @@ def delete_agent_command(
     singleton_unpublish_meta: dict[str, Any] = {}
 
     if not has_explicit_ge_target:
-        res = sdk.unpublish_agent(agent_id=agent_id)
+        try:
+            res = sdk.unpublish_agent(agent_id=agent_id)
+        except Exception as e:
+            logger.error(f"Failed to unpublish agent: {e}")
+            raise typer.Exit(1) from e
         singleton_meta = res.get("ge_agent_metadata") or {}
         if res.get("message") != "AGENT_NEVER_PUBLISHED":
             singleton_unpublish_meta = singleton_meta
