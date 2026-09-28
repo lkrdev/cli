@@ -199,7 +199,7 @@ def _search_artifacts_source(
     return rows
 
 
-def _search_method_a_discovery_engine(
+def _search_discovery_engine(
     token: str,
     project_number: str,
     engine_ids: list[str],
@@ -207,7 +207,7 @@ def _search_method_a_discovery_engine(
     location: str | None = None,
     checked_engines: set[tuple[str, str, str]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Source 2 (Method A): Query Discovery Engine assistants.agents.list across GE apps."""
+    """Query Discovery Engine assistants.agents.list across GE apps."""
     locs = (location.strip().lower(),) if location else ("global", "us", "eu")
     headers = {
         "Authorization": f"Bearer {token}",
@@ -300,7 +300,7 @@ def _search_method_a_discovery_engine(
     return found
 
 
-def _search_method_b_looker_api(
+def _search_looker_api(
     sdk: ExtendedLooker40SDK,
     looker_map: dict[str, dict[str, Any]],
     delay_seconds: float = 6.0,
@@ -480,7 +480,7 @@ def _delete_from_discovery_engine(
             )
         matches = [
             r
-            for r in _search_method_a_discovery_engine(
+            for r in _search_discovery_engine(
                 token, project_number, [engine_id], {}, location=location
             )
             if r["agent_id"] == agent_id
@@ -885,7 +885,7 @@ def list_agent_artifacts_command(
     de_targets: set[tuple[str, str | None, str]] = set()
 
     raw_records.extend(
-        _search_method_b_looker_api(
+        _search_looker_api(
             sdk,
             looker_map,
             scan_all=looker_api,
@@ -911,7 +911,7 @@ def list_agent_artifacts_command(
             if t_proj and t_proj != "default" and t_eng and t_eng != "default":
                 try:
                     raw_records.extend(
-                        _search_method_a_discovery_engine(
+                        _search_discovery_engine(
                             token=token,
                             project_number=t_proj,
                             engine_ids=[t_eng],
