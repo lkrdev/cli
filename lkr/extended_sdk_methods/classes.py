@@ -121,7 +121,7 @@ class GeminiEnterpriseAgentRequest(BaseModel):
         s = str(v).strip()
         if not s.isdigit():
             raise ValueError(
-                f"ge_gcp_project_number must be a numeric GCP project number (got '{v}', which looks like a project ID)."
+                f"Must be a numeric GCP project number (got '{v}', which looks like a project ID)."
             )
         return s
 

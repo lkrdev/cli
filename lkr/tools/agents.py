@@ -7,6 +7,7 @@ from typing import Annotated, Any
 import requests
 import typer
 from looker_sdk.sdk.api40 import models as models40
+from pydash import get
 
 from lkr.auth_service import get_auth
 from lkr.extended_sdk_methods import (
@@ -37,20 +38,7 @@ agents_group = typer.Typer(
 
 def _discovery_engine_base_uri(location: str) -> str:
     loc = (location or "global").strip().lower()
-    host = (
-        "discoveryengine.googleapis.com"
-        if loc == "global"
-        else f"{loc}-discoveryengine.googleapis.com"
-    )
-    return f"https://{host}/v1alpha"
-
-
-def _extract_attr(obj: Any, attr: str, default: Any = None) -> Any:
-    return (
-        obj.get(attr, default)
-        if isinstance(obj, dict)
-        else getattr(obj, attr, default)
-    )
+    return f"https://{'' if loc == 'global' else f'{loc}-'}discoveryengine.googleapis.com/v1alpha"
 
 
 def _get_agent_artifact(
@@ -63,8 +51,8 @@ def _get_agent_artifact(
         if not items:
             return None, default_doc
         item = items[0]
-        version = _extract_attr(item, "version")
-        raw_val = _extract_attr(item, "value")
+        version = get(item, "version")
+        raw_val = get(item, "value")
         if raw_val:
             parsed = (
                 json.loads(raw_val) if isinstance(raw_val, str) else raw_val
@@ -138,13 +126,13 @@ def _fetch_looker_agents_map(
             or []
         )
         return {
-            str(_extract_attr(a, "id")): {
-                "id": str(_extract_attr(a, "id")),
-                "name": _extract_attr(a, "name") or "",
-                "updated_at": _extract_attr(a, "updated_at") or "",
+            str(get(a, "id")): {
+                "id": str(get(a, "id")),
+                "name": get(a, "name") or "",
+                "updated_at": get(a, "updated_at") or "",
             }
             for a in agents
-            if _extract_attr(a, "id")
+            if get(a, "id")
         }
     except Exception as e:  # noqa: BLE001
         logger.debug(f"Could not fetch Looker agents via search_agents: {e}")
@@ -165,8 +153,8 @@ def _search_artifacts_source(
 
     rows: list[dict[str, Any]] = []
     for art in artifacts:
-        key = str(_extract_attr(art, "key", ""))
-        raw_val = _extract_attr(art, "value")
+        key = str(get(art, "key", ""))
+        raw_val = get(art, "value")
         if not raw_val:
             continue
         try:
@@ -316,9 +304,8 @@ def _search_method_b_looker_api(
     sdk: ExtendedLooker40SDK,
     looker_map: dict[str, dict[str, Any]],
     delay_seconds: float = 6.0,
-    token: str | None = None,
     scan_all: bool = False,
-    checked_engines: set[tuple[str, str, str]] | None = None,
+    de_targets: set[tuple[str, str | None, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Probe Looker's singleton GE config on 1 agent, or scan all agents when scan_all=True."""
     found: list[dict[str, Any]] = []
@@ -371,23 +358,15 @@ def _search_method_b_looker_api(
 
             # First agent call reveals Looker's instance-wide singleton GE target (even when unpublished)
             if idx == 0:
-                if token and singleton_proj and singleton_eng:
-                    try:
-                        found.extend(
-                            _search_method_a_discovery_engine(
-                                token=token,
-                                project_number=singleton_proj,
-                                engine_ids=[singleton_eng],
-                                looker_map=looker_map,
-                                location=singleton_loc,
-                                checked_engines=checked_engines,
-                            )
-                        )
-                        break
-                    except Exception as de_err:  # noqa: BLE001
-                        logger.debug(
-                            f"Singleton Discovery Engine lookup failed: {de_err}"
-                        )
+                if (
+                    de_targets is not None
+                    and singleton_proj
+                    and singleton_eng
+                ):
+                    de_targets.add(
+                        (singleton_proj, singleton_loc, singleton_eng)
+                    )
+                    break
                 if not scan_all:
                     if len(items) > 1 and singleton_proj and singleton_eng:
                         logger.warning(
@@ -542,14 +521,10 @@ def _delete_from_discovery_engine(
 
 
 def _validate_project_number(value: str | None) -> str | None:
-    if value is None:
-        return None
-    s = value.strip()
-    if not s.isdigit():
-        raise typer.BadParameter(
-            f"must be a numeric GCP project number (got '{value}', which looks like a project ID)."
-        )
-    return s
+    try:
+        return GeminiEnterpriseAgentRequest._validate_project_number(value)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from e
 
 
 @agents_group.command(name="publish")
@@ -742,29 +717,29 @@ def delete_agent_command(
             )
             results.append(res)
 
-    targets_to_delete: list[dict[str, Any]] = []
     if has_explicit_ge_target:
-        matched_loc: str | None = None
-        matched_plat: str | None = platform_agent_id
-        for pub in publications.values():
-            if (
-                isinstance(pub, dict)
+        matched = next(
+            (
+                pub
+                for pub in publications.values()
+                if isinstance(pub, dict)
                 and (
                     not project_number
                     or pub.get("ge_gcp_project_number") == project_number
                 )
                 and (not engine_id or pub.get("ge_engine_id") == engine_id)
-            ):
-                matched_loc = pub.get("ge_gcp_location") or matched_loc
-                matched_plat = matched_plat or pub.get("platform_agent_id")
-        targets_to_delete.append(
+            ),
+            {},
+        )
+        targets_to_delete = [
             {
                 "ge_gcp_project_number": project_number,
-                "ge_gcp_location": matched_loc,
+                "ge_gcp_location": matched.get("ge_gcp_location"),
                 "ge_engine_id": engine_id,
-                "platform_agent_id": matched_plat,
+                "platform_agent_id": platform_agent_id
+                or matched.get("platform_agent_id"),
             }
-        )
+        ]
     else:
         singleton_key = (
             f"{singleton_unpublish_meta.get('ge_gcp_project_number')}:"
@@ -773,14 +748,14 @@ def delete_agent_command(
             if singleton_unpublish_meta
             else None
         )
-        for pub_key, pub in publications.items():
-            if (
-                pub.get("state") == "published"
-                and pub_key != singleton_key
-                and pub.get("ge_gcp_project_number")
-                and pub.get("ge_engine_id")
-            ):
-                targets_to_delete.append(pub)
+        targets_to_delete = [
+            pub
+            for pub_key, pub in publications.items()
+            if pub.get("state") == "published"
+            and pub_key != singleton_key
+            and pub.get("ge_gcp_project_number")
+            and pub.get("ge_engine_id")
+        ]
 
     if not targets_to_delete and results:
         typer.echo(
@@ -907,34 +882,21 @@ def list_agent_artifacts_command(
     artifact_records = _search_artifacts_source(sdk, looker_map)
     raw_records = list(artifact_records)
     checked_engines: set[tuple[str, str, str]] = set()
+    de_targets: set[tuple[str, str | None, str]] = set()
 
     raw_records.extend(
         _search_method_b_looker_api(
             sdk,
             looker_map,
-            token=token,
             scan_all=looker_api,
-            checked_engines=checked_engines,
+            de_targets=de_targets if token else None,
         )
     )
 
     if token:
-        if project_number and engine_ids:
-            try:
-                raw_records.extend(
-                    _search_method_a_discovery_engine(
-                        token=token,
-                        project_number=project_number,
-                        engine_ids=engine_ids,
-                        looker_map=looker_map,
-                        checked_engines=checked_engines,
-                    )
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"Discovery Engine search failed: {e}")
-
-        # Also check any engine targets recorded as published in the artifact store
-        artifact_targets = {
+        if project_number:
+            de_targets.update((project_number, None, e) for e in engine_ids)
+        de_targets.update(
             (
                 str(r.get("ge_gcp_project_number") or "").strip(),
                 str(r.get("ge_gcp_location") or "global").strip().lower(),
@@ -942,29 +904,25 @@ def list_agent_artifacts_command(
             )
             for r in artifact_records
             if r.get("state") == "published"
-        }
-        for art_proj, art_loc, art_eng in sorted(artifact_targets):
-            if (
-                art_proj
-                and art_proj != "default"
-                and art_eng
-                and art_eng != "default"
-                and (art_proj, art_loc, art_eng) not in checked_engines
-            ):
+        )
+        for t_proj, t_loc, t_eng in sorted(
+            de_targets, key=lambda t: (t[0], t[1] or "zzz", t[2])
+        ):
+            if t_proj and t_proj != "default" and t_eng and t_eng != "default":
                 try:
                     raw_records.extend(
                         _search_method_a_discovery_engine(
                             token=token,
-                            project_number=art_proj,
-                            engine_ids=[art_eng],
+                            project_number=t_proj,
+                            engine_ids=[t_eng],
                             looker_map=looker_map,
-                            location=art_loc,
+                            location=t_loc,
                             checked_engines=checked_engines,
                         )
                     )
                 except Exception as e:  # noqa: BLE001
                     logger.warning(
-                        f"Discovery Engine search failed for {art_proj}:{art_loc}:{art_eng}: {e}"
+                        f"Discovery Engine search failed for {t_proj}:{t_loc or '*'}:{t_eng}: {e}"
                     )
 
     if not (token and project_number and engine_ids):
