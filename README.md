@@ -4,9 +4,9 @@ The `lkr` cli is a tool for interacting with Looker. It combines Looker's SDK an
 
 ## Usage
 
-`uv` makes everyone's life easier. Go [install it](https://docs.astral.sh/uv/getting-started/installation/). You can start using `lkr` by running `uvx lkr-dev-cli --help`.
+`uv` makes everyone's life easier. Go [install it](https://docs.astral.sh/uv/getting-started/installation/). You can start using `lkr` without installing by running `uvx lkr-dev-cli --help`.
 
-Alternatively, you can install `lkr` with `pip install lkr-dev-cli[all]` and use commands directly like `lkr <command>`.
+Alternatively, you can install `lkr` with `uv tool install "lkr-dev-cli[all]"` (or `pip install "lkr-dev-cli[all]"`) and run commands directly like `lkr <command>`.
 
 We also have a public docker image that you can use to run `lkr` commands.
 
@@ -14,6 +14,26 @@ We also have a public docker image that you can use to run `lkr` commands.
 docker run -it --rm us-central1-docker.pkg.dev/lkr-dev-production/lkr-cli/cli:latest lkr --help
 ```
 
+## Installing and upgrading with `uv tool`
+
+Install `lkr` globally on your PATH to run `lkr` (or `lkr-dev-cli`) directly without `uvx`:
+
+```bash
+# Install with all optional extras (mcp, code-mode, observability, tools)
+uv tool install "lkr-dev-cli[all]"
+
+# Verify installation
+lkr --help
+```
+
+Upgrade an existing installation to the latest release:
+
+```bash
+uv tool upgrade lkr-dev-cli
+
+# Or force reinstall the latest version
+uv tool install --upgrade --reinstall "lkr-dev-cli[all]"
+```
 
 ## Login
 
@@ -73,11 +93,11 @@ Go to the Looker API Explorer for Register OAuth App (https://your.looker.instan
 - This only needs to be done once per instance
 
 
-## Code Mode
+## Code mode
 
-Execute Python code safely with full Looker SDK coverage within a secure sandbox environment (`Monty`). It dynamically inspects the Looker SDK for all public methods and injects them into the sandbox safely, supporting both Model Context Protocol (MCP) server mode and direct standalone CLI execution.
+Execute Python code with Looker SDK coverage inside a `Monty` sandbox. It inspects the Looker SDK for public methods and injects them into the sandbox for both Model Context Protocol (MCP) server mode and standalone CLI execution.
 
-### Direct CLI Execution (Sandbox Mode)
+### Direct CLI execution (sandbox mode)
 Run scripts or inline code directly against your active Looker instance:
 ```bash
 # Execute inline Python code
@@ -87,17 +107,17 @@ uvx lkr-dev-cli code-mode sandbox --code="return me()"
 uvx lkr-dev-cli code-mode sandbox --file=./path/to/script.py
 ```
 
-### Agent Skill (`lkr-code-mode`)
+### Agent skill (`lkr-code-mode`)
 
-For AI coding agents (Gemini CLI, Claude Code, Cursor, Copilot), this repository includes an installable skill under [`skills/lkr-code-mode`](./skills/lkr-code-mode) (and [`.agents/skills/lkr-code-mode`](./.agents/skills/lkr-code-mode)) that teaches agents how to work with the `lkr code-mode sandbox` non-interactively, including authentication options, CLI discovery commands, bundled helper scripts, and Looker SDK recipes.
+For AI coding agents (Gemini CLI, Claude Code, Cursor, Copilot), this repository includes an installable skill under [skills/lkr-code-mode](./skills/lkr-code-mode) (and [.agents/skills/lkr-code-mode](./.agents/skills/lkr-code-mode)) for running `lkr code-mode sandbox` non-interactively, including auth flags, CLI discovery commands, helper scripts, and Looker SDK recipes.
 
-Install into your agent environment using `npx skills`:
+Install it into your agent environment with `npx skills`:
 
 ```bash
 npx skills add lkrdev/cli --skill lkr-code-mode
 ```
 
-For detailed options, safe primitive transformations, MCP server configurations, and PKCE recovery, view the full [Code Mode Docs](./codemode.md).
+For full options, MCP server configuration, and PKCE recovery, see the [Code Mode docs](./codemode.md).
 
 ## MCP
 Built into the `lkr` is an MCP server. Right now its tools are based on helping you work within an IDE. To use it a tool like [Cursor](https://www.cursor.com/), add this to your mcp.json
@@ -218,7 +238,7 @@ This can also be used to stress test your Looker environment as it serves an API
 ## User Attribute Updater (OIDC Token)
 
 1. Create a new cloud run using the `lkr-cli` public docker image `us-central1-docker.pkg.dev/lkr-dev-production/lkr-cli/cli:latest`
-2. Put in the environment variables LOOKERSDK_CLIENT_ID, LOOKERSDK_CLIENT_SECRET, LOOKERSDK_BASE_URL, LOOKER_WHITELISTED_BASE_URLS. The `LOOKER_WHITELISTED_BASE_URLS` would be the same url as the `LOOKERSDK_BASE_URL` if you are only using this for a single Looker instance. For more advanced use cases, you can set the `LOOKER_WHITELISTED_BASE_URLS` to a comma separated list of urls. The body of the request also accepts a `base_url`, `client_id`, and `client_secret` key that will override these settings. See example [`gcloud` command](#example-gcloud-command)
+2. Put in the environment variables LOOKERSDK_CLIENT_ID, LOOKERSDK_CLIENT_SECRET, LOOKERSDK_BASE_URL, LOOKER_WHITELISTED_BASE_URLS. The `LOOKER_WHITELISTED_BASE_URLS` would be the same url as the `LOOKERSDK_BASE_URL` if you are only using this for a single Looker instance. For more advanced use cases, you can set the `LOOKER_WHITELISTED_BASE_URLS` to a comma separated list of urls. The body of the request also accepts a `base_url`, `client_id`, and `client_secret` key that will override these settings. See example [gcloud command](#example-gcloud-command)
 3. For the command and arguments use:
    - command: `lkr`
    - args: `tools` `user-attribute-updater`
@@ -274,21 +294,21 @@ gcloud run deploy lkr-access-token-updater \
   --set-env-vars LOOKERSDK_CLIENT_ID=<your client id>,LOOKERSDK_CLIENT_SECRET=<your client secret>,LOOKERSDK_BASE_URL=<your instance url>,LOOKER_WHITELISTED_BASE_URLS=<your instance url>
   ```
 
-## Python SDK & Library Usage
+## Python SDK and library usage
 
 When installing `lkr-dev-cli` in your Python environment, you can import tools and pre-authenticated Looker SDK clients directly into your scripts, apps, or Jupyter notebooks.
 
-### Package Import Aliases (`lkr` vs `lkr_dev_cli`)
-To maximize convenience and match user intuition, both `lkr` and `lkr_dev_cli` are available as identical top-level Python packages. You can use them completely interchangeably:
+### Package import aliases (`lkr` vs `lkr_dev_cli`)
+Both `lkr` and `lkr_dev_cli` are exported as identical top-level Python packages:
 
 ```python
 from lkr import init_sdk, UserAttributeUpdater
-# works exactly identical to:
+# works the same as:
 from lkr_dev_cli import init_sdk, UserAttributeUpdater
 ```
 
 ### Initializing the Looker SDK (`init_sdk`)
-The `init_sdk()` function initializes and returns an authenticated `ExtendedLooker40SDK` instance. It automatically handles credential discovery and authentication:
+`init_sdk()` returns an authenticated `ExtendedLooker40SDK` instance and handles credential discovery automatically:
 
 ```python
 from lkr_dev_cli import init_sdk
@@ -334,7 +354,7 @@ It can also support looking up looker ids. It will lookup the following if the i
 - group_id by the name
 
 
-### Example Usage
+### Example usage
 
 ```python
 from lkr import UserAttributeUpdater
@@ -392,49 +412,110 @@ def delete_user_attribute(user_attribute_name: str, email: str):
       email=email,
     )
     updater.delete_user_attribute_value()
+```
 
-## Permission Deprecation Tool
+## Permission deprecation tool
 
-The `schedule-download-deprecation` tool helps Looker admins ensure that users do not lose access to models they already have when Looker moves towards more granular model-specific permissions for scheduling and downloading.
+The `schedule-download-deprecation` tool helps Looker admins check that users do not lose access to models they already use when Looker moves to model-specific permissions for scheduling and downloading.
 
 ### How it helps
-Currently, some permissions in Looker can be granted instance-wide. In the future, these permissions may need to be explicitly granted at the model level (via Model Sets). This tool audits all active users and identifies those who:
-- Have "target permissions" (like `download_with_limit`, `schedule_look_emails`, etc.) instance-wide.
-- Do **not** have those same permissions for specific models they otherwise have access to.
+Some permissions in Looker are currently granted instance-wide, and in the future may need to be granted at the model level via Model Sets. This tool audits active users and finds those who:
+- Have target permissions (like `download_with_limit`, `schedule_look_emails`, etc.) instance-wide.
+- Do not have those same permissions for specific models they otherwise have access to.
 
-By running this tool, an admin can proactively identify and fix permission gaps before any deprecation takes effect, ensuring a seamless experience for end-users.
+Admins can run this before deprecation takes effect to find and fix permission gaps.
 
 ### Usage
-This command should be run by a **Looker Admin**.
+Run this command as a Looker Admin:
 
 ```bash
 uvx lkr-dev-cli[all] tools schedule-download-deprecation
 ```
 
 Options:
-- `--csv`: Export the results to a CSV file for easier analysis of large instances.
-- `--unfiltered`: Show all users, including those who have all required permissions across all models.
-- `--model-offset`: Slice the table output to show different sets of models (the table shows 5 models at a time).
+- `--csv` exports the results to a CSV file for large instances.
+- `--unfiltered` shows all users, including those who already have all required permissions across all models.
+- `--model-offset` slices the table output to show different sets of models (the table shows 5 models at a time).
 
 
-## Optional Dependencies
+## Gemini Enterprise agents (`lkr tools agents`)
 
-The `lkr` CLI supports optional dependencies that enable additional functionality. You can install these individually or all at once.
+Looker's UI only supports connecting one default Gemini Enterprise (Discovery Engine) app per Looker instance. `lkr tools agents` lets you publish, list, and delete Looker Conversational Analytics (CA) agents across multiple Gemini Enterprise apps, GCP projects, and locations (`global`, `us`, `eu`).
 
-### Available Extras
+For all flags and options, see the [lkr tools agents CLI docs](./lkr.md#lkr-tools-agents) ([publish](./lkr.md#lkr-tools-agents-publish), [list](./lkr.md#lkr-tools-agents-list), [delete](./lkr.md#lkr-tools-agents-delete)).
 
-- **`mcp`**: Enables the MCP (Model Context Protocol) server functionality and `lkr mcp` commands
-- **`observability`**: Enables the observability embed monitoring features and `lkr observability` commands
-- **`tools`**: Enables the user attribute updater functionality and `lkr tools` commands
+> [!IMPORTANT]
+> Before publishing an agent, make sure **Admin > Gemini in Looker > Publish to Gemini Enterprise** is enabled on your Looker instance, and that the Looker service account has IAM permissions on the target GCP project plus a Gemini Enterprise user license in **Gemini Enterprise > Manage Users** (or "Assign licenses automatically" enabled on the app).
 
-### Installing Optional Dependencies
+### Finding your agent ID
 
-**Install all optional dependencies:**
+To get an agent's `<agent_id>` in the Looker UI:
+1. Open **Conversational Analytics** from the left navigation menu and click **Manage Agents** (or go to `https://<your-looker-instance>/conversations/agents`).
+2. Click on the agent (or select **Edit** from its menu).
+3. Copy the `<agent_id>` GUID from the browser URL:
+   ```text
+   https://<your-looker-instance>/conversations/agents/<agent_id>
+   ```
+
+### Publishing an agent
+
+```bash
+# Publish an agent to the Looker instance's default Gemini Enterprise app
+uvx lkr-dev-cli tools agents publish <agent_id>
+
+# Publish an agent to a specific (or secondary) Gemini Enterprise app
+uvx lkr-dev-cli tools agents publish <agent_id> \
+  --project-number <gcp_project_number> \
+  --location global \
+  --engine-id <gemini_enterprise_engine_id> \
+  --validate
+```
+
+### Listing and reconciling published agents
+
+`lkr tools agents list` merges records from the Looker artifact store, live Discovery Engine A2A agent cards (when `--gcp-token` is passed), and Looker's default configuration. If an agent was deleted in the Gemini Enterprise UI, `list` updates its Looker artifact state to `unpublished` (pass `--no-update-artifact` to skip writing back to the artifact store).
+
+```bash
+# List agents from Looker Artifacts and live Discovery Engine, and sync UI deletions back to Artifacts
+uvx lkr-dev-cli tools agents list \
+  --project-number <gcp_project_number> \
+  --engine-id <gemini_enterprise_engine_id> \
+  --gcp-token $(gcloud auth print-access-token)
+```
+
+### Deleting or unpublishing an agent
+
+```bash
+# Unpublish from the default Looker-configured Gemini Enterprise app
+uvx lkr-dev-cli tools agents delete <agent_id>
+
+# Delete from a secondary Gemini Enterprise app via Discovery Engine and update Looker Artifacts
+uvx lkr-dev-cli tools agents delete <agent_id> \
+  --project-number <gcp_project_number> \
+  --location global \
+  --engine-id <gemini_enterprise_engine_id> \
+  --gcp-token $(gcloud auth print-access-token)
+```
+
+
+## Optional dependencies
+
+The `lkr` CLI has optional extras for specific commands. You can install them individually or all at once.
+
+### Available extras
+
+- `mcp` enables the MCP (Model Context Protocol) server and `lkr mcp` commands.
+- `observability` enables the embed monitoring server and `lkr observability` commands.
+- `tools` enables the user attribute updater and `lkr tools` commands.
+
+### Installing optional dependencies
+
+Install all optional dependencies:
 ```bash
 uv sync --extra all
 ```
 
-**Install specific extras:**
+Install specific extras:
 ```bash
 # Install MCP functionality
 uv sync --extra mcp
@@ -449,7 +530,7 @@ uv sync --extra user-attribute-updater
 uv sync --extra mcp --extra embed-observability
 ```
 
-**Using pip:**
+Using pip:
 ```bash
 # Install all optional dependencies
 pip install lkr-dev-cli[all]

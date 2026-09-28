@@ -1,11 +1,12 @@
 import warnings
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 __all__ = [
     "Directory",
     "FileContent",
+    "GeminiEnterpriseAgentRequest",
     "GenerateLookMLParameters",
     "GenerateLookMLWithNewFilesResponse",
     "ProjectCommitRequest",
@@ -96,3 +97,31 @@ class ProjectCommitRequest(BaseModel):
     )
     message: str | None = Field(None, description="Commit message")
     amend: bool | None = Field(None, description="Amend the last commit")
+
+
+class GeminiEnterpriseAgentRequest(BaseModel):
+    """Request body for publishing or validating a Looker agent with Gemini Enterprise."""
+
+    ge_gcp_project_number: str | None = Field(
+        None, description="Google Cloud Project Number for Gemini Enterprise"
+    )
+    ge_gcp_location: str | None = Field(
+        None,
+        description="Google Cloud Location for Gemini Enterprise (e.g., global, us, eu)",
+    )
+    ge_engine_id: str | None = Field(
+        None, description="Gemini Enterprise Engine ID"
+    )
+
+    @field_validator("ge_gcp_project_number", mode="before")
+    @classmethod
+    def _validate_project_number(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        if not s.isdigit():
+            raise ValueError(
+                f"Must be a numeric GCP project number (got '{v}', which looks like a project ID)."
+            )
+        return s
+
