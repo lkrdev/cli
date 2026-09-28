@@ -1,6 +1,7 @@
 from lkr.extended_sdk_methods.classes import (
     Directory,
     FileContent,
+    GeminiEnterpriseAgentRequest,
     GenerateLookMLParameters,
     GenerateLookMLWithNewFilesResponse,
     ProjectCommitRequest,
@@ -16,6 +17,7 @@ __all__ = [
     "Directory",
     "ExtendedLooker40SDK",
     "FileContent",
+    "GeminiEnterpriseAgentRequest",
     "GenerateLookMLParameters",
     "GenerateLookMLWithNewFilesResponse",
     "ProjectCommitRequest",

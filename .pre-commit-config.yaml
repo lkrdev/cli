@@ -6,6 +6,11 @@ repos:
         args: ["--default-index", "https://pypi.org/simple", "--no-config"]
   - repo: local
     hooks:
+      - id: docs
+        name: generate cli docs
+        entry: bash -c "make docs && git add lkr.md"
+        language: system
+        pass_filenames: false
       - id: ruff-check
         name: ruff check
         entry: uv run ruff check .

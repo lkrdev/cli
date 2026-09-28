@@ -264,6 +264,7 @@ $ lkr tools [OPTIONS] COMMAND [ARGS]...
 * `user-attribute-updater`
 * `schedule-download-deprecation`: Build a table of users and their...
 * `lookml`: LookML synchronization and deployment tools
+* `agents`: Conversational Analytics and Gemini...
 
 ### `lkr tools user-attribute-updater`
 
@@ -384,6 +385,95 @@ $ lkr tools lookml deploy [OPTIONS] [folder_name]
 
 * `--project-id, --project <str>`: Looker project ID to deploy (if folder_name not specified)
 * `--message <str>`: Commit message  [default: commit and deploy from lkr cli]
+* `--help`: Show this message and exit.
+
+### `lkr tools agents`
+
+Conversational Analytics and Gemini Enterprise agent tools
+
+**Usage**:
+
+```console
+$ lkr tools agents [OPTIONS] COMMAND [ARGS]...
+```
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+**Commands**:
+
+* `publish`: Publish a Looker CA agent to a Gemini...
+* `delete`: Unpublish/delete a Looker CA agent from...
+* `list`: List and deduplicate published agents...
+
+#### `lkr tools agents publish`
+
+Publish a Looker CA agent to a Gemini Enterprise app and record it in Looker Artifacts.
+
+**Usage**:
+
+```console
+$ lkr tools agents publish [OPTIONS] {agent_id}
+```
+
+**Arguments**:
+
+* `agent_id`: Looker Conversational Analytics Agent ID (GUID)  [required]
+
+**Options**:
+
+* `-p, --project-number <str>`: Google Cloud Project Number for Gemini Enterprise  [env var: GE_GCP_PROJECT_NUMBER]
+* `-l, --location <str>`: Google Cloud Location for Gemini Enterprise (e.g., global, us, eu)  [env var: GE_GCP_LOCATION]
+* `-e, --engine-id <str>`: Gemini Enterprise Engine / App ID  [env var: GE_ENGINE_ID]
+* `--validate / --no-validate`: Validate Gemini Enterprise metadata before publishing  [default: no-validate]
+* `--help`: Show this message and exit.
+
+#### `lkr tools agents delete`
+
+Unpublish/delete a Looker CA agent from Gemini Enterprise and update its Looker Artifact.
+
+For secondary/multi-app Gemini Enterprise targets, pass `--gcp-token $(gcloud auth print-access-token)`.
+
+**Usage**:
+
+```console
+$ lkr tools agents delete [OPTIONS] {agent_id}
+```
+
+**Arguments**:
+
+* `agent_id`: Looker Conversational Analytics Agent ID (GUID)  [required]
+
+**Options**:
+
+* `-p, --project-number <str>`: Target Gemini Enterprise GCP Project Number (for multi-app unpublish)  [env var: GE_GCP_PROJECT_NUMBER]
+* `-e, --engine-id <str>`: Target Gemini Enterprise Engine / App ID (for multi-app unpublish)  [env var: GE_ENGINE_ID]
+* `--platform-agent-id <str>`: Full Discovery Engine agent resource name to delete directly
+* `--gcp-token <str>`: GCP OAuth access token, e.g. --gcp-token $(gcloud auth print-access-token)  [env var: GCP_ACCESS_TOKEN]
+* `--help`: Show this message and exit.
+
+#### `lkr tools agents list`
+
+List and deduplicate published agents across Looker and Gemini Enterprise.
+
+To also scan Gemini Enterprise Discovery Engine across locations (global, us, eu),
+pass `--project-number`, `--engine-id`, and `--gcp-token $(gcloud auth print-access-token)`.
+
+**Usage**:
+
+```console
+$ lkr tools agents list [OPTIONS]
+```
+
+**Options**:
+
+* `-p, --project-number <str>`: GCP Project Number to enable Discovery Engine search  [env var: GE_GCP_PROJECT_NUMBER]
+* `-e, --engine-id <str>`: Comma-separated Gemini Enterprise Engine ID(s) for Discovery Engine search  [env var: GE_ENGINE_ID]
+* `--gcp-token <str>`: GCP OAuth access token, e.g. --gcp-token $(gcloud auth print-access-token)  [env var: GCP_ACCESS_TOKEN]
+* `--looker-api`: Scan all Looker agents sequentially via Looker API (paced at 10 req/min) when --gcp-token is omitted
+* `--update-artifact / --no-update-artifact`: Sync discovered publication states (including Gemini UI deletions) back to the Looker artifact store  [default: update-artifact]
+* `--json`: Output deduplicated agent publications as JSON
 * `--help`: Show this message and exit.
 
 ## `lkr code-mode`

@@ -6,6 +6,7 @@ from looker_sdk.sdk.api40.methods import Looker40SDK
 from lkr.extended_sdk_methods.classes import (
     Directory,
     FileContent,
+    GeminiEnterpriseAgentRequest,
     GenerateLookMLParameters,
     GenerateLookMLWithNewFilesResponse,
     ProjectCommitRequest,
@@ -20,6 +21,7 @@ __all__ = [
     "Directory",
     "ExtendedLooker40SDK",
     "FileContent",
+    "GeminiEnterpriseAgentRequest",
     "GenerateLookMLParameters",
     "GenerateLookMLWithNewFilesResponse",
     "ProjectCommitRequest",
@@ -374,4 +376,134 @@ class ExtendedLooker40SDK(Looker40SDK):
         )
 
     developer_copy = create_developer_copy
+
+    def publish_agent(
+        self,
+        agent_id: str,
+        body: GeminiEnterpriseAgentRequest | dict[str, Any] | Any | None = None,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> dict[str, Any]:
+        """Publish a Looker Conversational Analytics agent to Gemini Enterprise.
+
+        Calls POST /internal/agents/{agent_id}/publish. When body parameters
+        (ge_gcp_project_number, ge_gcp_location, ge_engine_id) are provided,
+        Looker publishes the agent to that specific Gemini Enterprise app
+        instead of falling back to the singleton GeminiInLooker instance.
+        """
+        agent_id = self.encode_path_param(agent_id)
+        path = f"/internal/agents/{agent_id}/publish"
+        request_body = self._prepare_body(body) if body is not None else {}
+        return cast(
+            dict[str, Any],
+            self.post(
+                path=path,
+                structure=dict,
+                body=request_body,
+                transport_options=transport_options,
+            ),
+        )
+
+    def get_published_agent(
+        self,
+        agent_id: str,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> dict[str, Any]:
+        """Fetch published agent details from the default Gemini Enterprise app.
+
+        Calls GET /internal/agents/{agent_id}/publish.
+        """
+        agent_id = self.encode_path_param(agent_id)
+        path = f"/internal/agents/{agent_id}/publish"
+        return cast(
+            dict[str, Any],
+            self.get(
+                path=path,
+                structure=dict,
+                transport_options=transport_options,
+            ),
+        )
+
+    def update_published_agent(
+        self,
+        agent_id: str,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> dict[str, Any]:
+        """Update an agent across all published Gemini Enterprise apps.
+
+        Calls PATCH /internal/agents/{agent_id}/publish.
+        """
+        agent_id = self.encode_path_param(agent_id)
+        path = f"/internal/agents/{agent_id}/publish"
+        return cast(
+            dict[str, Any],
+            self.patch(
+                path=path,
+                structure=dict,
+                body={},
+                transport_options=transport_options,
+            ),
+        )
+
+    def unpublish_agent(
+        self,
+        agent_id: str,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> dict[str, Any]:
+        """Unpublish an agent from the default configured Gemini Enterprise app.
+
+        Calls PATCH /internal/agents/{agent_id}/unpublish.
+        """
+        agent_id = self.encode_path_param(agent_id)
+        path = f"/internal/agents/{agent_id}/unpublish"
+        return cast(
+            dict[str, Any],
+            self.patch(
+                path=path,
+                structure=dict,
+                body={},
+                transport_options=transport_options,
+            ),
+        )
+
+    def validate_gemini_enterprise_metadata(
+        self,
+        body: GeminiEnterpriseAgentRequest | dict[str, Any] | Any,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> dict[str, Any]:
+        """Validate Gemini Enterprise GCP project, location, and engine configuration.
+
+        Calls POST /gemini_enterprise/validate.
+        """
+        path = "/gemini_enterprise/validate"
+        request_body = self._prepare_body(body)
+        return cast(
+            dict[str, Any],
+            self.post(
+                path=path,
+                structure=dict,
+                body=request_body,
+                transport_options=transport_options,
+            ),
+        )
+
+    def get_gemini_enablement(
+        self,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> dict[str, Any]:
+        """Fetch Gemini in Looker configuration, including ai_ge_service_account_email.
+
+        Calls GET /gemini_enablement.
+        """
+        return cast(
+            dict[str, Any],
+            self.get(
+                path="/gemini_enablement",
+                structure=dict,
+                transport_options=transport_options,
+            ),
+        )
+
+
+
+
 

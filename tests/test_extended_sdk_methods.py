@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, patch
 
 from lkr.extended_sdk_methods.main import (
     ExtendedLooker40SDK,
+    GeminiEnterpriseAgentRequest,
     GenerateLookMLParameters,
     GenerateLookMLWithNewFilesResponse,
     ProjectCommitRequest,
@@ -267,4 +268,91 @@ def test_create_developer_copy():
             transport_options=None,
         )
         assert sdk.developer_copy == sdk.create_developer_copy
+
+
+def test_gemini_enterprise_agent_methods():
+    mock_auth = MagicMock()
+    mock_auth.settings.base_url = "https://example.looker.com"
+    sdk = ExtendedLooker40SDK(
+        auth=mock_auth,
+        deserialize=MagicMock(),
+        serialize=MagicMock(),
+        transport=MagicMock(),
+        api_version="4.0",
+    )
+
+    req = GeminiEnterpriseAgentRequest(
+        ge_gcp_project_number="123456789012",
+        ge_gcp_location="global",
+        ge_engine_id="secondary-ge-app",
+    )
+
+    with patch.object(sdk, "post") as mock_post:
+        mock_post.return_value = {"state": "published", "message": "ok"}
+        res = sdk.publish_agent("agent-guid-1", body=req)
+        assert res["state"] == "published"
+        mock_post.assert_called_once_with(
+            path="/internal/agents/agent-guid-1/publish",
+            structure=dict,
+            body=req.model_dump(),
+            transport_options=None,
+        )
+
+    with patch.object(sdk, "post") as mock_post:
+        mock_post.return_value = {"state": "published", "message": "ok"}
+        sdk.publish_agent("agent-guid-1")
+        mock_post.assert_called_once_with(
+            path="/internal/agents/agent-guid-1/publish",
+            structure=dict,
+            body={},
+            transport_options=None,
+        )
+
+    with patch.object(sdk, "get") as mock_get:
+        mock_get.return_value = {"state": "published", "message": "ok"}
+        res = sdk.get_published_agent("agent-guid-1")
+        assert res["state"] == "published"
+        mock_get.assert_called_once_with(
+            path="/internal/agents/agent-guid-1/publish",
+            structure=dict,
+            transport_options=None,
+        )
+
+    with patch.object(sdk, "patch") as mock_patch:
+        mock_patch.return_value = {"state": "published", "message": "updated"}
+        res = sdk.update_published_agent("agent-guid-1")
+        assert res["message"] == "updated"
+        mock_patch.assert_called_once_with(
+            path="/internal/agents/agent-guid-1/publish",
+            structure=dict,
+            body={},
+            transport_options=None,
+        )
+
+    with patch.object(sdk, "patch") as mock_patch:
+        mock_patch.return_value = {
+            "state": "unpublished",
+            "message": "AGENT_UNPUBLISHED_SUCCESSFULLY",
+        }
+        res = sdk.unpublish_agent("agent-guid-1")
+        assert res["state"] == "unpublished"
+        mock_patch.assert_called_once_with(
+            path="/internal/agents/agent-guid-1/unpublish",
+            structure=dict,
+            body={},
+            transport_options=None,
+        )
+
+    with patch.object(sdk, "post") as mock_post:
+        mock_post.return_value = {"success": True, "message": None}
+        res = sdk.validate_gemini_enterprise_metadata(req)
+        assert res["success"] is True
+        mock_post.assert_called_once_with(
+            path="/gemini_enterprise/validate",
+            structure=dict,
+            body=req.model_dump(),
+            transport_options=None,
+        )
+
+
 
