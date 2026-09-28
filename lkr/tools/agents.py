@@ -247,9 +247,7 @@ def _search_discovery_engine(
                 payload = resp.json()
 
                 for item in payload.get("agents", []):
-                    raw_card = item.get("a2aAgentDefinition", {}).get(
-                        "jsonAgentCard"
-                    )
+                    raw_card = get(item, "a2aAgentDefinition.jsonAgentCard")
                     if not raw_card:
                         continue
                     try:
