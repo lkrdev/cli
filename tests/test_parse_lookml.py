@@ -244,7 +244,7 @@ def test_parse_sql_to_lookml_table_variants_and_locations(tmp_path: Path):
         app,
         [
             "parse",
-            "sql-to-lookml",
+            "sql-lookml-compare",
             "--sql",
             sql,
             "--lookml-file",
@@ -260,6 +260,26 @@ def test_parse_sql_to_lookml_table_variants_and_locations(tmp_path: Path):
         ],
     )
     assert cli_res.exit_code == 0
+    cli_alias_res = runner.invoke(
+        app,
+        [
+            "parse",
+            "sql-to-lookml",
+            "--sql",
+            sql,
+            "--lookml-file",
+            str(order_items_file),
+            "--sql-db",
+            "looker-private-demo",
+            "--sql-schema",
+            "ecomm",
+            "--lkml-db",
+            "looker-private-demo",
+            "--lkml-schema",
+            "ecomm",
+        ],
+    )
+    assert cli_alias_res.exit_code == 0
     payload = json.loads(cli_res.stdout)
     assert len(payload["queries"]) == 3
     assert payload["queries"][2]["views"][0]["fields"][0]["line"] == 3
@@ -596,7 +616,7 @@ def test_parse_sql_to_lookml_describe_doc():
     cli_desc = runner.invoke(
         group,
         [
-            "sql-to-lookml",
+            "sql-lookml-compare",
             "--sql",
             "SELECT id FROM users",
             "--lookml",
@@ -778,7 +798,13 @@ def test_parse_lookml_to_api_inline_and_cli(tmp_path: Path):
     explore: order_items {}
     """
     raw_proj = parse_lookml(lookml=dotted_lkml)
-    raw_dim = raw_proj.model["inline"].view["order_items"].dimension["foo.id"]
+    assert raw_proj.model is not None
+    raw_views = raw_proj.model["inline"].view
+    assert raw_views is not None
+    raw_view = raw_views["order_items"]
+    assert isinstance(raw_view, LookmlView)
+    assert raw_view.dimension is not None
+    raw_dim = raw_view.dimension["foo.id"]
     assert raw_dim.sql is None
     assert raw_dim.with_defaults().sql == "${TABLE}.`foo.id`"
     assert raw_dim.sql is None
@@ -1660,7 +1686,7 @@ def test_parse_sql_to_lookml_unqualified_sql_error():
     # CLI exit code 1
     cli_res = runner.invoke(
         app,
-        ["parse", "sql-to-lookml", "--sql", "SELECT a FROM foo", "--lookml", lkml],
+        ["parse", "sql-lookml-compare", "--sql", "SELECT a FROM foo", "--lookml", lkml],
     )
     assert cli_res.exit_code == 1
 

@@ -62,6 +62,7 @@ from lkr.parse.main import (
     lookml_command,
     lookml_to_api_command,
     sql_command,
+    sql_lookml_compare_command,
     sql_to_api_command,
     sql_to_lookml_command,
 )
@@ -82,6 +83,7 @@ from lkr.parse.sql_to_lookml import (
     LookmlTestMatch,
     LookmlViewMatch,
     QueryLookmlMapping,
+    SqlLookmlCompareResult,
     SqlToLookmlResult,
     parse_sql_to_lookml,
 )
@@ -149,6 +151,7 @@ __all__ = [
     "LookmlVisualization",
     "ParsedQuery",
     "QueryLookmlMapping",
+    "SqlLookmlCompareResult",
     "SqlParseResult",
     "SqlToLookmlResult",
     "TableRef",
@@ -162,6 +165,7 @@ __all__ = [
     "parse_sql",
     "parse_sql_to_lookml",
     "sql_command",
+    "sql_lookml_compare_command",
     "sql_to_api_command",
     "sql_to_lookml_command",
 ]

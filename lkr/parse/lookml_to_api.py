@@ -4,8 +4,31 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 
+from lkr.parse.constants import (
+    _DAYS,
+    BUILTIN_MAP_LAYERS,
+    DEFAULT_ENUMS,
+    DISTANCE_UNIT_FORMATS,
+    ENUM_FILL_TYPES,
+    LOWERCASE_TITLE_WORDS,
+    NON_NUMERIC_MEASURE_TYPES,
+    NUMERIC_DIMENSION_TYPES,
+    RANGE_FILL_TYPES,
+    SUGGESTABLE_TYPES,
+    TIMEFRAME_INTERVALS,
+    VALUE_FORMAT_MAP,
+)
+from lkr.parse.dag import (
+    _build_chain,
+    _chain_root_pos,
+    _collect_declarations,
+    _expand_field_tokens,
+    _extract_lookml_refs,
+    _is_field_allowed_by_spec,
+    _resolve_explore_base,
+)
 from lkr.parse.lookml import (
     DEFAULT_DURATION_INTERVALS,
     DEFAULT_TIMEFRAMES,
@@ -26,14 +49,22 @@ from lkr.parse.lookml import (
     _default_table_sql,
     parse_lookml,
 )
-from lkr.parse.sql_to_lookml import (
-    _build_chain,
-    _chain_root_pos,
-    _collect_declarations,
-    _expand_field_tokens,
-    _extract_lookml_refs,
-    _is_field_allowed_by_spec,
-    _resolve_explore_base,
+from lkr.parse.types import (
+    ApiLookmlModel,
+    ApiLookmlModelExplore,
+    ApiLookmlModelExploreAlias,
+    ApiLookmlModelExploreField,
+    ApiLookmlModelExploreFieldEnumeration,
+    ApiLookmlModelExploreFieldMapLayer,
+    ApiLookmlModelExploreFieldMeasureFilters,
+    ApiLookmlModelExploreFieldset,
+    ApiLookmlModelExploreFieldSqlCase,
+    ApiLookmlModelExploreFieldTimeInterval,
+    ApiLookmlModelExploreJoins,
+    ApiLookmlModelExploreSet,
+    ApiLookmlModelExploreTurtleLook,
+    ApiLookmlModelNavExplore,
+    LookmlToApiResult,
 )
 
 __all__ = [
@@ -57,432 +88,6 @@ __all__ = [
     "parse_lookml_to_api",
 ]
 
-VALUE_FORMAT_MAP: dict[str, str] = {
-    "usd": "$#,##0.00",
-    "usd_0": "$#,##0",
-    "eur": "€#,##0.00",
-    "eur_0": "€#,##0",
-    "gbp": "£#,##0.00",
-    "gbp_0": "£#,##0",
-    "decimal_0": "#,##0",
-    "decimal_1": "#,##0.0",
-    "decimal_2": "#,##0.00",
-    "decimal_3": "#,##0.000",
-    "decimal_4": "#,##0.0000",
-    "percent_0": "#,##0%",
-    "percent_1": "#,##0.0%",
-    "percent_2": "#,##0.00%",
-    "percent_3": "#,##0.000%",
-    "percent_4": "#,##0.0000%",
-    "id": "0",
-}
-
-DISTANCE_UNIT_FORMATS: dict[str, str] = {
-    "feet": '#,##0.00" ft"',
-    "kilometers": '#,##0.00" km"',
-    "meters": '#,##0.00" m"',
-    "miles": '#,##0.00" mi"',
-    "nautical_miles": '#,##0.00" nmi"',
-    "yards": '#,##0.00" yd"',
-}
-
-BUILTIN_MAP_LAYERS: dict[str, dict[str, Any]] = {
-    "countries": {
-        "extents_json_url": None,
-        "feature_key": "world",
-        "format": "",
-        "max_zoom_level": None,
-        "min_zoom_level": None,
-        "name": "countries",
-        "projection": "kavrayskiy7",
-        "property_key": None,
-        "property_label_key": "name",
-        "url": "/data/world_noantarctica.topo-545fce41cc.json",
-    },
-    "us_states": {
-        "extents_json_url": None,
-        "feature_key": "usa",
-        "format": "",
-        "max_zoom_level": None,
-        "min_zoom_level": None,
-        "name": "us_states",
-        "projection": "albersUsa",
-        "property_key": None,
-        "property_label_key": None,
-        "url": "/data/us_states.topo-402e425f99.json",
-    },
-    "uk_postcode_areas": {
-        "extents_json_url": None,
-        "feature_key": "Areas",
-        "format": "",
-        "max_zoom_level": None,
-        "min_zoom_level": None,
-        "name": "uk_postcode_areas",
-        "projection": "mercator",
-        "property_key": None,
-        "property_label_key": None,
-        "url": "/data/uk_postcode_areas.topo-9e651b39d2.json",
-    },
-    "us_zipcode_tabulation_areas": {
-        "extents_json_url": "https://maps-tiles-b.lookercdn.com/us_zcta510/extents.json",
-        "feature_key": "tl_2016_us_zcta510geojson",
-        "format": "vector_tile_region",
-        "max_zoom_level": 12,
-        "min_zoom_level": None,
-        "name": "us_zipcode_tabulation_areas",
-        "projection": None,
-        "property_key": "ZCTA5CE10",
-        "property_label_key": None,
-        "url": "https://maps-tiles-a.lookercdn.com/us_zcta510/{z}/{x}/{y}.pbf",
-    },
-}
-
-_DAYS = (
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-    "Sunday",
-)
-_MONTHS = (
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-)
-DEFAULT_ENUMS: dict[str, list[dict[str, str]]] = {
-    "date_day_of_week": [{"label": d, "value": d} for d in _DAYS],
-    "date_day_of_week_index": [
-        {"label": f"{i} - {d}", "value": str(i)} for i, d in enumerate(_DAYS)
-    ],
-    "date_month_name": [{"label": m, "value": m} for m in _MONTHS],
-    "date_quarter_of_year": [
-        {"label": f"Q{i}", "value": f"Q{i}"} for i in range(1, 5)
-    ],
-    "date_fiscal_quarter_of_year": [
-        {"label": f"Q{i}", "value": f"Q{i}"} for i in range(1, 5)
-    ],
-    "yesno": [{"label": "Yes", "value": "Yes"}, {"label": "No", "value": "No"}],
-}
-
-TIMEFRAME_INTERVALS: dict[str, dict[str, Any]] = {
-    "date": {"name": "day", "count": 1},
-    "date_date": {"name": "day", "count": 1},
-    "date_fiscal_quarter": {"name": "month", "count": 3},
-    "date_fiscal_year": {"name": "year", "count": 1},
-    "date_hour": {"name": "hour", "count": 1},
-    **{f"date_hour{n}": {"name": "hour", "count": n} for n in (2, 3, 4, 6, 8, 12)},
-    "date_microsecond": {"name": "microsecond", "count": 1},
-    "date_millisecond": {"name": "millisecond", "count": 1},
-    **{
-        f"date_millisecond{n}": {"name": "millisecond", "count": n}
-        for n in (2, 4, 5, 8, 10, 20, 25, 40, 50, 100, 125, 200, 250, 500)
-    },
-    "date_minute": {"name": "minute", "count": 1},
-    **{
-        f"date_minute{n}": {"name": "minute", "count": n}
-        for n in (2, 3, 4, 5, 6, 10, 12, 15, 20, 30)
-    },
-    "date_month": {"name": "month", "count": 1},
-    "date_quarter": {"name": "month", "count": 3},
-    "date_second": {"name": "second", "count": 1},
-    "date_time": {"name": "second", "count": 1},
-    "date_week": {"name": "week", "count": 1},
-    "date_year": {"name": "year", "count": 1},
-}
-
-NUMERIC_DIMENSION_TYPES = frozenset(
-    {
-        "number",
-        "int",
-        "date_day_of_month",
-        "date_day_of_week_index",
-        "date_day_of_year",
-        "date_fiscal_month_num",
-        "date_hour_of_day",
-        "date_month_num",
-        "date_week_of_year",
-        "distance",
-        "duration_day",
-        "duration_hour",
-        "duration_minute",
-        "duration_month",
-        "duration_quarter",
-        "duration_second",
-        "duration_week",
-        "duration_year",
-    }
-)
-
-NON_NUMERIC_MEASURE_TYPES = frozenset({"list", "string", "yesno", "zipcode", "date"})
-
-RANGE_FILL_TYPES = frozenset(
-    {
-        "date",
-        "date_date",
-        "date_fiscal_quarter",
-        "date_fiscal_year",
-        "date_hour",
-        "date_minute",
-        "date_month",
-        "date_quarter",
-        "date_week",
-        "date_year",
-    }
-)
-
-ENUM_FILL_TYPES = frozenset(
-    {
-        "date_day_of_month",
-        "date_day_of_week",
-        "date_day_of_week_index",
-        "date_day_of_year",
-        "date_fiscal_month_num",
-        "date_fiscal_quarter_of_year",
-        "date_hour_of_day",
-        "date_month_name",
-        "date_month_num",
-        "date_quarter_of_year",
-        "date_time_of_day",
-        "date_week_of_year",
-        "tier",
-        "yesno",
-    }
-)
-
-SUGGESTABLE_TYPES = frozenset(
-    {
-        "string",
-        "tier",
-        "yesno",
-        "zipcode",
-        "unquoted",
-        "date_day_of_week",
-        "date_fiscal_quarter_of_year",
-        "date_month_name",
-        "date_quarter_of_year",
-    }
-)
-
-LOWERCASE_TITLE_WORDS = frozenset(
-    {"of", "in", "to", "with", "for", "and", "or", "on", "at"}
-)
-
-
-class ApiLookmlModelNavExplore(BaseModel):
-    description: str | None = None
-    label: str | None = None
-    hidden: bool = False
-    group_label: str | None = None
-    name: str
-
-
-class ApiLookmlModel(BaseModel):
-    has_content: bool = False
-    label: str | None = None
-    name: str
-    project_name: str | None = None
-    unlimited_db_connections: bool = False
-    allowed_db_connection_names: list[str] = Field(default_factory=list)
-    explores: list[ApiLookmlModelNavExplore] = Field(default_factory=list)
-
-
-class ApiLookmlModelExploreFieldTimeInterval(BaseModel):
-    name: str
-    count: int
-
-
-class ApiLookmlModelExploreFieldEnumeration(BaseModel):
-    label: str
-    value: str
-
-
-class ApiLookmlModelExploreFieldSqlCase(BaseModel):
-    value: str
-    condition: str
-
-
-class ApiLookmlModelExploreFieldMeasureFilters(BaseModel):
-    field: str
-    condition: str
-
-
-class ApiLookmlModelExploreFieldMapLayer(BaseModel):
-    extents_json_url: str | None = None
-    feature_key: str | None = None
-    format: str | None = None
-    max_zoom_level: int | None = None
-    min_zoom_level: int | None = None
-    name: str | None = None
-    projection: str | None = None
-    property_key: str | None = None
-    property_label_key: str | None = None
-    url: str | None = None
-
-
-class ApiLookmlModelExploreField(BaseModel):
-    align: str = "left"
-    available_custom_timeframes: list[str] | None = None
-    can_filter: bool = True
-    category: str
-    default_filter_value: str | None = None
-    description: str | None = ""
-    enumerations: list[ApiLookmlModelExploreFieldEnumeration] | None = None
-    field_group_label: str | None = None
-    fill_style: str | None = None
-    fiscal_month_offset: int = 0
-    has_allowed_values: bool = False
-    hidden: bool = False
-    is_filter: bool = False
-    is_numeric: bool = False
-    label: str
-    label_from_parameter: str | None = None
-    label_short: str
-    map_layer: ApiLookmlModelExploreFieldMapLayer | None = None
-    name: str
-    strict_value_format: bool = False
-    requires_refresh_on_sort: bool = False
-    sortable: bool = True
-    suggestions: list[str] | None = None
-    synonyms: list[str] | None = Field(default_factory=list)
-    tags: list[str] = Field(default_factory=list)
-    type: str
-    user_attribute_filter_types: list[str] = Field(default_factory=list)
-    value_format: str | None = None
-    value_format_name: str | None = None
-    view: str
-    view_label: str
-    dynamic: bool = False
-    week_start_day: str = "monday"
-    original_view: str
-    dimension_group: str | None = None
-    error: str | None = None
-    field_group_variant: str | None = None
-    measure: bool = False
-    parameter: bool = False
-    primary_key: bool = False
-    project_name: str | None = None
-    scope: str
-    suggest_dimension: str | None = None
-    suggest_explore: str | None = None
-    suggestable: bool = False
-    liquid_expression: str | None = None
-    lookml_expression: str | None = None
-    is_fiscal: bool = False
-    is_timeframe: bool = False
-    can_time_filter: bool = False
-    time_interval: ApiLookmlModelExploreFieldTimeInterval | None = None
-    lookml_link: str | None = None
-    period_over_period_params: dict[str, Any] | None = None
-    permanent: bool | None = None
-    source_file: str | None = None
-    source_file_path: str | None = None
-    sql: str | None = None
-    sql_case: list[ApiLookmlModelExploreFieldSqlCase] | None = None
-    filters: list[ApiLookmlModelExploreFieldMeasureFilters] | None = None
-
-
-class ApiLookmlModelExploreFieldset(BaseModel):
-    dimensions: list[ApiLookmlModelExploreField] = Field(default_factory=list)
-    measures: list[ApiLookmlModelExploreField] = Field(default_factory=list)
-    filters: list[ApiLookmlModelExploreField] = Field(default_factory=list)
-    parameters: list[ApiLookmlModelExploreField] = Field(default_factory=list)
-
-
-class ApiLookmlModelExploreAlias(BaseModel):
-    name: str
-    value: str
-
-
-class ApiLookmlModelExploreSet(BaseModel):
-    name: str
-    value: list[str] = Field(default_factory=list)
-
-
-class ApiLookmlModelExploreJoins(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    dependent_fields: list[str] = Field(default_factory=list)
-    fields: list[str] | None = None
-    foreign_key: str | None = None
-    from_: str | None = Field(default=None, alias="from", serialization_alias="from")
-    outer_only: bool | None = None
-    relationship: str = ""
-    required_joins: list[str] | None = None
-    sql_foreign_key: str | None = None
-    sql_on: str | None = None
-    sql_table_name: str | None = None
-    type: str | None = None
-    view_label: str | None = None
-    name: str
-
-
-class ApiLookmlModelExploreTurtleLook(BaseModel):
-    dimensions: list[str] = Field(default_factory=list)
-    measures: list[str] = Field(default_factory=list)
-    pivots: list[str] = Field(default_factory=list)
-    filters: dict[str, str] = Field(default_factory=dict)
-    limit: int | str | None = None
-    sorts: list[dict[str, Any]] = Field(default_factory=list)
-    name: str
-    label: str
-    label_short: str
-    can_turtle: bool = False
-    type: str = "query"
-    description: str | None = None
-    lookml_link: str | None = None
-
-
-class ApiLookmlModelExplore(BaseModel):
-    id: str
-    name: str
-    description: str | None = None
-    scopes: list[str] = Field(default_factory=list)
-    connection_name: str | None = None
-    null_sort_treatment: str | None = "low"
-    files: list[str] = Field(default_factory=list)
-    source_file: str | None = None
-    model_name: str
-    view_name: str
-    hidden: bool = False
-    sql_table_name: str | None = None
-    access_filters: list[dict[str, Any]] = Field(default_factory=list)
-    aliases: list[ApiLookmlModelExploreAlias] = Field(default_factory=list)
-    always_filter: list[dict[str, Any]] = Field(default_factory=list)
-    conditionally_filter: list[dict[str, Any]] = Field(default_factory=list)
-    index_fields: list[str] = Field(default_factory=list)
-    sets: list[ApiLookmlModelExploreSet] = Field(default_factory=list)
-    tags: list[str] = Field(default_factory=list)
-    errors: list[dict[str, Any]] | None = None
-    fields: ApiLookmlModelExploreFieldset = Field(
-        default_factory=ApiLookmlModelExploreFieldset
-    )
-    joins: list[ApiLookmlModelExploreJoins] = Field(default_factory=list)
-    group_label: str | None = None
-    always_join: list[str] = Field(default_factory=list)
-    label: str | None = None
-    project_name: str | None = None
-    title: str | None = None
-    lookml_link: str | None = None
-    access_filter_fields: list[str] = Field(default_factory=list)
-    turtle_looks: list[ApiLookmlModelExploreTurtleLook] = Field(default_factory=list)
-
-
-class LookmlToApiResult(BaseModel):
-    all_lookml_models: list[ApiLookmlModel] = Field(default_factory=list)
-    lookml_model_explores: dict[str, ApiLookmlModelExplore] = Field(
-        default_factory=dict
-    )
 
 
 def _titleize(name: str) -> str:

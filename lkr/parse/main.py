@@ -7,16 +7,21 @@ from lkr.logger import logger
 from lkr.parse.lookml import LookmlProject, parse_lookml
 from lkr.parse.lookml_to_api import LookmlToApiResult, parse_lookml_to_api
 from lkr.parse.sql import SqlParseResult, parse_sql
-from lkr.parse.sql_to_lookml import SqlToLookmlResult, parse_sql_to_lookml
+from lkr.parse.sql_to_lookml import (
+    SqlToLookmlResult,
+    parse_sql_to_lookml,
+)
 
 __all__ = [
     "group",
     "lookml_command",
     "lookml_to_api_command",
     "sql_command",
+    "sql_lookml_compare_command",
     "sql_to_api_command",
     "sql_to_lookml_command",
 ]
+
 
 group = typer.Typer(
     name="parse",
@@ -115,7 +120,114 @@ def lookml_command(
     return result
 
 
-@group.command(name="sql-to-lookml")
+@group.command(name="sql-lookml-compare")
+def sql_lookml_compare_command(
+    sql: Annotated[
+        str | None,
+        typer.Option("--sql", "-s", help="Inline SQL string (semicolon-delimited)"),
+    ] = None,
+    sql_file: Annotated[
+        Path | None,
+        typer.Option("--sql-file", help="Path to SQL file (semicolon-delimited)"),
+    ] = None,
+    path: Annotated[
+        Path | None,
+        typer.Option("--path", "-p", help="Path to a LookML directory"),
+    ] = None,
+    lookml_file: Annotated[
+        Path | None,
+        typer.Option("--lookml-file", "-f", help="Path to a LookML file"),
+    ] = None,
+    lookml: Annotated[
+        str | None,
+        typer.Option("--lookml", "-l", help="Inline LookML string"),
+    ] = None,
+    dialect: Annotated[
+        str | None,
+        typer.Option(
+            "--dialect", "-d", help="Optional SQLGlot dialect (e.g. bigquery, snowflake)"
+        ),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Optional output .json file path"),
+    ] = None,
+    describe: Annotated[
+        bool,
+        typer.Option(
+            "--describe",
+            help="Include high-level property documentation (_doc) in output JSON",
+        ),
+    ] = False,
+    sql_db: Annotated[
+        str | None,
+        typer.Option(
+            "--sql-db",
+            envvar="LKR_SQL_DB",
+            help="Default database/project for unqualified SQL tables",
+        ),
+    ] = None,
+    sql_schema: Annotated[
+        str | None,
+        typer.Option(
+            "--sql-schema",
+            envvar="LKR_SQL_SCHEMA",
+            help="Default schema/dataset for unqualified SQL tables",
+        ),
+    ] = None,
+    lkml_conn: Annotated[
+        str | None,
+        typer.Option(
+            "--lkml-conn",
+            envvar="LKR_LKML_CONN",
+            help="Looker connection name override for LookML views",
+        ),
+    ] = None,
+    lkml_db: Annotated[
+        str | None,
+        typer.Option(
+            "--lkml-db",
+            envvar="LKR_LKML_DB",
+            help="Database/project override for LookML views",
+        ),
+    ] = None,
+    lkml_schema: Annotated[
+        str | None,
+        typer.Option(
+            "--lkml-schema",
+            envvar="LKR_LKML_SCHEMA",
+            help="Schema/dataset override for LookML views",
+        ),
+    ] = None,
+) -> SqlToLookmlResult:
+    """Compare and map SQL queries (--sql / --sql-file) to LookML views and fields (--path / --lookml-file / --lookml) with file and line numbers."""
+    _validate_sql_args(sql, sql_file, "--sql-file")
+    _validate_lookml_args(path, lookml_file, lookml, "--lookml-file")
+    try:
+        result = parse_sql_to_lookml(
+            sql=sql,
+            sql_file=sql_file,
+            path=path,
+            lookml_file=lookml_file,
+            lookml=lookml,
+            dialect=dialect,
+            describe=describe,
+            sql_db=sql_db,
+            sql_schema=sql_schema,
+            lkml_conn=lkml_conn,
+            lkml_db=lkml_db,
+            lkml_schema=lkml_schema,
+        )
+    except ValueError as e:
+        logger.error(str(e))
+        raise typer.Exit(1)
+    _write_or_echo(
+        result.model_dump_json(indent=2, by_alias=True, exclude_none=True), output
+    )
+    return result
+
+
+@group.command(name="sql-to-lookml", hidden=True)
 def sql_to_lookml_command(
     sql: Annotated[
         str | None,
@@ -195,34 +307,26 @@ def sql_to_lookml_command(
         ),
     ] = None,
 ) -> SqlToLookmlResult:
-    """Map SQL queries (--sql / --sql-file) to LookML views and fields (--path / --lookml-file / --lookml) with file and line numbers."""
-    _validate_sql_args(sql, sql_file, "--sql-file")
-    _validate_lookml_args(path, lookml_file, lookml, "--lookml-file")
-    try:
-        result = parse_sql_to_lookml(
-            sql=sql,
-            sql_file=sql_file,
-            path=path,
-            lookml_file=lookml_file,
-            lookml=lookml,
-            dialect=dialect,
-            describe=describe,
-            sql_db=sql_db,
-            sql_schema=sql_schema,
-            lkml_conn=lkml_conn,
-            lkml_db=lkml_db,
-            lkml_schema=lkml_schema,
-        )
-    except ValueError as e:
-        logger.error(str(e))
-        raise typer.Exit(1)
-    _write_or_echo(
-        result.model_dump_json(indent=2, by_alias=True, exclude_none=True), output
+    """Map SQL queries to LookML views and fields (alias for sql-lookml-compare)."""
+    return sql_lookml_compare_command(
+        sql=sql,
+        sql_file=sql_file,
+        path=path,
+        lookml_file=lookml_file,
+        lookml=lookml,
+        dialect=dialect,
+        output=output,
+        describe=describe,
+        sql_db=sql_db,
+        sql_schema=sql_schema,
+        lkml_conn=lkml_conn,
+        lkml_db=lkml_db,
+        lkml_schema=lkml_schema,
     )
-    return result
 
 
-@group.command(name="sql-to-api")
+
+@group.command(name="sql-to-api", hidden=True)
 def sql_to_api_command(
     sql: Annotated[
         str | None,
@@ -302,8 +406,8 @@ def sql_to_api_command(
         ),
     ] = None,
 ) -> SqlToLookmlResult:
-    """Map SQL queries (--sql / --sql-file) to LookML views and fields (alias for sql-to-lookml)."""
-    return sql_to_lookml_command(
+    """Map SQL queries (--sql / --sql-file) to LookML views and fields (alias for sql-lookml-compare)."""
+    return sql_lookml_compare_command(
         sql=sql,
         sql_file=sql_file,
         path=path,
