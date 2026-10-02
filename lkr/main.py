@@ -57,6 +57,7 @@ add_optional_typer_group(
     app, "lkr.codemode.main.group", "code-mode", extra_name="codemode"
 )
 add_optional_typer_group(app, "lkr.db_template.main.group", "db-template")
+add_optional_typer_group(app, "lkr.parse.main.group", "parse")
 
 
 def version_callback(value: bool):

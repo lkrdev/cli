@@ -144,11 +144,13 @@ def test_individual_extras_consistency():
     
     # Discover individual extras
     individual_extras = discover_individual_extras(project_root)
-    required_extras = individual_extras + ["all"]
+    required_extras = list(set(individual_extras + ["parse", "all"]))
     
     # Check that all required extras are defined
     for extra in required_extras:
         assert extra in optional_deps, f"Extra '{extra}' not found in pyproject.toml"
+    assert any("sqlglot" in dep for dep in optional_deps["parse"])
+    assert any("nodejs-wheel" in dep for dep in optional_deps["parse"])
     
     # Get all dependencies from individual extras (excluding dev dependencies)
     all_individual_deps = set()
