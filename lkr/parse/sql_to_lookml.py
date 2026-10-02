@@ -634,9 +634,11 @@ def _match_model_views(
     eff_db = lkml_db or (meta.get("database") if meta else None)
     eff_schema = lkml_schema or (meta.get("schema") if meta else None)
 
-    model_views = {
-        k: v for k, v in (model_obj.view or {}).items() if isinstance(v, LookmlView)
-    }
+    model_views: dict[str, LookmlView] = {}
+    for k, v in (model_obj.view or {}).items():
+        for view_obj in _as_list(v):
+            if isinstance(view_obj, LookmlView):
+                model_views[k] = view_obj
     view_chains = {
         vname: _build_chain(vname, view_base_decls, view_ref_decls)
         for vname in model_views

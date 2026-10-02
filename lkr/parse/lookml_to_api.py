@@ -21,6 +21,7 @@ from lkr.parse.constants import (
     VALUE_FORMAT_MAP,
 )
 from lkr.parse.dag import (
+    _as_list,
     _build_chain,
     _chain_root_pos,
     _collect_declarations,
@@ -1178,9 +1179,11 @@ def _build_explore_from_assembled(
     exp_ref_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
     project_name: str | None,
 ) -> ApiLookmlModelExplore:
-    model_views = {
-        k: v for k, v in (model_obj.view or {}).items() if isinstance(v, LookmlView)
-    }
+    model_views: dict[str, LookmlView] = {}
+    for k, v in (model_obj.view or {}).items():
+        for view_obj in _as_list(v):
+            if isinstance(view_obj, LookmlView):
+                model_views[k] = view_obj
     exp_chain = _build_chain(explore_name, exp_base_decls, exp_ref_decls)
     base_view_name, base_alias, exp_file, exp_pos = _resolve_explore_base(
         explore_name, exp_obj, exp_chain, model_views
