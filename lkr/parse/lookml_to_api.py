@@ -1066,31 +1066,37 @@ def _expand_view_for_explore(
             sql: str | None = None,
             tags: list[str] | None = fobj.tags,
             synonyms: list[str] | None = f_synonyms,
+            _eff_view_label: str = eff_view_label,
+            _src_file: str = src_file,
+            _src_line: int = src_line,
+            _fobj: Any = fobj,
+            _eff_sug_override: bool | None = eff_sug_override,
+            _eff_sug_dim: str | None = eff_sug_dim,
             **kw: Any,
         ) -> ApiLookmlModelExploreField:
             return _build_field(
                 category=category,
                 ftype=ft,
                 name=name,
-                label=f"{eff_view_label} {short}",
+                label=f"{_eff_view_label} {short}",
                 label_short=short,
                 view_alias=view_alias,
-                view_label=eff_view_label,
+                view_label=_eff_view_label,
                 original_view=original_view_name,
                 explore_name=explore_name,
                 project_name=project_name,
-                source_file=src_file,
-                source_line=src_line,
-                description=fobj.description,
+                source_file=_src_file,
+                source_line=_src_line,
+                description=_fobj.description,
                 hidden=hidden,
                 sql=sql,
                 synonyms=synonyms,
                 tags=tags,
-                label_from_parameter=fobj.label_from_parameter,
-                allow_fill=fobj.allow_fill,
-                suggestable_override=eff_sug_override,
-                suggest_dimension_override=eff_sug_dim,
-                suggest_explore_override=fobj.suggest_explore,
+                label_from_parameter=_fobj.label_from_parameter,
+                allow_fill=_fobj.allow_fill,
+                suggestable_override=_eff_sug_override,
+                suggest_dimension_override=_eff_sug_dim,
+                suggest_explore_override=_fobj.suggest_explore,
                 fiscal_month_offset=fiscal_offset,
                 week_start_day=wk_start,
                 model_named_value_formats=model_obj.named_value_format,
@@ -1944,8 +1950,10 @@ def lookml_to_lookml_model_explore(
         raise ValueError(f"LookML model not found: {model}")
 
     exp_obj = (m_obj.explore or {}).get(explore)
-    if not isinstance(exp_obj, LookmlExplore):
+    if exp_obj is None:
         raise ValueError(f"LookML explore '{explore}' not found in model '{model}'")
+    if not isinstance(exp_obj, LookmlExplore):
+        raise TypeError(f"LookML explore '{explore}' must be a LookmlExplore instance")
 
     view_base_decls, view_ref_decls = _collect_declarations(proj, "view", LookmlView)
     exp_base_decls, exp_ref_decls = _collect_declarations(

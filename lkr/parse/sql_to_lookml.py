@@ -12,7 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlglot import exp
 
 from lkr.logger import logger
-
 from lkr.parse.lookml import (
     LookmlDimension,
     LookmlDimensionGroup,
@@ -200,7 +199,7 @@ def _fetch_connection_metadata_sandbox(conn_name: str) -> dict[str, Any] | None:
             if "result" in data and isinstance(data["result"], dict):
                 return data["result"]
             return data
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug(f"Could not fetch connection metadata for '{conn_name}': {e}")
         return None
     return None
@@ -227,9 +226,8 @@ def _coerce_sql_table(
         eff_db = sql_schema or sql_db
         eff_cat = sql_db if sql_schema else None
         return tbl.model_copy(update={"db": eff_db, "catalog": eff_cat})
-    if tbl.catalog and not tbl.db:
-        if sql_schema:
-            return tbl.model_copy(update={"db": sql_schema})
+    if tbl.catalog and not tbl.db and sql_schema:
+        return tbl.model_copy(update={"db": sql_schema})
     return tbl
 
 
@@ -261,9 +259,8 @@ def _coerce_lookml_table(
         eff_d = eff_schema or eff_db
         eff_c = eff_db if eff_schema else None
         return raw_tbl.model_copy(update={"db": eff_d, "catalog": eff_c})
-    if raw_tbl.catalog and not raw_tbl.db:
-        if eff_schema:
-            return raw_tbl.model_copy(update={"db": eff_schema})
+    if raw_tbl.catalog and not raw_tbl.db and eff_schema:
+        return raw_tbl.model_copy(update={"db": eff_schema})
     return raw_tbl
 
 

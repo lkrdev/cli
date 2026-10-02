@@ -1650,6 +1650,7 @@ def test_parse_lookml_to_api_discrepancy_fixes():
 
 def test_parse_sql_to_lookml_unqualified_sql_error():
     import pytest
+
     from lkr.parse import parse_sql_to_lookml
 
     lkml = "view: foo { sql_table_name: db.schema.foo ;; dimension: a {} }"
@@ -1666,6 +1667,7 @@ def test_parse_sql_to_lookml_unqualified_sql_error():
 
 def test_parse_sql_to_lookml_unqualified_lookml_error():
     import pytest
+
     from lkr.parse import parse_sql_to_lookml
 
     lkml = "view: foo { sql_table_name: foo ;; dimension: a {} }"
