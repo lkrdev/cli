@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from typing import Any, Self
 
@@ -6,7 +7,9 @@ import nodejs_wheel
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 LOOKML_PARSER_VERSION = "9.0.0"
-LOOKML_CACHE_DIR = Path.home() / ".lkr" / "lookml-parser"
+LOOKML_CACHE_DIR = Path(
+    os.getenv("LKR_CACHE_DIR", Path.home() / ".lkr" / "lookml-parser")
+)
 
 DEFAULT_TIMEFRAMES: tuple[str, ...] = (
     "date",

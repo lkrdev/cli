@@ -223,89 +223,98 @@ def _find_explores_for_field(
     if field_type == "dimension_group" and timeframes:
         candidate_names |= {f"{field_name}_{tf}".lower() for tf in timeframes}
 
-    for exp_name, exp_obj in (model_obj.explore or {}).items():
-        if not isinstance(exp_obj, LookmlExplore):
-            continue
+    for exp_name, exp_val in (model_obj.explore or {}).items():
+        for exp_obj in _as_list(exp_val):
+            if not isinstance(exp_obj, LookmlExplore):
+                continue
 
-        exp_chain = _build_chain(exp_name, exp_base_decls, exp_ref_decls)
-        base_view_name, base_alias, exp_file, exp_pos = _resolve_explore_base(
-            exp_name, exp_obj, exp_chain, model_views
-        )
-
-        views_by_alias: dict[str, LookmlView] = {}
-        bv = model_views.get(base_view_name)
-        if isinstance(bv, LookmlView):
-            views_by_alias[base_alias] = bv
-
-        for j_name, j_obj in (exp_obj.join or {}).items():
-            jv_name = j_obj.from_ or j_obj.view_name or j_name
-            jv = model_views.get(jv_name)
-            if isinstance(jv, LookmlView):
-                views_by_alias[j_name] = jv
-
-        explore_aliases_lower = {a.lower() for a in views_by_alias}
-
-        if (
-            base_view_name == view_name
-            and (required_ext_aliases - {base_alias.lower()}) <= explore_aliases_lower
-            and _is_field_allowed_by_spec(
-                exp_obj.fields, base_alias, candidate_names, views_by_alias, base_alias
+            exp_chain = _build_chain(exp_name, exp_base_decls, exp_ref_decls)
+            base_view_name, base_alias, exp_file, exp_pos = _resolve_explore_base(
+                exp_name, exp_obj, exp_chain, model_views
             )
-        ):
-            matches.append(
-                LookmlExploreFieldMatch(
-                    model_name=model_name,
-                    explore_name=exp_name,
-                    field=f"{base_alias}.{field_name}",
-                    view_alias=base_alias,
-                    view_name=view_name,
-                    join_name=None,
-                    file=exp_file,
-                    line=exp_pos[0] + 1,
-                    end_line=exp_pos[2] + 1,
-                    position=exp_pos,
-                    join_location=None,
+
+            views_by_alias: dict[str, LookmlView] = {}
+            bv = model_views.get(base_view_name)
+            if isinstance(bv, LookmlView):
+                views_by_alias[base_alias] = bv
+
+            for j_name, j_obj in (exp_obj.join or {}).items():
+                jv_name = j_obj.from_ or j_obj.view_name or j_name
+                jv = model_views.get(jv_name)
+                if isinstance(jv, LookmlView):
+                    views_by_alias[j_name] = jv
+
+            explore_aliases_lower = {a.lower() for a in views_by_alias}
+
+            if (
+                base_view_name == view_name
+                and (required_ext_aliases - {base_alias.lower()})
+                <= explore_aliases_lower
+                and _is_field_allowed_by_spec(
+                    exp_obj.fields,
+                    base_alias,
+                    candidate_names,
+                    views_by_alias,
+                    base_alias,
                 )
-            )
-
-        for j_name, j_obj in (exp_obj.join or {}).items():
-            jv_name = j_obj.from_ or j_obj.view_name or j_name
-            if jv_name != view_name:
-                continue
-            if not (required_ext_aliases - {j_name.lower()}) <= explore_aliases_lower:
-                continue
-            if not _is_field_allowed_by_spec(
-                j_obj.fields, j_name, candidate_names, views_by_alias, j_name
             ):
-                continue
-            if not _is_field_allowed_by_spec(
-                exp_obj.fields, j_name, candidate_names, views_by_alias, base_alias
-            ):
-                continue
-
-            j_loc: LookmlSourceLocation | None = None
-            for fpath, _, p_dict in exp_chain:
-                join_pos_map = p_dict.get("join", {})
-                if isinstance(join_pos_map, dict) and j_name in join_pos_map:
-                    jp = join_pos_map[j_name]
-                    if isinstance(jp, dict) and "$p" in jp:
-                        j_loc = _make_location(fpath, jp["$p"])
-
-            matches.append(
-                LookmlExploreFieldMatch(
-                    model_name=model_name,
-                    explore_name=exp_name,
-                    field=f"{j_name}.{field_name}",
-                    view_alias=j_name,
-                    view_name=view_name,
-                    join_name=j_name,
-                    file=exp_file,
-                    line=exp_pos[0] + 1,
-                    end_line=exp_pos[2] + 1,
-                    position=exp_pos,
-                    join_location=j_loc,
+                matches.append(
+                    LookmlExploreFieldMatch(
+                        model_name=model_name,
+                        explore_name=exp_name,
+                        field=f"{base_alias}.{field_name}",
+                        view_alias=base_alias,
+                        view_name=view_name,
+                        join_name=None,
+                        file=exp_file,
+                        line=exp_pos[0] + 1,
+                        end_line=exp_pos[2] + 1,
+                        position=exp_pos,
+                        join_location=None,
+                    )
                 )
-            )
+
+            for j_name, j_obj in (exp_obj.join or {}).items():
+                jv_name = j_obj.from_ or j_obj.view_name or j_name
+                if jv_name != view_name:
+                    continue
+                if (
+                    not (required_ext_aliases - {j_name.lower()})
+                    <= explore_aliases_lower
+                ):
+                    continue
+                if not _is_field_allowed_by_spec(
+                    j_obj.fields, j_name, candidate_names, views_by_alias, j_name
+                ):
+                    continue
+                if not _is_field_allowed_by_spec(
+                    exp_obj.fields, j_name, candidate_names, views_by_alias, base_alias
+                ):
+                    continue
+
+                j_loc: LookmlSourceLocation | None = None
+                for fpath, _, p_dict in exp_chain:
+                    join_pos_map = p_dict.get("join", {})
+                    if isinstance(join_pos_map, dict) and j_name in join_pos_map:
+                        jp = join_pos_map[j_name]
+                        if isinstance(jp, dict) and "$p" in jp:
+                            j_loc = _make_location(fpath, jp["$p"])
+
+                matches.append(
+                    LookmlExploreFieldMatch(
+                        model_name=model_name,
+                        explore_name=exp_name,
+                        field=f"{j_name}.{field_name}",
+                        view_alias=j_name,
+                        view_name=view_name,
+                        join_name=j_name,
+                        file=exp_file,
+                        line=exp_pos[0] + 1,
+                        end_line=exp_pos[2] + 1,
+                        position=exp_pos,
+                        join_location=j_loc,
+                    )
+                )
 
     return matches
 

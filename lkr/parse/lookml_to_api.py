@@ -214,7 +214,10 @@ def _build_tier_metadata(
         )
         if not isinstance(raw_tiers, list) or not raw_tiers:
             return None, None, None, None
-        nums = [float(x) for x in raw_tiers]
+        try:
+            nums = [float(x) for x in raw_tiers]
+        except ValueError:
+            return None, None, None, None
         style = (dim.style or "classic").lower()
         sql_expr = (dim.sql or f"${{TABLE}}.{dim.name_}").lstrip(" ")
 
@@ -1102,10 +1105,19 @@ def _build_turtle_looks(
     fallback_line: int,
 ) -> list[ApiLookmlModelExploreTurtleLook]:
     raw_q = exp_obj.query
-    if not raw_q or not isinstance(raw_q, dict):
+    if not raw_q:
         return []
+    queries_dict = (
+        raw_q
+        if isinstance(raw_q, dict)
+        else {
+            str(q.get("$name", f"query_{i}")): q
+            for i, q in enumerate(raw_q)
+            if isinstance(q, dict)
+        }
+    )
     out: list[ApiLookmlModelExploreTurtleLook] = []
-    for q_name, q_val in raw_q.items():
+    for q_name, q_val in queries_dict.items():
         if not isinstance(q_val, dict):
             continue
         _, _, q_file, q_line = _resolve_field_source(
