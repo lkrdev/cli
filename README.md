@@ -445,7 +445,7 @@ Looker's UI only supports connecting one default Gemini Enterprise (Discovery En
 For all flags and options, see the [lkr tools agents CLI docs](./lkr.md#lkr-tools-agents) ([publish](./lkr.md#lkr-tools-agents-publish), [list](./lkr.md#lkr-tools-agents-list), [delete](./lkr.md#lkr-tools-agents-delete)).
 
 > [!IMPORTANT]
-> Before publishing an agent, make sure **Admin > Gemini in Looker > Publish to Gemini Enterprise** is enabled on your Looker instance, and that the Looker service account has IAM permissions on the target GCP project plus a Gemini Enterprise user license in **Gemini Enterprise > Manage Users** (or "Assign licenses automatically" enabled on the app).
+> Before publishing an agent, make sure **Admin > Gemini in Looker > Publish to Gemini Enterprise** is enabled on your Looker instance, and that the Looker service account has IAM permissions (Discovery Engine Admin) on the target GCP project plus a Gemini Enterprise user license in **Gemini Enterprise > Manage Users** (or "Assign licenses automatically" enabled on the app).
 
 ### Finding your agent ID
 
