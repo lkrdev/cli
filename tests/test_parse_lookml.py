@@ -260,53 +260,9 @@ def test_parse_sql_to_lookml_table_variants_and_locations(tmp_path: Path):
         ],
     )
     assert cli_res.exit_code == 0
-    cli_alias_res = runner.invoke(
-        app,
-        [
-            "parse",
-            "sql-to-lookml",
-            "--sql",
-            sql,
-            "--lookml-file",
-            str(order_items_file),
-            "--sql-db",
-            "looker-private-demo",
-            "--sql-schema",
-            "ecomm",
-            "--lkml-db",
-            "looker-private-demo",
-            "--lkml-schema",
-            "ecomm",
-        ],
-    )
-    assert cli_alias_res.exit_code == 0
     payload = json.loads(cli_res.stdout)
     assert len(payload["queries"]) == 3
     assert payload["queries"][2]["views"][0]["fields"][0]["line"] == 3
-
-    # Also test sql-to-api alias command
-    cli_alias_res = runner.invoke(
-        app,
-        [
-            "parse",
-            "sql-to-api",
-            "--sql",
-            sql,
-            "--lookml-file",
-            str(order_items_file),
-            "--sql-db",
-            "looker-private-demo",
-            "--sql-schema",
-            "ecomm",
-            "--lkml-db",
-            "looker-private-demo",
-            "--lkml-schema",
-            "ecomm",
-        ],
-    )
-    assert cli_alias_res.exit_code == 0
-    payload_alias = json.loads(cli_alias_res.stdout)
-    assert payload_alias == payload
 
 
 def test_parse_sql_to_lookml_explores_aliases_and_field_sets():

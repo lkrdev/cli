@@ -63,8 +63,6 @@ from lkr.parse.main import (
     lookml_to_api_command,
     sql_command,
     sql_lookml_compare_command,
-    sql_to_api_command,
-    sql_to_lookml_command,
 )
 from lkr.parse.sql import (
     ColumnSpec,
@@ -166,6 +164,4 @@ __all__ = [
     "parse_sql_to_lookml",
     "sql_command",
     "sql_lookml_compare_command",
-    "sql_to_api_command",
-    "sql_to_lookml_command",
 ]
