@@ -99,3 +99,50 @@ def test_cli_parse_sql_stdout_and_file(tmp_path: Path):
     )
     assert isinstance(direct_model, SqlParseResult)
     assert direct_model.queries[0].tables[0].name == "users"
+
+
+def test_parse_sql_star_modifiers_and_cte_expansion():
+    res_bq = parse_sql(
+        sql=(
+            "SELECT * EXCEPT (secret, ssn) REPLACE (LOWER(email) AS email) FROM db.s.users; "
+            "SELECT u.* EXCEPT (secret) FROM db.s.users u;"
+        ),
+        dialect="bigquery",
+    )
+    c1 = res_bq.queries[0].columns[0]
+    assert c1.table is None
+    assert c1.column is None
+    assert c1.except_ == ["secret", "ssn"]
+    assert c1.replace == {"email": "LOWER(email)"}
+
+    c2 = res_bq.queries[1].columns[0]
+    assert c2.table == "u"
+    assert c2.column is None
+    assert c2.except_ == ["secret"]
+
+    res_sf = parse_sql(
+        sql="SELECT * EXCLUDE (secret) RENAME (email AS user_email) FROM db.s.users",
+        dialect="snowflake",
+    )
+    c3 = res_sf.queries[0].columns[0]
+    assert c3.column is None
+    assert c3.except_ == ["secret"]
+    assert c3.rename == {"email": "user_email"}
+
+    res_cte = parse_sql(
+        sql="""
+        WITH base AS (
+            SELECT id, email, secret_hash, status
+            FROM db.s.users
+            WHERE status = 'active'
+        )
+        SELECT * EXCEPT (secret_hash, status)
+        FROM base
+        """,
+        dialect="bigquery",
+    )
+    assert [(c.table, c.column) for c in res_cte.queries[0].columns] == [
+        ("base", "id"),
+        ("base", "email"),
+    ]
+
