@@ -32,6 +32,7 @@ $ lkr [OPTIONS] COMMAND [ARGS]...
 * `observability`
 * `tools`
 * `code-mode`
+* `parse`: Parse SQL and LookML into structured...
 
 ## `lkr db-template`
 
@@ -521,4 +522,108 @@ $ lkr code-mode run [OPTIONS]
 **Options**:
 
 * `--debug / --no-debug`: Debug mode  [default: no-debug]
+* `--help`: Show this message and exit.
+
+## `lkr parse`
+
+Parse SQL and LookML into structured components
+
+**Usage**:
+
+```console
+$ lkr parse [OPTIONS] COMMAND [ARGS]...
+```
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+**Commands**:
+
+* `sql`: Parse semicolon-delimited SQL queries from...
+* `lookml`: Parse LookML from --path, --file, or...
+* `sql-lookml-compare`: Compare and map SQL queries (--sql /...
+* `lookml-to-api`: Generate Looker API all_lookml_models and...
+
+### `lkr parse sql`
+
+Parse semicolon-delimited SQL queries from --sql or --file into structured JSON.
+
+**Usage**:
+
+```console
+$ lkr parse sql [OPTIONS]
+```
+
+**Options**:
+
+* `-s, --sql <str>`: Inline SQL string (semicolon-delimited)
+* `-f, --file <path>`: Path to SQL file (semicolon-delimited)
+* `-o, --output <path>`: Optional output .json file path
+* `-d, --dialect <str>`: Optional SQLGlot dialect (e.g. bigquery, snowflake)
+* `--help`: Show this message and exit.
+
+### `lkr parse lookml`
+
+Parse LookML from --path, --file, or --lookml with modelAssembly, extensions/refinements, and positions.
+
+**Usage**:
+
+```console
+$ lkr parse lookml [OPTIONS]
+```
+
+**Options**:
+
+* `-p, --path <path>`: Path to a LookML directory
+* `-f, --file <path>`: Path to a LookML file
+* `-l, --lookml <str>`: Inline LookML string
+* `-o, --output <path>`: Optional output .json file path
+* `--help`: Show this message and exit.
+
+### `lkr parse sql-lookml-compare`
+
+Compare and map SQL queries (--sql / --sql-file) to LookML views and fields (--path / --lookml-file / --lookml) with file and line numbers.
+
+**Usage**:
+
+```console
+$ lkr parse sql-lookml-compare [OPTIONS]
+```
+
+**Options**:
+
+* `-s, --sql <str>`: Inline SQL string (semicolon-delimited)
+* `--sql-file <path>`: Path to SQL file (semicolon-delimited)
+* `-p, --path <path>`: Path to a LookML directory
+* `-f, --lookml-file <path>`: Path to a LookML file
+* `-l, --lookml <str>`: Inline LookML string
+* `-d, --dialect <str>`: Optional SQLGlot dialect (e.g. bigquery, snowflake)
+* `-o, --output <path>`: Optional output .json file path
+* `--describe`: Include high-level property documentation (_doc) in output JSON
+* `--sql-db <str>`: Default database/project for unqualified SQL tables  [env var: LKR_SQL_DB]
+* `--sql-schema <str>`: Default schema/dataset for unqualified SQL tables  [env var: LKR_SQL_SCHEMA]
+* `--lkml-conn <str>`: Looker connection name override for LookML views  [env var: LKR_LKML_CONN]
+* `--lkml-db <str>`: Database/project override for LookML views  [env var: LKR_LKML_DB]
+* `--lkml-schema <str>`: Schema/dataset override for LookML views  [env var: LKR_LKML_SCHEMA]
+* `--help`: Show this message and exit.
+
+### `lkr parse lookml-to-api`
+
+Generate Looker API all_lookml_models and lookml_model_explore responses from LookML.
+
+**Usage**:
+
+```console
+$ lkr parse lookml-to-api [OPTIONS]
+```
+
+**Options**:
+
+* `-p, --path <path>`: Path to a LookML directory
+* `-f, --file <path>`: Path to a LookML file
+* `-l, --lookml <str>`: Inline LookML string
+* `-m, --model <str>`: Optional LookML model name filter
+* `-e, --explore <str>`: Optional LookML explore name filter
+* `-o, --output <path>`: Optional output .json file path
 * `--help`: Show this message and exit.

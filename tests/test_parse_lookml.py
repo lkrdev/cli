@@ -1703,5 +1703,313 @@ def test_parse_sql_to_lookml_connection_coercion(monkeypatch):
     assert res.queries[0].views[0].view_name == "foo"
 
 
+def test_parse_sql_to_lookml_native_derived_table():
+    from lkr.parse import parse_sql_to_lookml
 
+    lkml = """
+    view: orders {
+      sql_table_name: a.b.orders ;;
+      dimension: customer_id {
+        type: number
+      }
+    }
+    view: customer_order_summary {
+      derived_table: {
+        explore_source: orders {
+          column: user_id {
+            field: orders.customer_id
+          }
+        }
+      }
+      dimension: ordering_user_id {
+        type: number
+        primary_key: yes
+        sql: ${TABLE}.user_id ;;
+      }
+    }
+    """
+    res = parse_sql_to_lookml(sql="SELECT customer_id FROM a.b.orders", lookml=lkml)
+    views_by_name = {v.view_name: v for v in res.queries[0].views}
+    assert "orders" in views_by_name
+    assert "customer_order_summary" in views_by_name
+    ndt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    assert "ordering_user_id" in ndt_fields
+    assert ndt_fields["ordering_user_id"].via == ["orders.customer_id"]
+
+
+def test_parse_sql_to_lookml_sql_derived_table():
+    from lkr.parse import parse_sql_to_lookml
+
+    lkml = """
+    view: orders {
+      sql_table_name: a.b.orders ;;
+      dimension: customer_id {
+        type: number
+      }
+    }
+    view: customer_order_summary {
+      derived_table: {
+        sql: SELECT customer_id as user_id FROM ${orders.SQL_TABLE_NAME} ;;
+      }
+      dimension: ordering_user_id {
+        type: number
+        primary_key: yes
+        sql: ${TABLE}.user_id ;;
+      }
+    }
+    """
+    res = parse_sql_to_lookml(sql="SELECT customer_id FROM a.b.orders", lookml=lkml)
+    views_by_name = {v.view_name: v for v in res.queries[0].views}
+    assert "orders" in views_by_name
+    assert "customer_order_summary" in views_by_name
+    dt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    assert "ordering_user_id" in dt_fields
+    assert dt_fields["ordering_user_id"].via == ["orders.customer_id"]
+
+
+def test_parse_sql_to_lookml_ndt_with_derived_column():
+    from lkr.parse import parse_sql_to_lookml
+
+    lkml = """
+    view: orders {
+      sql_table_name: a.b.orders ;;
+      dimension: customer_id { type: number }
+      dimension: account_id { type: number }
+    }
+    view: customer_order_summary {
+      derived_table: {
+        explore_source: orders {
+          column: user_id {
+            field: orders.customer_id
+          }
+          column: account_id {
+            field: orders.account_id
+          }
+          derived_column: account_key { sql: CONCAT(STRING(account_id),'::',STRING(account_id)) ;; }
+        }
+      }
+      dimension: ordering_user_id {
+        type: number
+        primary_key: yes
+        sql: ${TABLE}.user_id ;;
+      }
+    }
+    """
+    res = parse_sql_to_lookml(sql="SELECT customer_id FROM a.b.orders", lookml=lkml)
+    views_by_name = {v.view_name: v for v in res.queries[0].views}
+    assert "orders" in views_by_name
+    assert "customer_order_summary" in views_by_name
+    ndt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    assert "ordering_user_id" in ndt_fields
+
+
+def test_parse_sql_to_lookml_ndt_chained_derived_column():
+    from lkr.parse import parse_sql_to_lookml
+
+    lkml = """
+    view: orders {
+      sql_table_name: a.b.orders ;;
+      dimension: customer_id { type: number }
+    }
+    view: customer_order_summary {
+      derived_table: {
+        explore_source: orders {
+          column: user_id {
+            field: orders.customer_id
+          }
+          derived_column: base_key {
+            sql: STRING(user_id) ;;
+          }
+          derived_column: composite_key {
+            sql: CONCAT(base_key, '::1') ;;
+          }
+        }
+      }
+      dimension: composite_user_key {
+        type: string
+        sql: ${TABLE}.composite_key ;;
+      }
+    }
+    """
+    res = parse_sql_to_lookml(sql="SELECT customer_id FROM a.b.orders", lookml=lkml)
+    views_by_name = {v.view_name: v for v in res.queries[0].views}
+    assert "orders" in views_by_name
+    assert "customer_order_summary" in views_by_name
+    ndt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    assert "composite_user_key" in ndt_fields
+    assert ndt_fields["composite_user_key"].via == ["orders.customer_id"]
+
+
+def test_parse_sql_to_lookml_dt_cte_column_alias():
+    from lkr.parse import parse_sql_to_lookml
+
+    lkml = """
+    view: orders {
+      sql_table_name: a.b.orders ;;
+      dimension: customer_id { type: number }
+    }
+    view: customer_order_summary {
+      derived_table: {
+        sql:
+          WITH base_orders AS (
+            SELECT customer_id AS cid
+            FROM ${orders.SQL_TABLE_NAME}
+          )
+          SELECT cid AS user_id
+          FROM base_orders ;;
+      }
+      dimension: ordering_user_id {
+        type: number
+        sql: ${TABLE}.user_id ;;
+      }
+    }
+    """
+    res = parse_sql_to_lookml(sql="SELECT customer_id FROM a.b.orders", lookml=lkml)
+    views_by_name = {v.view_name: v for v in res.queries[0].views}
+    assert "customer_order_summary" in views_by_name
+    dt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    assert "ordering_user_id" in dt_fields
+
+
+def test_parse_sql_to_lookml_dt_subquery_column_alias():
+    from lkr.parse import parse_sql_to_lookml
+
+    lkml = """
+    view: orders {
+      sql_table_name: a.b.orders ;;
+      dimension: customer_id { type: number }
+    }
+    view: customer_order_summary {
+      derived_table: {
+        sql:
+          SELECT sub.cid AS user_id
+          FROM (
+            SELECT customer_id AS cid
+            FROM ${orders.SQL_TABLE_NAME}
+          ) sub ;;
+      }
+      dimension: ordering_user_id {
+        type: number
+        sql: ${TABLE}.user_id ;;
+      }
+    }
+    """
+    res = parse_sql_to_lookml(sql="SELECT customer_id FROM a.b.orders", lookml=lkml)
+    views_by_name = {v.view_name: v for v in res.queries[0].views}
+    assert "customer_order_summary" in views_by_name
+    dt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    assert "ordering_user_id" in dt_fields
+
+
+def test_parse_sql_to_lookml_dt_union_all_second_branch():
+    from lkr.parse import parse_sql_to_lookml
+
+    lkml = """
+    view: orders {
+      sql_table_name: a.b.orders ;;
+      dimension: customer_id { type: number }
+    }
+    view: archived_orders {
+      sql_table_name: a.b.archived_orders ;;
+      dimension: archived_customer_id { type: number }
+    }
+    view: all_customer_orders {
+      derived_table: {
+        sql:
+          SELECT customer_id AS user_id FROM ${orders.SQL_TABLE_NAME}
+          UNION ALL
+          SELECT archived_customer_id AS user_id FROM ${archived_orders.SQL_TABLE_NAME} ;;
+      }
+      dimension: ordering_user_id {
+        type: number
+        sql: ${TABLE}.user_id ;;
+      }
+    }
+    """
+    res = parse_sql_to_lookml(
+        sql="SELECT archived_customer_id FROM a.b.archived_orders", lookml=lkml
+    )
+    views_by_name = {v.view_name: v for v in res.queries[0].views}
+    assert "all_customer_orders" in views_by_name
+    dt_fields = {f.field_name: f for f in views_by_name["all_customer_orders"].fields}
+    assert "ordering_user_id" in dt_fields
+
+
+def test_parse_sql_to_lookml_dt_raw_table_without_sql_table_name_macro():
+    from lkr.parse import parse_sql_to_lookml
+
+    lkml = """
+    view: customer_order_summary {
+      derived_table: {
+        sql: SELECT customer_id AS user_id FROM a.b.orders ;;
+      }
+      dimension: ordering_user_id {
+        type: number
+        sql: ${TABLE}.user_id ;;
+      }
+    }
+    """
+    res = parse_sql_to_lookml(sql="SELECT customer_id FROM a.b.orders", lookml=lkml)
+    views_by_name = {v.view_name: v for v in res.queries[0].views}
+    assert "customer_order_summary" in views_by_name
+    dt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    assert "ordering_user_id" in dt_fields
+
+
+def test_parse_sql_to_lookml_dt_chained_cte_raw_table():
+    from lkr.parse import parse_sql_to_lookml
+
+    lkml = """
+    view: customer_order_summary {
+      derived_table: {
+        sql:
+          WITH raw_orders AS (
+            SELECT customer_id AS cid
+            FROM a.b.orders
+          ),
+          deduped_orders AS (
+            SELECT DISTINCT cid AS unique_cid
+            FROM raw_orders
+          )
+          SELECT unique_cid AS user_id
+          FROM deduped_orders ;;
+      }
+      dimension: ordering_user_id {
+        type: number
+        sql: ${TABLE}.user_id ;;
+      }
+    }
+    """
+    res = parse_sql_to_lookml(sql="SELECT customer_id FROM a.b.orders", lookml=lkml)
+    views_by_name = {v.view_name: v for v in res.queries[0].views}
+    assert "customer_order_summary" in views_by_name
+    dt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    assert "ordering_user_id" in dt_fields
+
+
+def test_parse_sql_to_lookml_dt_join_subquery_raw_table():
+    from lkr.parse import parse_sql_to_lookml
+
+    lkml = """
+    view: customer_order_summary {
+      derived_table: {
+        sql:
+          SELECT o.cid AS user_id
+          FROM a.b.users u
+          JOIN (
+            SELECT customer_id AS cid
+            FROM a.b.orders
+          ) o ON u.id = o.cid ;;
+      }
+      dimension: ordering_user_id {
+        type: number
+        sql: ${TABLE}.user_id ;;
+      }
+    }
+    """
+    res = parse_sql_to_lookml(sql="SELECT customer_id FROM a.b.orders", lookml=lkml)
+    views_by_name = {v.view_name: v for v in res.queries[0].views}
+    assert "customer_order_summary" in views_by_name
+    dt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    assert "ordering_user_id" in dt_fields
 

@@ -388,9 +388,7 @@ class LookmlDerivedTable(_LookmlBase):
     datagroup_trigger: str | None = None
     distribution: str | None = None
     distribution_style: str | None = None
-    explore_source: (
-        str | dict[str, LookmlExploreSource | Any] | LookmlExploreSource | None
-    ) = None
+    explore_source: dict[str, LookmlExploreSource] | LookmlExploreSource | None = None
     increment_key: str | None = None
     increment_offset: int | None = None
     indexes: list[str] | None = None

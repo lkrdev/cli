@@ -21,9 +21,11 @@ from lkr.parse.dag import (
     _resolve_explore_base,
 )
 from lkr.parse.lookml import (
+    LookmlDerivedTable,
     LookmlDimension,
     LookmlDimensionGroup,
     LookmlExplore,
+    LookmlExploreSource,
     LookmlFilter,
     LookmlMeasure,
     LookmlModel,
@@ -43,6 +45,79 @@ from lkr.parse.types import (
     SqlLookmlCompareResult,
     SqlToLookmlResult,
 )
+
+_SQL_TABLE_NAME_RE = re.compile(
+    r"\$\{\s*([a-zA-Z0-9_]+)\.SQL_TABLE_NAME\s*\}", re.IGNORECASE
+)
+
+_DtSource = str | TableRef
+_DtColMap = dict[str, list[tuple[_DtSource, str]]]
+
+
+def _extract_dt_lineage(
+    node: exp.Expr | None,
+    cte_env: dict[str, _DtColMap] | None = None,
+) -> _DtColMap:
+    if node is None:
+        return {}
+    env = dict(cte_env) if cte_env else {}
+    if with_ := node.args.get("with_"):
+        for cte in with_.expressions:
+            if cte.alias_or_name:
+                env[cte.alias_or_name.lower()] = _extract_dt_lineage(cte.this, env)
+    if isinstance(node, (exp.Subquery, exp.Paren)):
+        return _extract_dt_lineage(node.this, env)
+    if isinstance(node, exp.SetOperation):
+        out = _extract_dt_lineage(node.this, env)
+        for k, v in _extract_dt_lineage(node.expression, env).items():
+            out.setdefault(k, []).extend(v)
+        return out
+    if not isinstance(node, exp.Select):
+        return {}
+
+    sources: dict[str, _DtSource | _DtColMap] = {}
+    from_clause = node.args.get("from") or node.args.get("from_")
+    src_items = [
+        s.this
+        for s in (from_clause, *(node.args.get("joins") or []))
+        if s and s.this is not None
+    ]
+    for src in src_items:
+        if isinstance(src, exp.Table) and src.name:
+            t_low = src.name.lower()
+            alias = (src.alias or src.name).lower()
+            if t_low in env:
+                sources[alias] = env[t_low]
+            elif t_low.startswith("__lkml_tbl_"):
+                sources[alias] = t_low[11:]
+            else:
+                sources[alias] = _split_table_ref(src)
+        elif isinstance(src, exp.Subquery):
+            sources[(src.alias or f"__sub_{len(sources)}").lower()] = (
+                _extract_dt_lineage(src.this, env)
+            )
+
+    out_map: _DtColMap = {}
+    for proj in node.selects:
+        out_col = proj.alias_or_name.lower()
+        if not out_col:
+            continue
+        for col_expr in proj.find_all(exp.Column):
+            if not col_expr.name:
+                continue
+            c_low = col_expr.name.lower()
+            t_qual = (col_expr.table or "").lower()
+            if t_qual:
+                cand_sources = [sources[t_qual]] if t_qual in sources else []
+            else:
+                cand_sources = list(sources.values())
+            for s in cand_sources:
+                if isinstance(s, dict):
+                    if c_low in s:
+                        out_map.setdefault(out_col, []).extend(s[c_low])
+                else:
+                    out_map.setdefault(out_col, []).append((s, c_low))
+    return out_map
 
 __all__ = [
     "SQL_TO_LOOKML_DOC",
@@ -85,7 +160,7 @@ def _parse_lookml_table_name(
     return TableRef(catalog=cat, db=db, name=name or view_name)
 
 
-# ponytail: in-memory lru_cache for connection metadata per process; no local file cache
+# in-memory lru_cache for connection metadata per process; no local file cache
 @lru_cache(maxsize=128)
 def _fetch_connection_metadata_sandbox(conn_name: str) -> dict[str, Any] | None:
     try:
@@ -109,63 +184,22 @@ def _fetch_connection_metadata_sandbox(conn_name: str) -> dict[str, Any] | None:
     return None
 
 
-def _coerce_sql_table(
-    tbl: TableRef, sql_db: str | None, sql_schema: str | None
+def _coerce_table(
+    tbl: TableRef, db: str | None, schema: str | None, err_msg: str
 ) -> TableRef:
-    # 3-part: catalog.db.name (already fully qualified)
     if tbl.catalog and tbl.db:
         return tbl
-    # 2-part: db.name (schema.table)
     if tbl.db and not tbl.catalog:
-        if sql_db:
-            return tbl.model_copy(update={"catalog": sql_db})
-        return tbl
-    # 1-part: name only (unqualified)
+        return tbl.model_copy(update={"catalog": db}) if db else tbl
     if not tbl.db and not tbl.catalog:
-        if not sql_schema and not sql_db:
-            raise ValueError(
-                f"SQL table '{tbl.name}' is unqualified. Specify --sql-schema and/or --sql-db "
-                "(or LKR_SQL_SCHEMA, LKR_SQL_DB) to qualify SQL tables."
-            )
-        eff_db = sql_schema or sql_db
-        eff_cat = sql_db if sql_schema else None
-        return tbl.model_copy(update={"db": eff_db, "catalog": eff_cat})
-    if tbl.catalog and not tbl.db and sql_schema:
-        return tbl.model_copy(update={"db": sql_schema})
+        if not schema and not db:
+            raise ValueError(err_msg)
+        return tbl.model_copy(
+            update={"db": schema or db, "catalog": db if schema else None}
+        )
+    if tbl.catalog and not tbl.db and schema:
+        return tbl.model_copy(update={"db": schema})
     return tbl
-
-
-def _coerce_lookml_table(
-    raw_tbl: TableRef,
-    view_name: str,
-    model_name: str | None,
-    eff_conn: str | None,
-    eff_db: str | None,
-    eff_schema: str | None,
-) -> TableRef:
-    # 3-part: catalog.db.name (already fully qualified)
-    if raw_tbl.catalog and raw_tbl.db:
-        return raw_tbl
-    # 2-part: db.name
-    if raw_tbl.db and not raw_tbl.catalog:
-        if eff_db:
-            return raw_tbl.model_copy(update={"catalog": eff_db})
-        return raw_tbl
-    # 1-part: name only
-    if not raw_tbl.db and not raw_tbl.catalog:
-        if not eff_schema and not eff_db:
-            conn_info = f"connection '{eff_conn}'" if eff_conn else "connection"
-            raise ValueError(
-                f"LookML view '{view_name}' table '{raw_tbl.name}' cannot be qualified. "
-                f"Specify --lkml-schema and/or --lkml-db (or LKR_LKML_SCHEMA, LKR_LKML_DB) "
-                f"or ensure Looker {conn_info} metadata is accessible."
-            )
-        eff_d = eff_schema or eff_db
-        eff_c = eff_db if eff_schema else None
-        return raw_tbl.model_copy(update={"db": eff_d, "catalog": eff_c})
-    if raw_tbl.catalog and not raw_tbl.db and eff_schema:
-        return raw_tbl.model_copy(update={"db": eff_schema})
-    return raw_tbl
 
 
 def _tables_match(sql_tbl: TableRef, view_tbl: TableRef) -> bool:
@@ -688,59 +722,150 @@ def _match_model_views(
     direct_views: dict[str, str] = {}
     view_order: list[str] = []
 
+    ndt_cols_by_view: dict[str, list[tuple[str, str, str]]] = {}
+    dt_raw_cols_by_view: dict[str, list[tuple[str, TableRef, str]]] = {}
+    for vname, vobj in model_views.items():
+        dt = vobj.derived_table
+        if not isinstance(dt, LookmlDerivedTable):
+            continue
+        es_raw = dt.explore_source
+        es_items = (
+            list(es_raw.items())
+            if isinstance(es_raw, dict)
+            else [(es_raw.name_ or "", es_raw)]
+            if isinstance(es_raw, LookmlExploreSource)
+            else []
+        )
+        for es_name, es in es_items:
+            col_map: dict[str, set[tuple[str, str]]] = {}
+            for col_name, col_obj in (es.column or {}).items():
+                raw_ref = (
+                    col_obj.field.strip()
+                    if col_obj and col_obj.field
+                    else col_name.strip()
+                )
+                pfx, fld = (
+                    raw_ref.split(".", 1) if "." in raw_ref else (es_name, raw_ref)
+                )
+                col_map.setdefault(col_name.lower(), set()).add(
+                    (pfx.strip().lower(), fld.strip().lower())
+                )
+            dcols = es.derived_column or {}
+            changed = bool(dcols)
+            while changed:
+                changed = False
+                for dc_name, dc_obj in dcols.items():
+                    if not (dc_obj and dc_obj.sql):
+                        continue
+                    dc_low = dc_name.lower()
+                    new_pairs = {
+                        p
+                        for c_low, pairs in col_map.items()
+                        if re.search(
+                            rf"\b{re.escape(c_low)}\b", dc_obj.sql, re.IGNORECASE
+                        )
+                        for p in pairs
+                    } - col_map.get(dc_low, set())
+                    if new_pairs:
+                        col_map.setdefault(dc_low, set()).update(new_pairs)
+                        changed = True
+            for c_low, pairs in col_map.items():
+                ndt_cols_by_view.setdefault(vname, []).extend(
+                    (c_low, *p) for p in pairs
+                )
+        if dt.sql:
+            clean_dt_sql = _SQL_TABLE_NAME_RE.sub(
+                r"__lkml_tbl_\1", dt.sql.strip().rstrip(";").strip()
+            )
+            dt_dialect = "bigquery" if "`" in clean_dt_sql else None
+            try:
+                for expr in sqlglot.parse(clean_dt_sql, read=dt_dialect):
+                    for out_col, origins in _extract_dt_lineage(expr).items():
+                        for src_origin, base_col in origins:
+                            if isinstance(src_origin, TableRef):
+                                dt_raw_cols_by_view.setdefault(vname, []).append(
+                                    (out_col, src_origin, base_col)
+                                )
+                            else:
+                                ndt_cols_by_view.setdefault(vname, []).append(
+                                    (out_col, src_origin, base_col)
+                                )
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+    conn_info = f"connection '{eff_conn}'" if eff_conn else "connection"
     for sql_tbl in pq.tables:
         raw_table_str = ".".join(
             p for p in (sql_tbl.catalog, sql_tbl.db, sql_tbl.name) if p
         )
         for view_name, view_obj in model_views.items():
-            if getattr(view_obj, "derived_table", None) and not view_obj.sql_table_name:
-                continue
-            raw_view_tbl = _parse_lookml_table_name(view_obj.sql_table_name, view_name)
-            if raw_view_tbl.name.lower() != sql_tbl.name.lower():
-                continue
-            view_tbl = _coerce_lookml_table(
-                raw_view_tbl,
-                view_name=view_name,
-                model_name=model_name,
-                eff_conn=eff_conn,
-                eff_db=eff_db,
-                eff_schema=eff_schema,
-            )
-            if not _tables_match(sql_tbl, view_tbl):
-                continue
-            if view_name not in direct_views:
-                direct_views[view_name] = raw_table_str
-                view_order.append(view_name)
-
             self_names = self_names_by_view[view_name]
-            for tbl_qual, col_name in query_cols:
-                if tbl_qual and tbl_qual.lower() not in {
-                    sql_tbl.name.lower(),
-                    (sql_tbl.alias or "").lower(),
-                    view_name.lower(),
-                }:
+            cand_sources: list[tuple[TableRef, tuple[str, str] | None]] = [
+                (raw_dt_tbl, (out_col, dt_src_col))
+                for out_col, raw_dt_tbl, dt_src_col in dt_raw_cols_by_view.get(
+                    view_name, ()
+                )
+            ]
+            if not getattr(view_obj, "derived_table", None) or view_obj.sql_table_name:
+                cand_sources.append(
+                    (_parse_lookml_table_name(view_obj.sql_table_name, view_name), None)
+                )
+            for raw_cand_tbl, dt_col_pair in cand_sources:
+                if raw_cand_tbl.name.lower() != sql_tbl.name.lower():
                     continue
-                for ftype, fname, fobj in _iter_view_fields(view_obj):
-                    tfs = (
-                        fobj.timeframes
-                        if isinstance(fobj, LookmlDimensionGroup)
-                        else None
-                    )
-                    if not _field_matches_column(
-                        col_name, fname, fobj.sql, ftype, tfs
-                    ):
+                view_tbl = _coerce_table(
+                    raw_cand_tbl,
+                    eff_db,
+                    eff_schema,
+                    f"LookML view '{view_name}' table '{raw_cand_tbl.name}' cannot be qualified. "
+                    f"Specify --lkml-schema and/or --lkml-db (or LKR_LKML_SCHEMA, LKR_LKML_DB) "
+                    f"or ensure Looker {conn_info} metadata is accessible.",
+                )
+                if not _tables_match(sql_tbl, view_tbl):
+                    continue
+                if dt_col_pair is None and view_name not in direct_views:
+                    direct_views[view_name] = raw_table_str
+                    view_order.append(view_name)
+                for tbl_qual, col_name in query_cols:
+                    if dt_col_pair and col_name.lower() != dt_col_pair[1]:
                         continue
-                    key = (view_name, ftype, fname)
-                    if key not in matched_fields:
-                        ext_aliases = {
-                            r.split(".", 1)[0].lower()
-                            for r in _extract_lookml_refs(fobj.sql)
-                            if "." in r and r.split(".", 1)[0].lower() not in self_names
-                        }
-                        matched_fields[key] = (raw_table_str, col_name, [], ext_aliases)
-                        queue.append(key)
+                    if tbl_qual and tbl_qual.lower() not in {
+                        sql_tbl.name.lower(),
+                        (sql_tbl.alias or "").lower(),
+                        view_name.lower(),
+                    }:
+                        continue
+                    target_col = dt_col_pair[0] if dt_col_pair else col_name
+                    for ftype, fname, fobj in _iter_view_fields(view_obj):
+                        tfs = (
+                            fobj.timeframes
+                            if isinstance(fobj, LookmlDimensionGroup)
+                            else None
+                        )
+                        if not _field_matches_column(
+                            target_col, fname, fobj.sql, ftype, tfs
+                        ):
+                            continue
+                        key = (view_name, ftype, fname)
+                        if key not in matched_fields:
+                            if view_name not in direct_views:
+                                direct_views[view_name] = raw_table_str
+                                view_order.append(view_name)
+                            ext_aliases = {
+                                r.split(".", 1)[0].lower()
+                                for r in _extract_lookml_refs(fobj.sql)
+                                if "." in r
+                                and r.split(".", 1)[0].lower() not in self_names
+                            }
+                            matched_fields[key] = (
+                                raw_table_str,
+                                col_name,
+                                [],
+                                ext_aliases,
+                            )
+                            queue.append(key)
 
-    # Transitive forward ${...} propagation
+    # Transitive forward ${...} and derived_table propagation
     while queue:
         src_view, src_ftype, src_fname = queue.popleft()
         src_tbl, src_col, src_via, src_ext = matched_fields[
@@ -754,29 +879,45 @@ def _match_model_views(
 
         for cand_view, cand_obj in model_views.items():
             cand_self = self_names_by_view[cand_view]
+            matched_ndt_cols = [
+                ndt_col
+                for ndt_col, pfx, fld in ndt_cols_by_view.get(cand_view, ())
+                if (fld in src_cands or fld == src_col.lower()) and pfx in src_aliases
+            ]
             for c_ftype, c_fname, c_fobj in _iter_view_fields(cand_obj):
                 ckey = (cand_view, c_ftype, c_fname)
-                if ckey in matched_fields or c_fobj._sql_defaulted:
+                if ckey in matched_fields:
                     continue
+                tfs = (
+                    c_fobj.timeframes
+                    if isinstance(c_fobj, LookmlDimensionGroup)
+                    else None
+                )
+                hits_ndt = any(
+                    _field_matches_column(ndt_col, c_fname, c_fobj.sql, c_ftype, tfs)
+                    for ndt_col in matched_ndt_cols
+                )
                 refs = _extract_lookml_refs(c_fobj.sql)
-                if not refs:
-                    continue
-                hits_src = any(
-                    (cand_view == src_view and r.lower() in src_cands)
-                    if "." not in r
-                    else (
-                        r.split(".", 1)[1].lower() in src_cands
-                        and (
-                            r.split(".", 1)[0].lower() in src_aliases
-                            or (
-                                cand_view == src_view
-                                and r.split(".", 1)[0].lower() in cand_self
+                hits_ref = (
+                    not c_fobj._sql_defaulted
+                    and bool(refs)
+                    and any(
+                        (cand_view == src_view and r.lower() in src_cands)
+                        if "." not in r
+                        else (
+                            r.split(".", 1)[1].lower() in src_cands
+                            and (
+                                r.split(".", 1)[0].lower() in src_aliases
+                                or (
+                                    cand_view == src_view
+                                    and r.split(".", 1)[0].lower() in cand_self
+                                )
                             )
                         )
+                        for r in refs
                     )
-                    for r in refs
                 )
-                if hits_src:
+                if hits_ndt or hits_ref:
                     own_ext = {
                         r.split(".", 1)[0].lower()
                         for r in refs
@@ -786,7 +927,7 @@ def _match_model_views(
                         src_tbl,
                         src_col,
                         [*src_via, f"{src_view}.{src_fname}"],
-                        src_ext | own_ext,
+                        own_ext if hits_ndt else (src_ext | own_ext),
                     )
                     queue.append(ckey)
                     if cand_view not in direct_views and cand_view not in view_order:
@@ -932,7 +1073,13 @@ def parse_sql_to_lookml(
     mappings: list[QueryLookmlMapping] = []
     for raw_pq in sql_res.queries:
         coerced_tables = [
-            _coerce_sql_table(tbl, sql_db=sql_db, sql_schema=sql_schema)
+            _coerce_table(
+                tbl,
+                sql_db,
+                sql_schema,
+                f"SQL table '{tbl.name}' is unqualified. Specify --sql-schema and/or --sql-db "
+                "(or LKR_SQL_SCHEMA, LKR_SQL_DB) to qualify SQL tables.",
+            )
             for tbl in raw_pq.tables
         ]
         pq = raw_pq.model_copy(update={"tables": coerced_tables})
