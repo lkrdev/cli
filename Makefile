@@ -1,7 +1,7 @@
 .PHONY: docs test-deps codemode-test codemode-start schema-rs test-rs coverage-py coverage-rs coverage
 
 docs:
-	uv run typer lkr/main.py utils docs --output lkr.md
+	uv run --extra all typer lkr/main.py utils docs --output lkr.md
 
 test-deps:
 	python tests/test_dependency_resolution.py 
@@ -17,7 +17,7 @@ test-rs:
 	cargo test --no-default-features --manifest-path lkr/schema/rust/Cargo.toml
 
 coverage-py:
-	uv run pytest tests/test_schema.py --cov=lkr.schema --cov=scripts.schema --cov-report=term-missing --cov-report=xml:coverage.xml
+	uv run --extra all pytest tests/test_schema.py --cov=lkr.schema --cov=scripts.schema --cov-report=term-missing --cov-report=xml:coverage.xml
 
 coverage-rs:
 	RUSTFLAGS="-C instrument-coverage" LLVM_PROFILE_FILE="target/cov-%p-%m.profraw" cargo test --no-default-features --manifest-path lkr/schema/rust/Cargo.toml

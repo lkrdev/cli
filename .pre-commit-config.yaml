@@ -6,6 +6,11 @@ repos:
         args: ["--default-index", "https://pypi.org/simple", "--no-config"]
   - repo: local
     hooks:
+      - id: uv-lock-index
+        name: check uv.lock index
+        entry: bash -c 'if grep -Fq "airlock-proxy.uplink" uv.lock; then echo "uv.lock needs default index, not proprietary"; exit 1; fi'
+        language: system
+        pass_filenames: false
       - id: docs
         name: generate cli docs
         entry: bash -c "make docs && git add lkr.md"
@@ -13,12 +18,12 @@ repos:
         pass_filenames: false
       - id: ruff-check
         name: ruff check
-        entry: uv run ruff check .
+        entry: uv run --extra all ruff check .
         language: system
         pass_filenames: false
       - id: ty-check
         name: ty check
-        entry: uv run ty check
+        entry: uv run --extra all ty check
         language: system
         pass_filenames: false
       - id: test-and-coverage
