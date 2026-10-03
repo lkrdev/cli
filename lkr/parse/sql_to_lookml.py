@@ -57,7 +57,8 @@ _SQL_TABLE_NAME_RE = re.compile(
     r"\$\{\s*([a-zA-Z0-9_]+)\.SQL_TABLE_NAME\s*\}", re.IGNORECASE
 )
 _TABLE_COL_RE = re.compile(
-    r"\$\{TABLE\}\s*\.\s*[`\"'\[]?([a-zA-Z0-9_]+)[`\"'\]]?", re.IGNORECASE
+    r"\$\{TABLE\}\s*\.\s*(?:[`\"'\[]([^`\"'\]]+)[`\"'\]]|([a-zA-Z0-9_]+))",
+    re.IGNORECASE,
 )
 
 _DtSource = str | TableRef
@@ -402,6 +403,11 @@ def _extract_query_columns(
     except Exception:  # noqa: BLE001, S110
         pass
 
+    if not result:
+        for c in parsed_query.columns:
+            if c.column:
+                _add(c.table, c.column)
+
     return result
 
 
@@ -438,7 +444,7 @@ def _extract_view_columns(view_obj: LookmlView) -> dict[str, str]:
             if s
         ]
         found = [
-            m.group(1).lower()
+            (m.group(1) or m.group(2)).lower()
             for s in sql_texts
             for m in _TABLE_COL_RE.finditer(s)
         ]
