@@ -107,9 +107,10 @@ def _extract_dt_lineage(
                 continue
             c_low = col_expr.name.lower()
             t_qual = (col_expr.table or "").lower()
-            cand_sources = (
-                [sources[t_qual]] if t_qual in sources else list(sources.values())
-            )
+            if t_qual:
+                cand_sources = [sources[t_qual]] if t_qual in sources else []
+            else:
+                cand_sources = list(sources.values())
             for s in cand_sources:
                 if isinstance(s, dict):
                     if c_low in s:
@@ -776,8 +777,9 @@ def _match_model_views(
             clean_dt_sql = _SQL_TABLE_NAME_RE.sub(
                 r"__lkml_tbl_\1", dt.sql.strip().rstrip(";").strip()
             )
+            dt_dialect = "bigquery" if "`" in clean_dt_sql else None
             try:
-                for expr in sqlglot.parse(clean_dt_sql):
+                for expr in sqlglot.parse(clean_dt_sql, read=dt_dialect):
                     for out_col, origins in _extract_dt_lineage(expr).items():
                         for src_origin, base_col in origins:
                             if isinstance(src_origin, TableRef):
