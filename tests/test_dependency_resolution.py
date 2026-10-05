@@ -207,7 +207,10 @@ def test_user_attribute_updater_base_deps_only(tmp_path):
     test_script = temp_dir / FILENAME
     test_script.write_text(
         """
+from typer.testing import CliRunner
+from lkr.main import app
 from lkr.tools.classes import UserAttributeUpdater
+assert CliRunner().invoke(app, ["auth", "--help"]).exit_code == 0
 updater = UserAttributeUpdater(user_attribute='test', value='test', update_type='default')
 print(updater.model_dump_json())
 """

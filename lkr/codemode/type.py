@@ -10,6 +10,33 @@ _swagger_data = None
 _ext_definitions_cache = None
 
 
+def to_primitive(obj):
+    seen = set()
+
+    def _to_primitive(o):
+        if isinstance(o, (str, int, float, bool, type(None))):
+            return o
+
+        obj_id = id(o)
+        if obj_id in seen:
+            return f"<Circular reference to {type(o).__name__}>"
+        seen.add(obj_id)
+
+        try:
+            if isinstance(o, list):
+                return [_to_primitive(item) for item in o]
+            if isinstance(o, dict):
+                return {k: _to_primitive(v) for k, v in o.items()}
+            try:
+                return _to_primitive(vars(o))
+            except Exception:  # noqa: BLE001
+                return str(o)
+        finally:
+            seen.remove(obj_id)
+
+    return _to_primitive(obj)
+
+
 def _get_swagger_data():
     global _swagger_data
     if _swagger_data is not None:
