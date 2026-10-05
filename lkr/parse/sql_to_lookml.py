@@ -38,6 +38,7 @@ from lkr.parse.sql import (
     ParsedQuery,
     TableRef,
     _apply_default_db_schema,
+    _has_projection_star,
     _optimize_stars,
     _split_table_ref,
     parse_sql,
@@ -180,13 +181,21 @@ def _parse_lookml_table_name(
 @lru_cache(maxsize=128)
 def _fetch_connection_metadata_sandbox(conn_name: str) -> dict[str, Any] | None:
     try:
+        import click
+
         from lkr.codemode.main import run_python_code
 
+        click_ctx = click.get_current_context(silent=True)
+        ctx_lkr = (
+            click_ctx.obj.get("ctx_lkr")
+            if click_ctx and isinstance(click_ctx.obj, dict)
+            else None
+        )
         code = (
             f"c = connection({json.dumps(conn_name)})\n"
             "return {'database': c.get('database'), 'schema': c.get('schema'), 'dialect_name': c.get('dialect_name')}"
         )
-        res_str = run_python_code(code)
+        res_str = run_python_code(code, ctx_lkr=ctx_lkr)
         if not res_str:
             return None
         data = json.loads(res_str)
@@ -737,9 +746,17 @@ def _match_model_views(
     sql_schema: str | None = None,
 ) -> list[LookmlViewMatch]:
     eff_conn = lkml_conn or model_obj.connection
-    meta = _fetch_connection_metadata_sandbox(eff_conn) if eff_conn else None
-    eff_db = lkml_db or (meta.get("database") if meta else None)
-    eff_schema = lkml_schema or (meta.get("schema") if meta else None)
+    eff_db, eff_schema = lkml_db, lkml_schema
+    meta_fetched = bool(eff_db and eff_schema) or not eff_conn
+
+    def _coerce_lkml_table(tbl: TableRef, err_msg: str) -> TableRef:
+        nonlocal eff_db, eff_schema, meta_fetched
+        if (not tbl.catalog or not tbl.db) and not meta_fetched:
+            meta_fetched = True
+            meta = _fetch_connection_metadata_sandbox(eff_conn) if eff_conn else None
+            eff_db = eff_db or (meta.get("database") if meta else None)
+            eff_schema = eff_schema or (meta.get("schema") if meta else None)
+        return _coerce_table(tbl, eff_db, eff_schema, err_msg)
 
     model_views: dict[str, LookmlView] = {}
     for k, v in (model_obj.view or {}).items():
@@ -789,27 +806,15 @@ def _match_model_views(
     view_cols_by_name = {
         vn: _extract_view_columns(vo) for vn, vo in model_views.items()
     }
-    dt_schema: dict[str, dict[str, dict[str, dict[str, str]]]] = {}
-    for vn, vo in model_views.items():
-        v_cols = view_cols_by_name.get(vn, {})
-        if not v_cols:
-            continue
-        dt_schema.setdefault("", {}).setdefault("", {})[f"__lkml_tbl_{vn.lower()}"] = dict(
-            v_cols
-        )
-        if not getattr(vo, "derived_table", None) or vo.sql_table_name:
-            try:
-                vt = _coerce_table(
-                    _parse_lookml_table_name(vo.sql_table_name, vn),
-                    eff_db,
-                    eff_schema,
-                    "",
-                )
-                dt_schema.setdefault((vt.catalog or "").lower(), {}).setdefault(
-                    (vt.db or "").lower(), {}
-                ).setdefault(vt.name.lower(), {}).update(v_cols)
-            except ValueError:
-                pass
+    dt_schema: dict[str, dict[str, dict[str, dict[str, str]]]] = {
+        "": {
+            "": {
+                f"__lkml_tbl_{vn.lower()}": dict(cols)
+                for vn, cols in view_cols_by_name.items()
+                if cols
+            }
+        }
+    }
 
     ndt_cols_by_view: dict[str, list[tuple[str, str, str]]] = {}
     dt_raw_cols_by_view: dict[str, list[tuple[str, TableRef, str]]] = {}
@@ -862,7 +867,7 @@ def _match_model_views(
                 ndt_cols_by_view.setdefault(vname, []).extend(
                     (c_low, *p) for p in pairs
                 )
-                dt_schema.setdefault("", {}).setdefault("", {}).setdefault(
+                dt_schema[""][""].setdefault(
                     f"__lkml_tbl_{vname.lower()}", {}
                 ).setdefault(c_low, "UNKNOWN")
         if dt.sql:
@@ -874,6 +879,30 @@ def _match_model_views(
                 for expr in sqlglot.parse(clean_dt_sql, read=dt_dialect):
                     if expr is None:
                         continue
+                    if _has_projection_star(expr):
+                        ref_tbls = {
+                            t.name.lower()
+                            for t in expr.find_all(exp.Table)
+                            if t.name and not t.name.lower().startswith("__lkml_tbl_")
+                        }
+                        for vn, vo in model_views.items():
+                            v_cols = view_cols_by_name.get(vn, {})
+                            if not v_cols or (
+                                getattr(vo, "derived_table", None)
+                                and not vo.sql_table_name
+                            ):
+                                continue
+                            raw_vt = _parse_lookml_table_name(vo.sql_table_name, vn)
+                            if raw_vt.name.lower() in ref_tbls:
+                                try:
+                                    vt = _coerce_lkml_table(raw_vt, "")
+                                    dt_schema.setdefault(
+                                        (vt.catalog or "").lower(), {}
+                                    ).setdefault((vt.db or "").lower(), {}).setdefault(
+                                        vt.name.lower(), {}
+                                    ).update(v_cols)
+                                except ValueError:
+                                    pass
                     opt_dt = _optimize_stars(
                         expr,
                         dialect=dt_dialect,
@@ -918,10 +947,8 @@ def _match_model_views(
             for raw_cand_tbl, dt_col_pair in cand_sources:
                 if raw_cand_tbl.name.lower() != sql_tbl.name.lower():
                     continue
-                view_tbl = _coerce_table(
+                view_tbl = _coerce_lkml_table(
                     raw_cand_tbl,
-                    eff_db,
-                    eff_schema,
                     f"LookML view '{view_name}' table '{raw_cand_tbl.name}' cannot be qualified. "
                     f"Specify --lkml-schema and/or --lkml-db (or LKR_LKML_SCHEMA, LKR_LKML_DB) "
                     f"or ensure Looker {conn_info} metadata is accessible.",
