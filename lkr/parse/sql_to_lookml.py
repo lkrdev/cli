@@ -1334,6 +1334,43 @@ def _match_model_views(
     def _dict_list(val: Any) -> list[dict[str, Any]]:
         return [d for d in (val if isinstance(val, list) else [val]) if isinstance(d, dict)]
 
+    def _match_usages(
+        usages: list[LookmlQueryFieldUsage],
+        entries: list[
+            tuple[
+                LookmlViewMatch,
+                LookmlFieldMatch,
+                LookmlExploreFieldMatch,
+                tuple[str, str],
+                set[str],
+            ]
+        ],
+    ) -> tuple[
+        list[LookmlQueryFieldUsage],
+        list[str],
+        list[LookmlFieldMatch],
+        set[tuple[str, str]],
+    ]:
+        m_usages: list[LookmlQueryFieldUsage] = []
+        unmatched: list[str] = []
+        m_fms: list[LookmlFieldMatch] = []
+        cov: set[tuple[str, str]] = set()
+        for u in usages:
+            hits = [
+                (fm, uk)
+                for _, fm, _, uk, cands in entries
+                if u.field.lower() in cands
+            ]
+            if hits:
+                m_usages.append(u)
+                for fm, uk in hits:
+                    cov.add(uk)
+                    if fm not in m_fms:
+                        m_fms.append(fm)
+            elif u.used_in != "increment_key" and u.field not in unmatched:
+                unmatched.append(u.field)
+        return m_usages, unmatched, m_fms, cov
+
     for exp_name, exp_val in (model_obj.explore or {}).items():
         for exp_obj in _as_list(exp_val):
             if not isinstance(exp_obj, LookmlExplore) or (
@@ -1390,43 +1427,6 @@ def _match_model_views(
             if not exp_entries:
                 continue
 
-            def _match_usages(
-                usages: list[LookmlQueryFieldUsage],
-                entries: list[
-                    tuple[
-                        LookmlViewMatch,
-                        LookmlFieldMatch,
-                        LookmlExploreFieldMatch,
-                        tuple[str, str],
-                        set[str],
-                    ]
-                ] = exp_entries,
-            ) -> tuple[
-                list[LookmlQueryFieldUsage],
-                list[str],
-                list[LookmlFieldMatch],
-                set[tuple[str, str]],
-            ]:
-                m_usages: list[LookmlQueryFieldUsage] = []
-                unmatched: list[str] = []
-                m_fms: list[LookmlFieldMatch] = []
-                cov: set[tuple[str, str]] = set()
-                for u in usages:
-                    hits = [
-                        (fm, uk)
-                        for _, fm, _, uk, cands in entries
-                        if u.field.lower() in cands
-                    ]
-                    if hits:
-                        m_usages.append(u)
-                        for fm, uk in hits:
-                            cov.add(uk)
-                            if fm not in m_fms:
-                                m_fms.append(fm)
-                    elif u.used_in != "increment_key" and u.field not in unmatched:
-                        unmatched.append(u.field)
-                return m_usages, unmatched, m_fms, cov
-
             for agg_name, agg_val in (exp_obj.aggregate_table or {}).items():
                 for agg_obj in _as_list(agg_val):
                     q_dicts = _dict_list(agg_obj.query)
@@ -1458,31 +1458,31 @@ def _match_model_views(
                             )
                         )
                     matched_usages, _, matched_fms, covered_units = _match_usages(
-                        usages
+                        usages, exp_entries
                     )
                     if sql_trig:
                         try:
                             trig_res = parse_sql(sql=sql_trig, dialect=dialect)
-                            trig_tbls = {
-                                t.name.lower()
-                                for q in trig_res.queries
-                                for t in q.tables
-                            }
                             trig_cols = {
                                 ((t or "").lower() or None, c.lower())
                                 for q in trig_res.queries
                                 for t, c in _extract_query_columns(q, dialect=dialect)
                             }
+                            tbl_to_aliases: dict[str, set[str | None]] = {}
+                            for q in trig_res.queries:
+                                for t in q.tables:
+                                    if t.name:
+                                        tbl_to_aliases.setdefault(
+                                            t.name.lower(), {t.name.lower(), None}
+                                        ).add((t.alias or t.name).lower())
                             for vm, fm, em, uk, _ in exp_entries:
                                 v_tbl = vm.sql_table.rsplit(".", 1)[-1].lower()
                                 c_low = fm.sql_column.lower()
+                                t_aliases = tbl_to_aliases.get(v_tbl)
                                 if (
                                     not fm.via
-                                    and v_tbl in trig_tbls
-                                    and (
-                                        (v_tbl, c_low) in trig_cols
-                                        or (None, c_low) in trig_cols
-                                    )
+                                    and t_aliases
+                                    and any((a, c_low) in trig_cols for a in t_aliases)
                                 ):
                                     u_trig = LookmlQueryFieldUsage(
                                         field=em.field, used_in="sql_trigger_value"
@@ -1523,7 +1523,9 @@ def _match_model_views(
             for q_name, q_val in (exp_obj.query or {}).items():
                 for q_dict in _dict_list(q_val):
                     matched_usages, unmatched_refs, matched_fms, covered_units = (
-                        _match_usages(_collect_query_block_fields(q_dict, base_alias))
+                        _match_usages(
+                            _collect_query_block_fields(q_dict, base_alias), exp_entries
+                        )
                     )
                     if matched_usages:
                         loc = _chain_sub_loc(

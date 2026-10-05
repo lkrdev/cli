@@ -2224,7 +2224,7 @@ def test_parse_sql_to_lookml_aggregate_tables_and_explore_queries():
           measures: [total_revenue]
         }
         materialization: {
-          sql_trigger_value: SELECT MAX(created_at) FROM db.s.orders ;;
+          sql_trigger_value: SELECT MAX(o.created_at) FROM db.s.orders o ;;
         }
       }
       query: exact_summary {
@@ -2270,7 +2270,7 @@ def test_parse_sql_to_lookml_aggregate_tables_and_explore_queries():
     tp = aggs["trigger_partial"]
     assert tp.coverage == "partial_overlap"
     assert tp.missing_query_fields == ["orders.status"]
-    assert tp.sql_trigger_value == "SELECT MAX(created_at) FROM db.s.orders"
+    assert tp.sql_trigger_value == "SELECT MAX(o.created_at) FROM db.s.orders o"
     assert ("orders.created", "sql_trigger_value") in {
         (u.field, u.used_in) for u in tp.matched_fields
     }
