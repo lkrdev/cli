@@ -272,6 +272,8 @@ class LookmlViewMatch(BaseModel):
     position: list[int]
     sql_table_name_location: LookmlSourceLocation | None = None
     fields: list[LookmlFieldMatch] = Field(default_factory=list)
+    unmodeled_db_columns: list[str] = Field(default_factory=list)
+    missing_db_columns: list[str] = Field(default_factory=list)
 
 
 class QueryLookmlMapping(BaseModel):

@@ -230,6 +230,8 @@ SQL_TO_LOOKML_DOC: dict[str, str] = {
     "queries[].views[].fields[].via": "Transitive dependency path of ${...} references in LookML DAG leading to this field",
     "queries[].views[].fields[].explores": "Explores exposing this field with active view alias and join info",
     "queries[].views[].fields[].tests": "Existing LookML tests associated with this field that must pass",
+    "queries[].views[].unmodeled_db_columns": "Columns present in the database table or SQL query that have no matching field in this LookML view",
+    "queries[].views[].missing_db_columns": "Physical columns referenced by this LookML view (${TABLE}.col) that do not exist in the database table",
     "queries[].explores": "All reachable explores exposing any matched fields from this query",
     "queries[].tests": "All existing LookML tests across the LookML DAG that must still pass after changes",
 }

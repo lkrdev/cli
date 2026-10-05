@@ -177,12 +177,12 @@ def _parse_lookml_table_name(
     return TableRef(catalog=cat, db=db, name=name or view_name)
 
 
-# in-memory lru_cache for connection metadata per process; no local file cache
-@lru_cache(maxsize=128)
-def _fetch_connection_metadata_sandbox(conn_name: str) -> dict[str, Any] | None:
+def _run_sandbox_json(code: str) -> Any:
     try:
         import click
 
+        from lkr.auth_service import get_auth
+        from lkr.classes import LkrCtxObj
         from lkr.codemode.main import run_python_code
 
         click_ctx = click.get_current_context(silent=True)
@@ -190,23 +190,49 @@ def _fetch_connection_metadata_sandbox(conn_name: str) -> dict[str, Any] | None:
             click_ctx.obj.get("ctx_lkr")
             if click_ctx and isinstance(click_ctx.obj, dict)
             else None
-        )
-        code = (
-            f"c = connection({json.dumps(conn_name)})\n"
-            "return {'database': c.get('database'), 'schema': c.get('schema'), 'dialect_name': c.get('dialect_name')}"
-        )
+        ) or LkrCtxObj(force_oauth=False)
+        if (
+            ctx_lkr.use_sdk != "api_key"
+            and not get_auth(ctx_lkr).get_current_instance()
+        ):
+            return None
         res_str = run_python_code(code, ctx_lkr=ctx_lkr)
         if not res_str:
             return None
         data = json.loads(res_str)
-        if isinstance(data, dict):
-            if "result" in data and isinstance(data["result"], dict):
-                return data["result"]
-            return data
+        if (
+            isinstance(data, dict)
+            and "result" in data
+            and isinstance(data["result"], dict)
+        ):
+            return data["result"]
+        return data
     except Exception as e:  # noqa: BLE001
-        logger.debug(f"Could not fetch connection metadata for '{conn_name}': {e}")
+        logger.debug(f"Sandbox lookup failed: {e}")
         return None
-    return None
+
+
+# in-memory lru_cache for connection/table metadata per process; no local file cache
+@lru_cache(maxsize=128)
+def _fetch_connection_metadata_sandbox(conn_name: str) -> dict[str, Any] | None:
+    res = _run_sandbox_json(
+        f"c = connection({json.dumps(conn_name)})\n"
+        "return {'database': c.get('database'), 'schema': c.get('schema'), 'dialect_name': c.get('dialect_name')}"
+    )
+    return res if isinstance(res, dict) else None
+
+
+@lru_cache(maxsize=128)
+def _fetch_table_columns_sandbox(
+    conn_name: str, db: str | None, schema: str | None, table: str
+) -> dict[str, str] | None:
+    res = _run_sandbox_json(
+        f"res = connection_columns({json.dumps(conn_name)}, database={json.dumps(db)}, "
+        f"schema_name={json.dumps(schema)}, table_names={json.dumps(table)})\n"
+        "return {c['name'].lower(): (c.get('data_type') or 'UNKNOWN') "
+        "for t in (res or []) for c in (t.get('columns') or []) if c.get('name')}"
+    )
+    return res if isinstance(res, dict) and res else None
 
 
 def _coerce_table(
@@ -439,7 +465,7 @@ def _iter_view_fields(
     return out
 
 
-# ponytail: seed SQLGlot schema from parsed LookML views; use Looker API connection_columns via codemode if unmodeled physical columns need disambiguation
+# ponytail: seed SQLGlot schema from LookML views + Looker connection_columns
 def _extract_view_columns(view_obj: LookmlView) -> dict[str, str]:
     cols: dict[str, str] = {}
     for ftype, fname, fobj in _iter_view_fields(view_obj):
@@ -449,6 +475,8 @@ def _extract_view_columns(view_obj: LookmlView) -> dict[str, str]:
                 fobj.sql,
                 getattr(fobj, "sql_start", None),
                 getattr(fobj, "sql_end", None),
+                getattr(fobj, "sql_latitude", None),
+                getattr(fobj, "sql_longitude", None),
             )
             if s
         ]
@@ -463,10 +491,11 @@ def _extract_view_columns(view_obj: LookmlView) -> dict[str, str]:
             continue
         f_subtype = str(getattr(fobj, "type", "") or "")
         if (
-            ftype in ("dimension", "dimension_group")
-            and f_subtype != "duration"
+            not sql_texts
+            and ftype in ("dimension", "dimension_group")
+            and f_subtype not in ("location", "distance", "duration")
             and not f_subtype.startswith("duration_")
-            and not any(_extract_lookml_refs(s) for s in sql_texts)
+            and getattr(fobj, "case", None) is None
         ):
             cols[fname.lower()] = "UNKNOWN"
     return cols
@@ -925,6 +954,7 @@ def _match_model_views(
 
     conn_info = f"connection '{eff_conn}'" if eff_conn else "connection"
     lookml_schema: dict[str, dict[str, dict[str, dict[str, str]]]] = {}
+    db_cols_by_view: dict[str, dict[str, str] | None] = {}
     matched_sources: list[
         tuple[TableRef, str, str, LookmlView, tuple[str, str] | None]
     ] = []
@@ -964,7 +994,17 @@ def _match_model_views(
                     .setdefault(sql_tbl.name.lower(), {})
                 )
                 if dt_col_pair is None:
-                    tbl_schema_cols.update(view_cols_by_name.get(view_name, {}))
+                    db_cols = (
+                        _fetch_table_columns_sandbox(
+                            eff_conn, view_tbl.catalog, view_tbl.db, view_tbl.name
+                        )
+                        if eff_conn
+                        else None
+                    )
+                    db_cols_by_view[view_name] = db_cols
+                    tbl_schema_cols.update(
+                        db_cols or view_cols_by_name.get(view_name, {})
+                    )
                 else:
                     tbl_schema_cols[dt_col_pair[1].lower()] = "UNKNOWN"
 
@@ -997,8 +1037,22 @@ def _match_model_views(
                     if isinstance(fobj, LookmlDimensionGroup)
                     else None
                 )
+                f_sql = (
+                    fobj.sql
+                    or " ".join(
+                        s
+                        for s in (
+                            getattr(fobj, "sql_start", None),
+                            getattr(fobj, "sql_end", None),
+                            getattr(fobj, "sql_latitude", None),
+                            getattr(fobj, "sql_longitude", None),
+                        )
+                        if s
+                    )
+                    or None
+                )
                 if not _field_matches_column(
-                    target_col, fname, fobj.sql, ftype, tfs
+                    target_col, fname, f_sql, ftype, tfs
                 ):
                     continue
                 key = (view_name, ftype, fname)
@@ -1008,7 +1062,7 @@ def _match_model_views(
                         view_order.append(view_name)
                     ext_aliases = {
                         r.split(".", 1)[0].lower()
-                        for r in _extract_lookml_refs(fobj.sql)
+                        for r in _extract_lookml_refs(f_sql)
                         if "." in r
                         and r.split(".", 1)[0].lower() not in self_names
                     }
@@ -1170,6 +1224,8 @@ def _match_model_views(
                 )
             )
 
+        db_cols = db_cols_by_view.get(view_name) if view_name in direct_views else None
+        v_cols = set(view_cols_by_name.get(view_name, {}))
         results.append(
             LookmlViewMatch(
                 sql_table=v_sql_tbl,
@@ -1186,6 +1242,8 @@ def _match_model_views(
                 position=view_pos,
                 sql_table_name_location=sql_tbl_loc,
                 fields=v_fields,
+                unmodeled_db_columns=sorted(set(db_cols) - v_cols) if db_cols else [],
+                missing_db_columns=sorted(v_cols - set(db_cols)) if db_cols else [],
             )
         )
 

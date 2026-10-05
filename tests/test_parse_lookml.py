@@ -2139,4 +2139,35 @@ def test_parse_sql_to_lookml_star_and_modifiers():
     }
     assert u_fields_join == {"id", "email"}
 
+    # 5. Live DB connection_columns gap analysis (unmodeled_db_columns / missing_db_columns)
+    from unittest.mock import patch
 
+    import lkr.parse.sql_to_lookml as s2l
+
+    with patch.object(
+        s2l,
+        "_fetch_table_columns_sandbox",
+        side_effect=lambda conn, db, schema, tbl: (
+            {"id": "INT64", "email": "STRING", "new_db_col": "STRING"}
+            if tbl == "users"
+            else None
+        ),
+    ):
+        res_gap = parse_sql_to_lookml(
+            sql="SELECT * FROM db.s.users",
+            lookml="""
+            connection: "bq_conn"
+            view: users {
+              sql_table_name: `db.s.users` ;;
+              dimension: id { primary_key: yes }
+              dimension: email { sql: ${TABLE}.email ;; }
+              dimension: dropped_col { sql: ${TABLE}.dropped_col ;; }
+              dimension: static_label { sql: "constant" ;; }
+            }
+            """,
+            dialect="bigquery",
+        )
+        v_gap = res_gap.queries[0].views[0]
+        assert v_gap.unmodeled_db_columns == ["new_db_col"]
+        assert v_gap.missing_db_columns == ["dropped_col"]
+        assert {f.field_name for f in v_gap.fields} == {"id", "email"}
