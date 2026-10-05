@@ -48,7 +48,7 @@ def _load_explore_data(
             logger.error(f"Invalid JSON in explore file {explore_file}: {e}")
             raise typer.Exit(1)
 
-    from lkr.codemode.main import to_primitive
+    from lkr.codemode.type import to_primitive
 
     return to_primitive(_get_sdk(ctx).lookml_model_explore(model, explore))
 

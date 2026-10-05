@@ -18,7 +18,7 @@ from lkr.codemode.constant import EXCLUDED_FUNCS
 from lkr.codemode.examples import EXAMPLES
 from lkr.codemode.help import lookup_function, search_help, search_with_lookups
 from lkr.codemode.readme import get_readme
-from lkr.codemode.type import lookup_type
+from lkr.codemode.type import lookup_type, to_primitive
 from lkr.logger import logger
 
 __all__ = ["group"]
@@ -63,38 +63,6 @@ def get_mcp_sdk(ctx: LkrCtxObj):
     sdk = get_auth(ctx).get_current_sdk(prompt_refresh_invalid_token=True)
     sdk.auth.settings.agent_tag += "-codemode"
     return sdk
-
-
-
-def to_primitive(obj):
-    seen = set()
-
-    def _to_primitive(o):
-        if isinstance(o, (str, int, float, bool, type(None))):
-            return o
-        
-        obj_id = id(o)
-        if obj_id in seen:
-            return f"<Circular reference to {type(o).__name__}>"
-        seen.add(obj_id)
-        
-        try:
-            if isinstance(o, list):
-                return [_to_primitive(item) for item in o]
-            elif isinstance(o, dict):
-                return {k: _to_primitive(v) for k, v in o.items()}
-            else:
-                try:
-                    return _to_primitive(vars(o))
-                except TypeError:
-                    return str(o)
-                except Exception:  # noqa: BLE001
-                    return str(o)
-        finally:
-            seen.remove(obj_id)
-
-    return _to_primitive(obj)
-
 
 
 @mcp.tool()
