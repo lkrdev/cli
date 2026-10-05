@@ -2171,3 +2171,134 @@ def test_parse_sql_to_lookml_star_and_modifiers():
         assert v_gap.unmodeled_db_columns == ["new_db_col"]
         assert v_gap.missing_db_columns == ["dropped_col"]
         assert {f.field_name for f in v_gap.fields} == {"id", "email"}
+
+
+def test_parse_sql_to_lookml_aggregate_tables_and_explore_queries():
+    from lkr.parse import parse_sql_to_lookml
+
+    lkml = """
+    connection: "bq"
+    view: users {
+      sql_table_name: db.s.users ;;
+      dimension: id { primary_key: yes sql: ${TABLE}.id ;; }
+      dimension: country { type: string sql: ${TABLE}.country ;; }
+      dimension: tier { type: string sql: ${TABLE}.tier ;; }
+    }
+    view: orders {
+      sql_table_name: db.s.orders ;;
+      dimension: id { primary_key: yes sql: ${TABLE}.id ;; }
+      dimension: user_id { type: number sql: ${TABLE}.user_id ;; }
+      dimension: status { type: string sql: ${TABLE}.status ;; }
+      dimension: sale_price { type: number sql: ${TABLE}.sale_price ;; }
+      dimension_group: created {
+        type: time
+        timeframes: [raw, date, month, year]
+        sql: ${TABLE}.created_at ;;
+      }
+      measure: total_revenue {
+        type: sum
+        sql: ${sale_price} ;;
+      }
+    }
+    explore: orders {
+      join: users {
+        type: left_outer
+        relationship: many_to_one
+        sql_on: ${orders.user_id} = ${users.id} ;;
+      }
+      aggregate_table: monthly_rollup {
+        query: {
+          dimensions: [created_month, users.country]
+          measures: [total_revenue]
+          filters: [orders.status: "complete"]
+          timeframe_granularity: month
+        }
+        materialization: {
+          datagroup_trigger: orders_datagroup
+          increment_key: "created_date"
+        }
+      }
+      aggregate_table: trigger_partial {
+        query: {
+          dimensions: [users.country]
+          measures: [total_revenue]
+        }
+        materialization: {
+          sql_trigger_value: SELECT MAX(o.created_at) FROM db.s.orders o ;;
+        }
+      }
+      query: exact_summary {
+        dimensions: [created_month, users.country]
+        measures: [total_revenue]
+        filters: [orders.status: "complete"]
+        sorts: [total_revenue: desc]
+      }
+      query: partial_with_pivots {
+        dimensions: [users.country]
+        measures: [total_revenue]
+        pivots: [users.tier]
+      }
+    }
+    """
+    sql = """
+    SELECT u.country, DATE_TRUNC(o.created_at, MONTH) AS m, SUM(o.sale_price) AS rev
+    FROM db.s.orders o
+    JOIN db.s.users u ON o.user_id = u.id
+    WHERE o.status = 'complete'
+    GROUP BY 1, 2
+    """
+    res = parse_sql_to_lookml(sql=sql, lookml=lkml, dialect="bigquery")
+    q = res.queries[0]
+
+    aggs = {a.aggregate_table_name: a for a in q.aggregate_tables}
+    assert set(aggs) == {"monthly_rollup", "trigger_partial"}
+
+    mr = aggs["monthly_rollup"]
+    assert mr.coverage == "hit_candidate"
+    assert mr.missing_query_fields == []
+    assert mr.timeframe_granularity == "month"
+    assert mr.datagroup_trigger == "orders_datagroup"
+    assert mr.increment_key == "created_date"
+    assert {(u.field, u.used_in) for u in mr.matched_fields} == {
+        ("orders.created_month", "dimensions"),
+        ("users.country", "dimensions"),
+        ("orders.total_revenue", "measures"),
+        ("orders.status", "filters"),
+        ("orders.created_date", "increment_key"),
+    }
+
+    tp = aggs["trigger_partial"]
+    assert tp.coverage == "partial_overlap"
+    assert tp.missing_query_fields == ["orders.status"]
+    assert tp.sql_trigger_value == "SELECT MAX(o.created_at) FROM db.s.orders o"
+    assert ("orders.created", "sql_trigger_value") in {
+        (u.field, u.used_in) for u in tp.matched_fields
+    }
+
+    eqs = {e.query_name: e for e in q.explore_queries}
+    assert set(eqs) == {"exact_summary", "partial_with_pivots"}
+
+    es = eqs["exact_summary"]
+    assert es.coverage == "exact"
+    assert es.unmatched_explore_query_fields == []
+    assert es.missing_query_fields == []
+    assert ("orders.total_revenue", "sorts") in {
+        (u.field, u.used_in) for u in es.matched_fields
+    }
+
+    pwp = eqs["partial_with_pivots"]
+    assert pwp.coverage == "partial_overlap"
+    assert pwp.unmatched_explore_query_fields == ["users.tier"]
+    assert set(pwp.missing_query_fields) == {"orders.created", "orders.status"}
+
+    orders_view = next(v for v in q.views if v.view_name == "orders")
+    rev_field = next(f for f in orders_view.fields if f.field_name == "total_revenue")
+    assert {a.aggregate_table_name for a in rev_field.aggregate_tables} == {
+        "monthly_rollup",
+        "trigger_partial",
+    }
+    assert {e.query_name for e in rev_field.explore_queries} == {
+        "exact_summary",
+        "partial_with_pivots",
+    }
+

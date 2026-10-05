@@ -29,6 +29,12 @@ def _as_list(val: Any) -> list[Any]:
     return [val]
 
 
+def _qualify_field_ref(ref: str, default_alias: str) -> str:
+    clean = ref.strip()
+    return clean if "." in clean else f"{default_alias}.{clean}"
+
+
+
 def _collect_declarations(
     project: LookmlProject,
     obj_type: str,
@@ -267,5 +273,6 @@ __all__ = [
     "_expand_field_tokens",
     "_extract_lookml_refs",
     "_is_field_allowed_by_spec",
+    "_qualify_field_ref",
     "_resolve_explore_base",
 ]
