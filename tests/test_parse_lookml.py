@@ -2013,3 +2013,161 @@ def test_parse_sql_to_lookml_dt_join_subquery_raw_table():
     dt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
     assert "ordering_user_id" in dt_fields
 
+
+def test_parse_sql_to_lookml_star_and_modifiers():
+    from lkr.parse import parse_sql_to_lookml
+
+    lkml = """
+    view: users {
+      sql_table_name: db.s.users ;;
+      dimension: id { type: number }
+      dimension: email { type: string }
+      dimension: secret_hash { type: string }
+      dimension: status { type: string }
+    }
+    view: orders {
+      sql_table_name: db.s.orders ;;
+      dimension: user_id { type: number }
+      dimension: amount { type: number }
+      dimension: internal_note { type: string }
+    }
+    view: active_users_dt {
+      derived_table: {
+        sql: SELECT * EXCEPT (secret_hash) FROM ${users.SQL_TABLE_NAME} WHERE status = 'active' ;;
+      }
+      dimension: email { sql: ${TABLE}.email ;; }
+      dimension: secret_hash { sql: ${TABLE}.secret_hash ;; }
+    }
+    """
+
+    # 1. Outer select over CTE with EXCEPT and WHERE
+    res_cte = parse_sql_to_lookml(
+        sql="""
+        WITH base AS (
+            SELECT id, email, secret_hash, status
+            FROM db.s.users
+            WHERE status = 'active'
+        )
+        SELECT * EXCEPT (secret_hash, status)
+        FROM base
+        """,
+        lookml=lkml,
+        dialect="bigquery",
+    )
+    u_fields_cte = {
+        f.field_name
+        for v in res_cte.queries[0].views
+        if v.view_name == "users"
+        for f in v.fields
+    }
+    assert u_fields_cte == {"id", "email", "status"}
+    dt_fields_cte = {
+        f.field_name: f
+        for v in res_cte.queries[0].views
+        if v.view_name == "active_users_dt"
+        for f in v.fields
+    }
+    assert set(dt_fields_cte) == {"email"}
+    assert dt_fields_cte["email"].via == ["users.email"]
+
+    # 2. Direct physical table SELECT * EXCEPT / REPLACE (BigQuery) and EXCLUDE / RENAME (Snowflake)
+    res_phys = parse_sql_to_lookml(
+        sql="SELECT * EXCEPT (secret_hash, status) REPLACE (LOWER(email) AS email) FROM db.s.users",
+        lookml=lkml,
+        dialect="bigquery",
+    )
+    u_fields_phys = {
+        f.field_name
+        for v in res_phys.queries[0].views
+        if v.view_name == "users"
+        for f in v.fields
+    }
+    assert u_fields_phys == {"id", "email"}
+
+    res_sf = parse_sql_to_lookml(
+        sql="SELECT * EXCLUDE (secret_hash, status) RENAME (email AS user_email) FROM db.s.users",
+        lookml=lkml,
+        dialect="snowflake",
+    )
+    u_fields_sf = {
+        f.field_name
+        for v in res_sf.queries[0].views
+        if v.view_name == "users"
+        for f in v.fields
+    }
+    assert u_fields_sf == {"id", "email"}
+
+    # 3. Multi-hop CTEs over physical tables
+    res_chain = parse_sql_to_lookml(
+        sql="""
+        WITH raw_users AS (
+            SELECT * EXCEPT (secret_hash, status) FROM db.s.users
+        ),
+        enriched AS (
+            SELECT r.*, o.amount, o.internal_note
+            FROM raw_users r
+            JOIN db.s.orders o ON r.id = o.user_id
+        )
+        SELECT * EXCEPT (internal_note)
+        FROM enriched
+        """,
+        lookml=lkml,
+        dialect="bigquery",
+    )
+    by_view = {
+        v.view_name: {f.field_name for f in v.fields}
+        for v in res_chain.queries[0].views
+    }
+    assert by_view["users"] == {"id", "email"}
+    assert by_view["orders"] == {"user_id", "amount"}
+
+    # 4. Multi-table join with qualified stars, including an unmodeled joined table
+    res_join = parse_sql_to_lookml(
+        sql="""
+        SELECT u.* EXCEPT (secret_hash, status), x.* EXCEPT (internal_note)
+        FROM db.s.users u
+        JOIN db.s.unmodeled_tbl x ON u.id = x.user_id
+        """,
+        lookml=lkml,
+        dialect="bigquery",
+    )
+    u_fields_join = {
+        f.field_name
+        for v in res_join.queries[0].views
+        if v.view_name == "users"
+        for f in v.fields
+    }
+    assert u_fields_join == {"id", "email"}
+
+    # 5. Live DB connection_columns gap analysis (unmodeled_db_columns / missing_db_columns)
+    from unittest.mock import patch
+
+    import lkr.parse.sql_to_lookml as s2l
+
+    with patch.object(
+        s2l,
+        "_fetch_table_columns_sandbox",
+        side_effect=lambda conn, db, schema, tbl: (
+            {"id": "INT64", "email": "STRING", "new_db_col": "STRING"}
+            if tbl == "users"
+            else None
+        ),
+    ):
+        res_gap = parse_sql_to_lookml(
+            sql="SELECT * FROM db.s.users",
+            lookml="""
+            connection: "bq_conn"
+            view: users {
+              sql_table_name: `db.s.users` ;;
+              dimension: id { primary_key: yes }
+              dimension: email { sql: ${TABLE}.email ;; }
+              dimension: dropped_col { sql: ${TABLE}.dropped_col ;; }
+              dimension: static_label { sql: "constant" ;; }
+            }
+            """,
+            dialect="bigquery",
+        )
+        v_gap = res_gap.queries[0].views[0]
+        assert v_gap.unmodeled_db_columns == ["new_db_col"]
+        assert v_gap.missing_db_columns == ["dropped_col"]
+        assert {f.field_name for f in v_gap.fields} == {"id", "email"}

@@ -34,7 +34,15 @@ from lkr.parse.lookml import (
     LookmlView,
     parse_lookml,
 )
-from lkr.parse.sql import ParsedQuery, TableRef, _split_table_ref, parse_sql
+from lkr.parse.sql import (
+    ParsedQuery,
+    TableRef,
+    _apply_default_db_schema,
+    _has_projection_star,
+    _optimize_stars,
+    _split_table_ref,
+    parse_sql,
+)
 from lkr.parse.types import (
     LookmlExploreFieldMatch,
     LookmlFieldMatch,
@@ -48,6 +56,10 @@ from lkr.parse.types import (
 
 _SQL_TABLE_NAME_RE = re.compile(
     r"\$\{\s*([a-zA-Z0-9_]+)\.SQL_TABLE_NAME\s*\}", re.IGNORECASE
+)
+_TABLE_COL_RE = re.compile(
+    r"\$\{TABLE\}\s*\.\s*(?:[`\"'\[]([^`\"'\]]+)[`\"'\]]|([a-zA-Z0-9_]+))",
+    re.IGNORECASE,
 )
 
 _DtSource = str | TableRef
@@ -100,10 +112,15 @@ def _extract_dt_lineage(
     out_map: _DtColMap = {}
     for proj in node.selects:
         out_col = proj.alias_or_name.lower()
-        if not out_col:
+        if not out_col or out_col == "*":
             continue
         for col_expr in proj.find_all(exp.Column):
-            if not col_expr.name:
+            if (
+                not col_expr.name
+                or col_expr.name == "*"
+                or col_expr.arg_key == "except_"
+                or isinstance(col_expr.this, exp.Star)
+            ):
                 continue
             c_low = col_expr.name.lower()
             t_qual = (col_expr.table or "").lower()
@@ -160,46 +177,70 @@ def _parse_lookml_table_name(
     return TableRef(catalog=cat, db=db, name=name or view_name)
 
 
-# in-memory lru_cache for connection metadata per process; no local file cache
-@lru_cache(maxsize=128)
-def _fetch_connection_metadata_sandbox(conn_name: str) -> dict[str, Any] | None:
+def _run_sandbox_json(code: str) -> Any:
     try:
+        import click
+
+        from lkr.auth_service import get_auth
+        from lkr.classes import LkrCtxObj
         from lkr.codemode.main import run_python_code
 
-        code = (
-            f"c = connection({json.dumps(conn_name)})\n"
-            "return {'database': c.get('database'), 'schema': c.get('schema'), 'dialect_name': c.get('dialect_name')}"
-        )
-        res_str = run_python_code(code)
+        click_ctx = click.get_current_context(silent=True)
+        ctx_lkr = (
+            click_ctx.obj.get("ctx_lkr")
+            if click_ctx and isinstance(click_ctx.obj, dict)
+            else None
+        ) or LkrCtxObj(force_oauth=False)
+        if (
+            ctx_lkr.use_sdk != "api_key"
+            and not get_auth(ctx_lkr).get_current_instance()
+        ):
+            return None
+        res_str = run_python_code(code, ctx_lkr=ctx_lkr)
         if not res_str:
             return None
         data = json.loads(res_str)
-        if isinstance(data, dict):
-            if "result" in data and isinstance(data["result"], dict):
-                return data["result"]
-            return data
+        if (
+            isinstance(data, dict)
+            and "result" in data
+            and isinstance(data["result"], dict)
+        ):
+            return data["result"]
+        return data
     except Exception as e:  # noqa: BLE001
-        logger.debug(f"Could not fetch connection metadata for '{conn_name}': {e}")
+        logger.debug(f"Sandbox lookup failed: {e}")
         return None
-    return None
+
+
+# in-memory lru_cache for connection/table metadata per process; no local file cache
+@lru_cache(maxsize=128)
+def _fetch_connection_metadata_sandbox(conn_name: str) -> dict[str, Any] | None:
+    res = _run_sandbox_json(
+        f"c = connection({json.dumps(conn_name)})\n"
+        "return {'database': c.get('database'), 'schema': c.get('schema'), 'dialect_name': c.get('dialect_name')}"
+    )
+    return res if isinstance(res, dict) else None
+
+
+@lru_cache(maxsize=128)
+def _fetch_table_columns_sandbox(
+    conn_name: str, db: str | None, schema: str | None, table: str
+) -> dict[str, str] | None:
+    res = _run_sandbox_json(
+        f"res = connection_columns({json.dumps(conn_name)}, database={json.dumps(db)}, "
+        f"schema_name={json.dumps(schema)}, table_names={json.dumps(table)})\n"
+        "return {c['name'].lower(): (c.get('data_type') or 'UNKNOWN') "
+        "for t in (res or []) for c in (t.get('columns') or []) if c.get('name')}"
+    )
+    return res if isinstance(res, dict) and res else None
 
 
 def _coerce_table(
     tbl: TableRef, db: str | None, schema: str | None, err_msg: str
 ) -> TableRef:
-    if tbl.catalog and tbl.db:
-        return tbl
-    if tbl.db and not tbl.catalog:
-        return tbl.model_copy(update={"catalog": db}) if db else tbl
-    if not tbl.db and not tbl.catalog:
-        if not schema and not db:
-            raise ValueError(err_msg)
-        return tbl.model_copy(
-            update={"db": schema or db, "catalog": db if schema else None}
-        )
-    if tbl.catalog and not tbl.db and schema:
-        return tbl.model_copy(update={"db": schema})
-    return tbl
+    if not tbl.db and not tbl.catalog and not schema and not db:
+        raise ValueError(err_msg)
+    return _apply_default_db_schema(tbl, db, schema)
 
 
 def _tables_match(sql_tbl: TableRef, view_tbl: TableRef) -> bool:
@@ -354,30 +395,53 @@ def _find_explores_for_field(
 
 
 def _extract_query_columns(
-    parsed_query: ParsedQuery, dialect: str | None = None
+    parsed_query: ParsedQuery,
+    dialect: str | None = None,
+    schema: dict[str, Any] | None = None,
+    default_db: str | None = None,
+    default_schema: str | None = None,
 ) -> list[tuple[str | None, str]]:
     seen: set[tuple[str | None, str]] = set()
     result: list[tuple[str | None, str]] = []
 
     def _add(tbl: str | None, col: str) -> None:
+        if col == "*":
+            return
         key = ((tbl or "").lower() or None, col.lower())
         if col and key not in seen:
             seen.add(key)
             result.append((tbl or None, col))
 
-    for c in parsed_query.columns:
-        if c.column:
-            _add(c.table, c.column)
+    if not schema:
+        for c in parsed_query.columns:
+            if c.column:
+                _add(c.table, c.column)
 
     try:
         eff_dialect = dialect or ("bigquery" if "`" in parsed_query.raw_sql else None)
         for expr in sqlglot.parse(parsed_query.raw_sql, read=eff_dialect):
             if expr is not None:
-                for col_expr in expr.find_all(exp.Column):
-                    if col_expr.name:
+                opt_expr = _optimize_stars(
+                    expr,
+                    dialect=eff_dialect,
+                    schema=schema,
+                    default_db=default_db,
+                    default_schema=default_schema,
+                )
+                for col_expr in opt_expr.find_all(exp.Column):
+                    if (
+                        col_expr.name
+                        and col_expr.arg_key != "except_"
+                        and not isinstance(col_expr.this, exp.Star)
+                    ):
                         _add(col_expr.table or None, col_expr.name)
     except Exception:  # noqa: BLE001, S110
         pass
+
+    if not result:
+        for c in parsed_query.columns:
+            if c.column:
+                _add(c.table, c.column)
 
     return result
 
@@ -399,6 +463,42 @@ def _iter_view_fields(
             ):
                 out.append((ftype, fname, fobj))
     return out
+
+
+# ponytail: seed SQLGlot schema from LookML views + Looker connection_columns
+def _extract_view_columns(view_obj: LookmlView) -> dict[str, str]:
+    cols: dict[str, str] = {}
+    for ftype, fname, fobj in _iter_view_fields(view_obj):
+        sql_texts = [
+            s
+            for s in (
+                fobj.sql,
+                getattr(fobj, "sql_start", None),
+                getattr(fobj, "sql_end", None),
+                getattr(fobj, "sql_latitude", None),
+                getattr(fobj, "sql_longitude", None),
+            )
+            if s
+        ]
+        found = [
+            (m.group(1) or m.group(2)).lower()
+            for s in sql_texts
+            for m in _TABLE_COL_RE.finditer(s)
+        ]
+        if found:
+            for c in found:
+                cols[c] = "UNKNOWN"
+            continue
+        f_subtype = str(getattr(fobj, "type", "") or "")
+        if (
+            not sql_texts
+            and ftype in ("dimension", "dimension_group")
+            and f_subtype not in ("location", "distance", "duration")
+            and not f_subtype.startswith("duration_")
+            and getattr(fobj, "case", None) is None
+        ):
+            cols[fname.lower()] = "UNKNOWN"
+    return cols
 
 
 class _TestInfo:
@@ -658,7 +758,6 @@ def _find_tests_for_field(
 
 def _match_model_views(
     pq: ParsedQuery,
-    query_cols: list[tuple[str | None, str]],
     model_name: str,
     model_obj: LookmlModel,
     view_base_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
@@ -671,11 +770,22 @@ def _match_model_views(
     lkml_conn: str | None = None,
     lkml_db: str | None = None,
     lkml_schema: str | None = None,
+    dialect: str | None = None,
+    sql_db: str | None = None,
+    sql_schema: str | None = None,
 ) -> list[LookmlViewMatch]:
     eff_conn = lkml_conn or model_obj.connection
-    meta = _fetch_connection_metadata_sandbox(eff_conn) if eff_conn else None
-    eff_db = lkml_db or (meta.get("database") if meta else None)
-    eff_schema = lkml_schema or (meta.get("schema") if meta else None)
+    eff_db, eff_schema = lkml_db, lkml_schema
+    meta_fetched = bool(eff_db and eff_schema) or not eff_conn
+
+    def _coerce_lkml_table(tbl: TableRef, err_msg: str) -> TableRef:
+        nonlocal eff_db, eff_schema, meta_fetched
+        if (not tbl.catalog or not tbl.db) and not meta_fetched:
+            meta_fetched = True
+            meta = _fetch_connection_metadata_sandbox(eff_conn) if eff_conn else None
+            eff_db = eff_db or (meta.get("database") if meta else None)
+            eff_schema = eff_schema or (meta.get("schema") if meta else None)
+        return _coerce_table(tbl, eff_db, eff_schema, err_msg)
 
     model_views: dict[str, LookmlView] = {}
     for k, v in (model_obj.view or {}).items():
@@ -721,6 +831,19 @@ def _match_model_views(
     queue: deque[tuple[str, str, str]] = deque()
     direct_views: dict[str, str] = {}
     view_order: list[str] = []
+
+    view_cols_by_name = {
+        vn: _extract_view_columns(vo) for vn, vo in model_views.items()
+    }
+    dt_schema: dict[str, dict[str, dict[str, dict[str, str]]]] = {
+        "": {
+            "": {
+                f"__lkml_tbl_{vn.lower()}": dict(cols)
+                for vn, cols in view_cols_by_name.items()
+                if cols
+            }
+        }
+    }
 
     ndt_cols_by_view: dict[str, list[tuple[str, str, str]]] = {}
     dt_raw_cols_by_view: dict[str, list[tuple[str, TableRef, str]]] = {}
@@ -773,6 +896,9 @@ def _match_model_views(
                 ndt_cols_by_view.setdefault(vname, []).extend(
                     (c_low, *p) for p in pairs
                 )
+                dt_schema[""][""].setdefault(
+                    f"__lkml_tbl_{vname.lower()}", {}
+                ).setdefault(c_low, "UNKNOWN")
         if dt.sql:
             clean_dt_sql = _SQL_TABLE_NAME_RE.sub(
                 r"__lkml_tbl_\1", dt.sql.strip().rstrip(";").strip()
@@ -780,7 +906,40 @@ def _match_model_views(
             dt_dialect = "bigquery" if "`" in clean_dt_sql else None
             try:
                 for expr in sqlglot.parse(clean_dt_sql, read=dt_dialect):
-                    for out_col, origins in _extract_dt_lineage(expr).items():
+                    if expr is None:
+                        continue
+                    if _has_projection_star(expr):
+                        ref_tbls = {
+                            t.name.lower()
+                            for t in expr.find_all(exp.Table)
+                            if t.name and not t.name.lower().startswith("__lkml_tbl_")
+                        }
+                        for vn, vo in model_views.items():
+                            v_cols = view_cols_by_name.get(vn, {})
+                            if not v_cols or (
+                                getattr(vo, "derived_table", None)
+                                and not vo.sql_table_name
+                            ):
+                                continue
+                            raw_vt = _parse_lookml_table_name(vo.sql_table_name, vn)
+                            if raw_vt.name.lower() in ref_tbls:
+                                try:
+                                    vt = _coerce_lkml_table(raw_vt, "")
+                                    dt_schema.setdefault(
+                                        (vt.catalog or "").lower(), {}
+                                    ).setdefault((vt.db or "").lower(), {}).setdefault(
+                                        vt.name.lower(), {}
+                                    ).update(v_cols)
+                                except ValueError:
+                                    pass
+                    opt_dt = _optimize_stars(
+                        expr,
+                        dialect=dt_dialect,
+                        schema=dt_schema,
+                        default_db=eff_db,
+                        default_schema=eff_schema,
+                    )
+                    for out_col, origins in _extract_dt_lineage(opt_dt).items():
                         for src_origin, base_col in origins:
                             if isinstance(src_origin, TableRef):
                                 dt_raw_cols_by_view.setdefault(vname, []).append(
@@ -794,12 +953,17 @@ def _match_model_views(
                 pass
 
     conn_info = f"connection '{eff_conn}'" if eff_conn else "connection"
+    lookml_schema: dict[str, dict[str, dict[str, dict[str, str]]]] = {}
+    db_cols_by_view: dict[str, dict[str, str] | None] = {}
+    matched_sources: list[
+        tuple[TableRef, str, str, LookmlView, tuple[str, str] | None]
+    ] = []
+
     for sql_tbl in pq.tables:
         raw_table_str = ".".join(
             p for p in (sql_tbl.catalog, sql_tbl.db, sql_tbl.name) if p
         )
         for view_name, view_obj in model_views.items():
-            self_names = self_names_by_view[view_name]
             cand_sources: list[tuple[TableRef, tuple[str, str] | None]] = [
                 (raw_dt_tbl, (out_col, dt_src_col))
                 for out_col, raw_dt_tbl, dt_src_col in dt_raw_cols_by_view.get(
@@ -813,57 +977,102 @@ def _match_model_views(
             for raw_cand_tbl, dt_col_pair in cand_sources:
                 if raw_cand_tbl.name.lower() != sql_tbl.name.lower():
                     continue
-                view_tbl = _coerce_table(
+                view_tbl = _coerce_lkml_table(
                     raw_cand_tbl,
-                    eff_db,
-                    eff_schema,
                     f"LookML view '{view_name}' table '{raw_cand_tbl.name}' cannot be qualified. "
                     f"Specify --lkml-schema and/or --lkml-db (or LKR_LKML_SCHEMA, LKR_LKML_DB) "
                     f"or ensure Looker {conn_info} metadata is accessible.",
                 )
                 if not _tables_match(sql_tbl, view_tbl):
                     continue
-                if dt_col_pair is None and view_name not in direct_views:
-                    direct_views[view_name] = raw_table_str
-                    view_order.append(view_name)
-                for tbl_qual, col_name in query_cols:
-                    if dt_col_pair and col_name.lower() != dt_col_pair[1]:
-                        continue
-                    if tbl_qual and tbl_qual.lower() not in {
-                        sql_tbl.name.lower(),
-                        (sql_tbl.alias or "").lower(),
-                        view_name.lower(),
-                    }:
-                        continue
-                    target_col = dt_col_pair[0] if dt_col_pair else col_name
-                    for ftype, fname, fobj in _iter_view_fields(view_obj):
-                        tfs = (
-                            fobj.timeframes
-                            if isinstance(fobj, LookmlDimensionGroup)
-                            else None
+                matched_sources.append(
+                    (sql_tbl, raw_table_str, view_name, view_obj, dt_col_pair)
+                )
+                tbl_schema_cols = (
+                    lookml_schema.setdefault((sql_tbl.catalog or "").lower(), {})
+                    .setdefault((sql_tbl.db or "").lower(), {})
+                    .setdefault(sql_tbl.name.lower(), {})
+                )
+                if dt_col_pair is None:
+                    db_cols = (
+                        _fetch_table_columns_sandbox(
+                            eff_conn, view_tbl.catalog, view_tbl.db, view_tbl.name
                         )
-                        if not _field_matches_column(
-                            target_col, fname, fobj.sql, ftype, tfs
-                        ):
-                            continue
-                        key = (view_name, ftype, fname)
-                        if key not in matched_fields:
-                            if view_name not in direct_views:
-                                direct_views[view_name] = raw_table_str
-                                view_order.append(view_name)
-                            ext_aliases = {
-                                r.split(".", 1)[0].lower()
-                                for r in _extract_lookml_refs(fobj.sql)
-                                if "." in r
-                                and r.split(".", 1)[0].lower() not in self_names
-                            }
-                            matched_fields[key] = (
-                                raw_table_str,
-                                col_name,
-                                [],
-                                ext_aliases,
-                            )
-                            queue.append(key)
+                        if eff_conn
+                        else None
+                    )
+                    db_cols_by_view[view_name] = db_cols
+                    tbl_schema_cols.update(
+                        db_cols or view_cols_by_name.get(view_name, {})
+                    )
+                else:
+                    tbl_schema_cols[dt_col_pair[1].lower()] = "UNKNOWN"
+
+    eff_query_cols = _extract_query_columns(
+        pq,
+        dialect=dialect,
+        schema=lookml_schema or None,
+        default_db=sql_db,
+        default_schema=sql_schema,
+    )
+
+    for sql_tbl, raw_table_str, view_name, view_obj, dt_col_pair in matched_sources:
+        self_names = self_names_by_view[view_name]
+        if dt_col_pair is None and view_name not in direct_views:
+            direct_views[view_name] = raw_table_str
+            view_order.append(view_name)
+        for tbl_qual, col_name in eff_query_cols:
+            if dt_col_pair and col_name.lower() != dt_col_pair[1]:
+                continue
+            if tbl_qual and tbl_qual.lower() not in {
+                sql_tbl.name.lower(),
+                (sql_tbl.alias or "").lower(),
+                view_name.lower(),
+            }:
+                continue
+            target_col = dt_col_pair[0] if dt_col_pair else col_name
+            for ftype, fname, fobj in _iter_view_fields(view_obj):
+                tfs = (
+                    fobj.timeframes
+                    if isinstance(fobj, LookmlDimensionGroup)
+                    else None
+                )
+                f_sql = (
+                    fobj.sql
+                    or " ".join(
+                        s
+                        for s in (
+                            getattr(fobj, "sql_start", None),
+                            getattr(fobj, "sql_end", None),
+                            getattr(fobj, "sql_latitude", None),
+                            getattr(fobj, "sql_longitude", None),
+                        )
+                        if s
+                    )
+                    or None
+                )
+                if not _field_matches_column(
+                    target_col, fname, f_sql, ftype, tfs
+                ):
+                    continue
+                key = (view_name, ftype, fname)
+                if key not in matched_fields:
+                    if view_name not in direct_views:
+                        direct_views[view_name] = raw_table_str
+                        view_order.append(view_name)
+                    ext_aliases = {
+                        r.split(".", 1)[0].lower()
+                        for r in _extract_lookml_refs(f_sql)
+                        if "." in r
+                        and r.split(".", 1)[0].lower() not in self_names
+                    }
+                    matched_fields[key] = (
+                        raw_table_str,
+                        col_name,
+                        [],
+                        ext_aliases,
+                    )
+                    queue.append(key)
 
     # Transitive forward ${...} and derived_table propagation
     while queue:
@@ -1015,6 +1224,8 @@ def _match_model_views(
                 )
             )
 
+        db_cols = db_cols_by_view.get(view_name) if view_name in direct_views else None
+        v_cols = set(view_cols_by_name.get(view_name, {}))
         results.append(
             LookmlViewMatch(
                 sql_table=v_sql_tbl,
@@ -1031,6 +1242,8 @@ def _match_model_views(
                 position=view_pos,
                 sql_table_name_location=sql_tbl_loc,
                 fields=v_fields,
+                unmodeled_db_columns=sorted(set(db_cols) - v_cols) if db_cols else [],
+                missing_db_columns=sorted(v_cols - set(db_cols)) if db_cols else [],
             )
         )
 
@@ -1083,13 +1296,11 @@ def parse_sql_to_lookml(
             for tbl in raw_pq.tables
         ]
         pq = raw_pq.model_copy(update={"tables": coerced_tables})
-        query_cols = _extract_query_columns(pq, dialect=dialect)
         view_matches = [
             vm
             for model_name, model_obj in models.items()
             for vm in _match_model_views(
                 pq,
-                query_cols,
                 model_name,
                 model_obj,
                 view_base_decls,
@@ -1102,6 +1313,9 @@ def parse_sql_to_lookml(
                 lkml_conn=lkml_conn,
                 lkml_db=lkml_db,
                 lkml_schema=lkml_schema,
+                dialect=dialect,
+                sql_db=sql_db,
+                sql_schema=sql_schema,
             )
         ]
         query_explores = list(
