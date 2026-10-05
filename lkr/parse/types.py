@@ -246,6 +246,42 @@ class LookmlTestMatch(BaseModel):
     fields: list[str] = Field(default_factory=list)
 
 
+class LookmlQueryFieldUsage(BaseModel):
+    field: str
+    used_in: str
+
+
+class LookmlAggregateTableMatch(BaseModel):
+    model_name: str
+    explore_name: str
+    aggregate_table_name: str
+    coverage: str | None = None
+    matched_fields: list[LookmlQueryFieldUsage] = Field(default_factory=list)
+    missing_query_fields: list[str] = Field(default_factory=list)
+    timeframe_granularity: str | None = None
+    datagroup_trigger: str | None = None
+    sql_trigger_value: str | None = None
+    increment_key: str | None = None
+    file: str
+    line: int
+    end_line: int
+    position: list[int]
+
+
+class LookmlExploreQueryMatch(BaseModel):
+    model_name: str
+    explore_name: str
+    query_name: str
+    coverage: str | None = None
+    matched_fields: list[LookmlQueryFieldUsage] = Field(default_factory=list)
+    unmatched_explore_query_fields: list[str] = Field(default_factory=list)
+    missing_query_fields: list[str] = Field(default_factory=list)
+    file: str
+    line: int
+    end_line: int
+    position: list[int]
+
+
 class LookmlFieldMatch(BaseModel):
     sql_column: str
     field_type: str
@@ -259,6 +295,8 @@ class LookmlFieldMatch(BaseModel):
     sql_location: LookmlSourceLocation | None = None
     explores: list[LookmlExploreFieldMatch] = Field(default_factory=list)
     tests: list[LookmlTestMatch] = Field(default_factory=list)
+    aggregate_tables: list[LookmlAggregateTableMatch] = Field(default_factory=list)
+    explore_queries: list[LookmlExploreQueryMatch] = Field(default_factory=list)
 
 
 class LookmlViewMatch(BaseModel):
@@ -282,6 +320,8 @@ class QueryLookmlMapping(BaseModel):
     views: list[LookmlViewMatch] = Field(default_factory=list)
     explores: list[LookmlExploreFieldMatch] = Field(default_factory=list)
     tests: list[LookmlTestMatch] = Field(default_factory=list)
+    aggregate_tables: list[LookmlAggregateTableMatch] = Field(default_factory=list)
+    explore_queries: list[LookmlExploreQueryMatch] = Field(default_factory=list)
 
 
 class SqlToLookmlResult(BaseModel):
@@ -314,8 +354,11 @@ __all__ = [
     "ApiLookmlModelExploreSet",
     "ApiLookmlModelExploreTurtleLook",
     "ApiLookmlModelNavExplore",
+    "LookmlAggregateTableMatch",
     "LookmlExploreFieldMatch",
+    "LookmlExploreQueryMatch",
     "LookmlFieldMatch",
+    "LookmlQueryFieldUsage",
     "LookmlSourceLocation",
     "LookmlTestMatch",
     "LookmlToApiResult",

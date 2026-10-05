@@ -18,6 +18,7 @@ from lkr.parse.dag import (
     _collect_declarations,
     _extract_lookml_refs,
     _is_field_allowed_by_spec,
+    _qualify_field_ref,
     _resolve_explore_base,
 )
 from lkr.parse.lookml import (
@@ -44,8 +45,11 @@ from lkr.parse.sql import (
     parse_sql,
 )
 from lkr.parse.types import (
+    LookmlAggregateTableMatch,
     LookmlExploreFieldMatch,
+    LookmlExploreQueryMatch,
     LookmlFieldMatch,
+    LookmlQueryFieldUsage,
     LookmlSourceLocation,
     LookmlTestMatch,
     LookmlViewMatch,
@@ -138,8 +142,11 @@ def _extract_dt_lineage(
 
 __all__ = [
     "SQL_TO_LOOKML_DOC",
+    "LookmlAggregateTableMatch",
     "LookmlExploreFieldMatch",
+    "LookmlExploreQueryMatch",
     "LookmlFieldMatch",
+    "LookmlQueryFieldUsage",
     "LookmlSourceLocation",
     "LookmlTestMatch",
     "LookmlViewMatch",
@@ -400,6 +407,7 @@ def _extract_query_columns(
     schema: dict[str, Any] | None = None,
     default_db: str | None = None,
     default_schema: str | None = None,
+    exclude_join_on: bool = False,
 ) -> list[tuple[str | None, str]]:
     seen: set[tuple[str | None, str]] = set()
     result: list[tuple[str | None, str]] = []
@@ -412,7 +420,7 @@ def _extract_query_columns(
             seen.add(key)
             result.append((tbl or None, col))
 
-    if not schema:
+    if not schema and not exclude_join_on:
         for c in parsed_query.columns:
             if c.column:
                 _add(c.table, c.column)
@@ -428,9 +436,20 @@ def _extract_query_columns(
                     default_db=default_db,
                     default_schema=default_schema,
                 )
+                on_col_ids = (
+                    {
+                        id(c)
+                        for j in opt_expr.find_all(exp.Join)
+                        if j.args.get("on")
+                        for c in j.args["on"].find_all(exp.Column)
+                    }
+                    if exclude_join_on
+                    else set()
+                )
                 for col_expr in opt_expr.find_all(exp.Column):
                     if (
-                        col_expr.name
+                        id(col_expr) not in on_col_ids
+                        and col_expr.name
                         and col_expr.arg_key != "except_"
                         and not isinstance(col_expr.this, exp.Star)
                     ):
@@ -756,6 +775,57 @@ def _find_tests_for_field(
     return matches
 
 
+def _collect_query_block_fields(
+    q_dict: dict[str, Any], base_alias: str
+) -> list[LookmlQueryFieldUsage]:
+    usages: list[LookmlQueryFieldUsage] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _add(ref: str, loc: str) -> None:
+        tok = re.sub(r"\s+(?:asc|desc)\s*$", "", ref.strip(), flags=re.IGNORECASE)
+        if not tok:
+            return
+        qual = _qualify_field_ref(tok, base_alias)
+        if (qual, loc) not in seen:
+            seen.add((qual, loc))
+            usages.append(LookmlQueryFieldUsage(field=qual, used_in=loc))
+
+    for key in ("dimensions", "measures", "pivots", "filters", "sorts"):
+        val = q_dict.get(key)
+        for item in val if isinstance(val, list) else ([val] if val is not None else []):
+            if isinstance(item, dict):
+                for k in item:
+                    if not str(k).startswith("$"):
+                        _add(str(k), key)
+            elif isinstance(item, str):
+                _add(item.split(":", 1)[0], key)
+
+    return usages
+
+
+def _chain_sub_loc(
+    exp_chain: list[tuple[str, Any, dict[str, Any]]],
+    block_key: str,
+    item_name: str,
+    default_file: str,
+    default_pos: list[int],
+) -> LookmlSourceLocation:
+    loc: LookmlSourceLocation | None = None
+    for fpath, _, p_dict in exp_chain:
+        sub_map = p_dict.get(block_key, {})
+        if isinstance(sub_map, dict) and item_name in sub_map:
+            sp = sub_map[item_name]
+            if isinstance(sp, dict) and "$p" in sp:
+                loc = _make_location(fpath, sp["$p"])
+    return (
+        loc
+        or _make_location(default_file, default_pos)
+        or LookmlSourceLocation(
+            file=default_file, line=1, end_line=1, position=default_pos
+        )
+    )
+
+
 def _match_model_views(
     pq: ParsedQuery,
     model_name: str,
@@ -1015,6 +1085,18 @@ def _match_model_views(
         default_db=sql_db,
         default_schema=sql_schema,
     )
+    non_join_col_set = {
+        ((t or "").lower() or None, c.lower())
+        for t, c in _extract_query_columns(
+            pq,
+            dialect=dialect,
+            schema=lookml_schema or None,
+            default_db=sql_db,
+            default_schema=sql_schema,
+            exclude_join_on=True,
+        )
+    }
+    non_join_units: set[tuple[str, str]] = set()
 
     for sql_tbl, raw_table_str, view_name, view_obj, dt_col_pair in matched_sources:
         self_names = self_names_by_view[view_name]
@@ -1030,6 +1112,8 @@ def _match_model_views(
                 view_name.lower(),
             }:
                 continue
+            if ((tbl_qual or "").lower() or None, col_name.lower()) in non_join_col_set:
+                non_join_units.add((raw_table_str.lower(), col_name.lower()))
             target_col = dt_col_pair[0] if dt_col_pair else col_name
             for ftype, fname, fobj in _iter_view_fields(view_obj):
                 tfs = (
@@ -1247,6 +1331,222 @@ def _match_model_views(
             )
         )
 
+    def _dict_list(val: Any) -> list[dict[str, Any]]:
+        return [d for d in (val if isinstance(val, list) else [val]) if isinstance(d, dict)]
+
+    for exp_name, exp_val in (model_obj.explore or {}).items():
+        for exp_obj in _as_list(exp_val):
+            if not isinstance(exp_obj, LookmlExplore) or (
+                not exp_obj.aggregate_table and not exp_obj.query
+            ):
+                continue
+            exp_chain = _build_chain(exp_name, exp_base_decls, exp_ref_decls)
+            _, base_alias, exp_file, exp_pos = _resolve_explore_base(
+                exp_name, exp_obj, exp_chain, model_views
+            )
+            # ponytail: timeframe rollup compatibility (e.g. querying created_year against an aggregate_table with created_month) can start with exact field/timeframe matching + dimension_group base matching, adding coarseness hierarchy comparison only if needed.
+            exp_entries: list[
+                tuple[
+                    LookmlViewMatch,
+                    LookmlFieldMatch,
+                    LookmlExploreFieldMatch,
+                    tuple[str, str],
+                    set[str],
+                ]
+            ] = []
+            canon_by_unit: dict[tuple[str, str], str] = {}
+            for vm in results:
+                for fm in vm.fields:
+                    f_sql_tbl, col_name, _, _ = matched_fields[
+                        (vm.view_name, fm.field_type, fm.field_name)
+                    ]
+                    uk = (f_sql_tbl.lower(), col_name.lower())
+                    fobj = getattr(model_views[vm.view_name], fm.field_type)[
+                        fm.field_name
+                    ]
+                    tfs = (
+                        fobj.timeframes
+                        if isinstance(fobj, LookmlDimensionGroup)
+                        else None
+                    )
+                    for em in fm.explores:
+                        if em.explore_name != exp_name:
+                            continue
+                        aliases = {em.view_alias.lower(), vm.view_name.lower()}
+                        fn_low = fm.field_name.lower()
+                        cands = {f"{a}.{fn_low}" for a in aliases}
+                        if fm.field_type == "dimension_group":
+                            cands |= {
+                                f"{a}.{fn_low}_{tf.lower()}"
+                                for a in aliases
+                                for tf in (tfs or ())
+                            }
+                        exp_entries.append((vm, fm, em, uk, cands))
+                        if (not non_join_units or uk in non_join_units) and (
+                            not fm.via or uk not in canon_by_unit
+                        ):
+                            canon_by_unit[uk] = em.field
+
+            if not exp_entries:
+                continue
+
+            def _match_usages(
+                usages: list[LookmlQueryFieldUsage],
+                entries: list[
+                    tuple[
+                        LookmlViewMatch,
+                        LookmlFieldMatch,
+                        LookmlExploreFieldMatch,
+                        tuple[str, str],
+                        set[str],
+                    ]
+                ] = exp_entries,
+            ) -> tuple[
+                list[LookmlQueryFieldUsage],
+                list[str],
+                list[LookmlFieldMatch],
+                set[tuple[str, str]],
+            ]:
+                m_usages: list[LookmlQueryFieldUsage] = []
+                unmatched: list[str] = []
+                m_fms: list[LookmlFieldMatch] = []
+                cov: set[tuple[str, str]] = set()
+                for u in usages:
+                    hits = [
+                        (fm, uk)
+                        for _, fm, _, uk, cands in entries
+                        if u.field.lower() in cands
+                    ]
+                    if hits:
+                        m_usages.append(u)
+                        for fm, uk in hits:
+                            cov.add(uk)
+                            if fm not in m_fms:
+                                m_fms.append(fm)
+                    elif u.used_in != "increment_key" and u.field not in unmatched:
+                        unmatched.append(u.field)
+                return m_usages, unmatched, m_fms, cov
+
+            for agg_name, agg_val in (exp_obj.aggregate_table or {}).items():
+                for agg_obj in _as_list(agg_val):
+                    q_dicts = _dict_list(agg_obj.query)
+                    usages = [
+                        u
+                        for qd in q_dicts
+                        for u in _collect_query_block_fields(qd, base_alias)
+                    ]
+                    tf_gran = next(
+                        (
+                            str(qd["timeframe_granularity"])
+                            for qd in q_dicts
+                            if qd.get("timeframe_granularity")
+                        ),
+                        None,
+                    )
+                    mat = (_dict_list(agg_obj.materialization) or [{}])[0]
+                    inc_key = mat.get("increment_key")
+                    sql_trig = (
+                        str(mat["sql_trigger_value"]).strip()
+                        if mat.get("sql_trigger_value")
+                        else None
+                    )
+                    if inc_key:
+                        usages.append(
+                            LookmlQueryFieldUsage(
+                                field=_qualify_field_ref(str(inc_key), base_alias),
+                                used_in="increment_key",
+                            )
+                        )
+                    matched_usages, _, matched_fms, covered_units = _match_usages(
+                        usages
+                    )
+                    if sql_trig:
+                        try:
+                            trig_res = parse_sql(sql=sql_trig, dialect=dialect)
+                            trig_tbls = {
+                                t.name.lower()
+                                for q in trig_res.queries
+                                for t in q.tables
+                            }
+                            trig_cols = {
+                                ((t or "").lower() or None, c.lower())
+                                for q in trig_res.queries
+                                for t, c in _extract_query_columns(q, dialect=dialect)
+                            }
+                            for vm, fm, em, uk, _ in exp_entries:
+                                v_tbl = vm.sql_table.rsplit(".", 1)[-1].lower()
+                                c_low = fm.sql_column.lower()
+                                if (
+                                    not fm.via
+                                    and v_tbl in trig_tbls
+                                    and (
+                                        (v_tbl, c_low) in trig_cols
+                                        or (None, c_low) in trig_cols
+                                    )
+                                ):
+                                    u_trig = LookmlQueryFieldUsage(
+                                        field=em.field, used_in="sql_trigger_value"
+                                    )
+                                    if u_trig not in matched_usages:
+                                        matched_usages.append(u_trig)
+                                    covered_units.add(uk)
+                                    if fm not in matched_fms:
+                                        matched_fms.append(fm)
+                        except Exception:  # noqa: BLE001, S110
+                            pass
+
+                    if matched_usages:
+                        loc = _chain_sub_loc(
+                            exp_chain, "aggregate_table", agg_name, exp_file, exp_pos
+                        )
+                        missing = [
+                            f for u, f in canon_by_unit.items() if u not in covered_units
+                        ]
+                        agg_match = LookmlAggregateTableMatch(
+                            model_name=model_name,
+                            explore_name=exp_name,
+                            aggregate_table_name=agg_name,
+                            coverage="hit_candidate"
+                            if not missing
+                            else "partial_overlap",
+                            matched_fields=matched_usages,
+                            missing_query_fields=missing,
+                            timeframe_granularity=tf_gran,
+                            datagroup_trigger=mat.get("datagroup_trigger"),
+                            sql_trigger_value=sql_trig,
+                            increment_key=inc_key,
+                            **loc.model_dump(),
+                        )
+                        for fm in matched_fms:
+                            fm.aggregate_tables.append(agg_match)
+
+            for q_name, q_val in (exp_obj.query or {}).items():
+                for q_dict in _dict_list(q_val):
+                    matched_usages, unmatched_refs, matched_fms, covered_units = (
+                        _match_usages(_collect_query_block_fields(q_dict, base_alias))
+                    )
+                    if matched_usages:
+                        loc = _chain_sub_loc(
+                            exp_chain, "query", q_name, exp_file, exp_pos
+                        )
+                        missing = [
+                            f for u, f in canon_by_unit.items() if u not in covered_units
+                        ]
+                        q_match = LookmlExploreQueryMatch(
+                            model_name=model_name,
+                            explore_name=exp_name,
+                            query_name=q_name,
+                            coverage="exact"
+                            if not missing and not unmatched_refs
+                            else "partial_overlap",
+                            matched_fields=matched_usages,
+                            unmatched_explore_query_fields=unmatched_refs,
+                            missing_query_fields=missing,
+                            **loc.model_dump(),
+                        )
+                        for fm in matched_fms:
+                            fm.explore_queries.append(q_match)
+
     return results
 
 
@@ -1335,6 +1635,22 @@ def parse_sql_to_lookml(
                 existing = tests_by_key[key]
                 existing.fields.extend(f for f in tm.fields if f not in existing.fields)
         query_tests = list(tests_by_key.values())
+        query_agg_tables = list(
+            {
+                (am.model_name, am.explore_name, am.aggregate_table_name): am
+                for vm in view_matches
+                for fm in vm.fields
+                for am in fm.aggregate_tables
+            }.values()
+        )
+        query_explore_queries = list(
+            {
+                (qm.model_name, qm.explore_name, qm.query_name): qm
+                for vm in view_matches
+                for fm in vm.fields
+                for qm in fm.explore_queries
+            }.values()
+        )
         mappings.append(
             QueryLookmlMapping(
                 raw_sql=pq.raw_sql,
@@ -1342,6 +1658,8 @@ def parse_sql_to_lookml(
                 views=view_matches,
                 explores=query_explores,
                 tests=query_tests,
+                aggregate_tables=query_agg_tables,
+                explore_queries=query_explore_queries,
             )
         )
 

@@ -28,6 +28,7 @@ from lkr.parse.dag import (
     _expand_field_tokens,
     _extract_lookml_refs,
     _is_field_allowed_by_spec,
+    _qualify_field_ref,
     _resolve_explore_base,
 )
 from lkr.parse.lookml import (
@@ -145,11 +146,6 @@ def _ordered_model_explore_names(
     own = [k for k in assembled if k in own_keys]
     included = [k for k in reversed(assembled) if k not in own_keys]
     return [*included, *own]
-
-
-def _qualify_field_ref(ref: str, default_alias: str) -> str:
-    clean = ref.strip()
-    return clean if "." in clean else f"{default_alias}.{clean}"
 
 
 def _extract_measure_filters(
