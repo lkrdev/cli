@@ -311,6 +311,7 @@ class LookmlJoin(LookmlParserValues):
     relationship: str | None = None
     relationship_type: str | None = None
     required_joins: list[str] | None = None
+    sql_foreign_key: str | None = None
     sql_having: str | None = None
     sql_on: str | None = None
     sql_table_name: str | None = None
