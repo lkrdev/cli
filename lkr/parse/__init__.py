@@ -75,9 +75,11 @@ from lkr.parse.main import (
     group,
     lookml_command,
     lookml_database_compare_command,
+    lookml_group,
     lookml_to_api_command,
     sql_command,
     sql_lookml_compare_command,
+    user_attributes_command,
 )
 from lkr.parse.sql import (
     ColumnSpec,
@@ -118,6 +120,12 @@ from lkr.parse.types import (
     UnmodeledColumnsInfo,
     UnmodeledInLookml,
     ValidationResult,
+)
+from lkr.parse.user_attributes import (
+    LookmlUserAttributesResult,
+    UserAttributeRef,
+    format_user_attributes,
+    parse_user_attributes,
 )
 
 __all__ = [
@@ -192,6 +200,7 @@ __all__ = [
     "LookmlTestMatch",
     "LookmlToApiResult",
     "LookmlUsageMatch",
+    "LookmlUserAttributesResult",
     "LookmlView",
     "LookmlViewMatch",
     "LookmlViewPositions",
@@ -208,14 +217,17 @@ __all__ = [
     "TypeMismatchInfo",
     "UnmodeledColumnsInfo",
     "UnmodeledInLookml",
+    "UserAttributeRef",
     "ValidationResult",
     "build_explore_join_graph",
     "fetch_sdk_database_catalog",
     "format_compare_result",
+    "format_user_attributes",
     "group",
     "load_db_schema_file",
     "lookml_command",
     "lookml_database_compare_command",
+    "lookml_group",
     "lookml_to_all_lookml_models",
     "lookml_to_api_command",
     "lookml_to_lookml_model_explore",
@@ -224,6 +236,8 @@ __all__ = [
     "parse_lookml_to_api",
     "parse_sql",
     "parse_sql_to_lookml",
+    "parse_user_attributes",
     "sql_command",
     "sql_lookml_compare_command",
+    "user_attributes_command",
 ]

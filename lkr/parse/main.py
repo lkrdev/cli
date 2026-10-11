@@ -17,15 +17,23 @@ from lkr.parse.sql_to_lookml import (
     parse_sql_to_lookml,
 )
 from lkr.parse.types import LookmlDatabaseCompareResult
+from lkr.parse.user_attributes import (
+    LookmlUserAttributesResult,
+    format_user_attributes,
+    parse_user_attributes,
+)
 
 __all__ = [
     "group",
     "lookml_command",
     "lookml_database_compare_command",
+    "lookml_group",
     "lookml_to_api_command",
     "sql_command",
     "sql_lookml_compare_command",
+    "user_attributes_command",
 ]
+
 
 
 group = typer.Typer(
@@ -97,8 +105,18 @@ def sql_command(
     return result
 
 
-@group.command(name="lookml")
-def lookml_command(
+lookml_group = typer.Typer(
+    name="lookml",
+    help="Parse LookML from --path, --file, or --lookml with extensions/refinements and positions.",
+    invoke_without_command=True,
+    no_args_is_help=False,
+)
+group.add_typer(lookml_group, name="lookml")
+
+
+@lookml_group.callback(invoke_without_command=True)
+def lookml_callback(
+    ctx: typer.Context,
     path: Annotated[
         Path | None,
         typer.Option("--path", "-p", help="Path to a LookML directory"),
@@ -115,14 +133,129 @@ def lookml_command(
         Path | None,
         typer.Option("--output", "-o", help="Optional output .json file path"),
     ] = None,
+) -> LookmlProject | None:
+    """Parse LookML from --path, --file, or --lookml with extensions/refinements and positions."""
+    if ctx.invoked_subcommand is None:
+        return lookml_command(path=path, file=file, lookml=lookml, output=output)
+    return None
+
+
+def lookml_command(
+    path: Path | None = None,
+    file: Path | None = None,
+    lookml: str | None = None,
+    output: Path | None = None,
 ) -> LookmlProject:
-    """Parse LookML from --path, --file, or --lookml with modelAssembly, extensions/refinements, and positions."""
+    """Parse LookML from --path, --file, or --lookml with extensions/refinements and positions."""
     _validate_lookml_args(path, file, lookml)
     result = parse_lookml(path=path, file=file, lookml=lookml)
     _write_or_echo(
         result.model_dump_json(indent=2, by_alias=True, exclude_none=True), output
     )
     return result
+
+
+@lookml_group.command(name="user-attributes")
+def user_attributes_command(
+    ctx: typer.Context,
+    path: Annotated[
+        Path | None,
+        typer.Option(
+            "--path",
+            "-p",
+            help="Path to a LookML directory (defaults to '.' when no other input is specified)",
+        ),
+    ] = None,
+    file: Annotated[
+        Path | None,
+        typer.Option(
+            "--file",
+            "-f",
+            help="Path to a LookML or LookML dashboard (.dashboard.lookml) file",
+        ),
+    ] = None,
+    lookml: Annotated[
+        str | None,
+        typer.Option("--lookml", "-l", help="Inline LookML string"),
+    ] = None,
+    dashboard_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--dashboard-file",
+            help=(
+                "Path to a JSON file containing a Looker DashboardFilter object, "
+                "a Dashboard object with dashboard_filters/dashboard_elements "
+                "(e.g. looker-cli export), or a JSON array of DashboardFilter/Dashboard objects"
+            ),
+        ),
+    ] = None,
+    dashboard_json: Annotated[
+        str | None,
+        typer.Option(
+            "--dashboard-json",
+            "--dashboard-filters",
+            help=(
+                "Inline JSON string containing a DashboardFilter object, "
+                "a Dashboard object with dashboard_filters/dashboard_elements, "
+                "or a JSON array of DashboardFilter/Dashboard objects"
+            ),
+        ),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Optional output file path"),
+    ] = None,
+    validate: Annotated[
+        bool,
+        typer.Option(
+            "--validate", help="Validate user attributes against Looker instance"
+        ),
+    ] = False,
+    format: Annotated[
+        str,
+        typer.Option("--format", help="Output format (text or json)"),
+    ] = "text",
+) -> LookmlUserAttributesResult:
+    """Extract all user attributes referenced in a LookML project, LookML dashboards (.dashboard.lookml), or JSON dashboard filters with optional instance validation."""
+    effective_path = (
+        path
+        if any(
+            x is not None
+            for x in (path, file, lookml, dashboard_file, dashboard_json)
+        )
+        else Path(".")
+    )
+    if effective_path is not None and not effective_path.exists():
+        logger.error(f"LookML path not found: {effective_path}")
+        raise typer.Exit(1)
+    if file is not None and not file.exists():
+        logger.error(f"LookML file not found: {file}")
+        raise typer.Exit(1)
+    if dashboard_file is not None and not dashboard_file.exists():
+        logger.error(f"Dashboard JSON file not found: {dashboard_file}")
+        raise typer.Exit(1)
+    if format.lower() not in ("text", "json"):
+        logger.error(f"Invalid format: '{format}'. Must be 'text' or 'json'")
+        raise typer.Exit(1)
+
+    try:
+        result = parse_user_attributes(
+            path=effective_path,
+            file=file,
+            lookml=lookml,
+            dashboard_file=dashboard_file,
+            dashboard_json=dashboard_json,
+            validate=validate,
+            ctx=ctx,
+        )
+    except ValueError as e:
+        logger.error(str(e))
+        raise typer.Exit(1)
+
+    formatted = format_user_attributes(result, format=format.lower())
+    _write_or_echo(formatted, output)
+    return result
+
 
 
 @group.command(name="sql-lookml-compare")
