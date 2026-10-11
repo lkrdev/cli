@@ -579,3 +579,95 @@ def deploy_cmd(
 
     sdk.deploy_to_production(project_id=resolved_project_id)
     logger.info("Deployment completed successfully.")
+
+
+@lookml_group.command(name="bq-table-change-listener")
+@lookml_group.command(name="bq-sync")
+def bq_sync_cmd(
+    ctx: typer.Context,
+    project: Annotated[
+        str,
+        typer.Option(
+            "--project",
+            "-p",
+            help="GCP project ID containing BigQuery dataset",
+        ),
+    ],
+    dataset: Annotated[
+        str,
+        typer.Option(
+            "--dataset",
+            "-d",
+            help="BigQuery dataset name",
+        ),
+    ],
+    path: Annotated[
+        str,
+        typer.Option(
+            "--path",
+            help="Local directory path containing LookML views",
+        ),
+    ],
+    watch: Annotated[
+        bool,
+        typer.Option(
+            "--watch",
+            "-w",
+            help="Run continuously and listen for schema changes",
+        ),
+    ] = False,
+    create_pr: Annotated[
+        bool,
+        typer.Option(
+            "--create-pr",
+            help="Commit view changes and open a GitHub PR via gh",
+        ),
+    ] = False,
+    table: Annotated[
+        str | None,
+        typer.Option(
+            "--table",
+            "-t",
+            help="Specific BigQuery table to synchronize",
+        ),
+    ] = None,
+    interval: Annotated[
+        int,
+        typer.Option(
+            "--interval",
+            help="Polling interval in seconds for --watch mode",
+        ),
+    ] = 60,
+    schema_file: Annotated[
+        str | None,
+        typer.Option(
+            "--schema-file",
+            help="Path to JSON file containing table schemas (for testing/offline sync)",
+        ),
+    ] = None,
+    branch_name: Annotated[
+        str | None,
+        typer.Option(
+            "--branch",
+            help="Custom branch name for Git PR",
+        ),
+    ] = None,
+):
+    """
+    Synchronize BigQuery table schema changes to LookML views.
+    """
+    from lkr.tools.main import bq_table_change_listener_command
+
+    return bq_table_change_listener_command(
+        ctx=ctx,
+        project=project,
+        dataset=dataset,
+        path=path,
+        watch=watch,
+        create_pr=create_pr,
+        table=table,
+        interval=interval,
+        schema_file=schema_file,
+        branch_name=branch_name,
+    )
+
