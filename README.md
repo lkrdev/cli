@@ -41,7 +41,7 @@ uv tool install --upgrade --reinstall "lkr-dev-cli[all]"
 
 See the [prerequisites section](#oauth2-prerequisites)
 
-Login to `lkr`
+Login to `lkr`:
 
 ```bash
 uvx lkr-dev-cli auth login
@@ -52,7 +52,11 @@ uvx lkr-dev-cli auth login
 - Choose whether you want this login to use production or development mode
 - Give it a name
 
-You will be redirected to the Looker OAuth authorization page, click Allow. If you do not see an allow button, the [prerequisites](#oauth2-prerequisites) were not done properly.
+You will be redirected to the Looker OAuth authorization page (or you can open the printed URL in your local browser). Click **Allow**.
+- **Local machine**: The callback page (`https://www.lkr.dev/oauth/callback/`) automatically forwards the authorization code to your local `lkr` CLI on `localhost:8000`.
+- **Remote VM / Headless**: If `localhost:8000` is not reachable from your browser, the callback page displays your authorization code with a **Copy Code** button—paste it into the waiting `lkr auth login` prompt in your terminal.
+
+If you do not see an allow button, the [prerequisites](#oauth2-prerequisites) were not done properly.
 
 If everything is successful, you will see `Successfully authenticated!`. Test it with
 
@@ -77,12 +81,16 @@ If this if the first time you're using the Language Server, you'll need to regis
 
 Go to the Looker API Explorer for Register OAuth App (https://your.looker.instance/extensions/marketplace_extension_api_explorer::api-explorer/4.0/methods/Auth/register_oauth_client_app)
 
-- Enter lkr-cli as the client_id
+- Enter `lkr-cli` as the `client_id`
 - Enter the following payload in the body
 
 ```json
 {
-  "redirect_uri": "http://localhost:8000/callback",
+  "redirect_uri": "https://www.lkr.dev/oauth/callback/",
+  "redirect_uris": [
+    "https://www.lkr.dev/oauth/callback/",
+    "http://localhost:8000/callback"
+  ],
   "display_name": "LKR",
   "description": "lkr.dev language server, MCP and CLI",
   "enabled": true

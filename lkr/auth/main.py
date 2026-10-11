@@ -56,6 +56,14 @@ def login(
             help="Port to run the local OAuth redirect web server on",
         ),
     ] = None,
+    no_browser: Annotated[
+        bool,
+        typer.Option(
+            "--no-browser",
+            "--remote",
+            help="Do not automatically open a local browser; copy the authorization code from https://www.lkr.dev/oauth/callback/",
+        ),
+    ] = False,
 ):
     """
     Login to Looker instance using OAuth2 or switch to an existing authenticated instance
@@ -147,8 +155,12 @@ def login(
                 new_token_callback=auth_callback,
                 use_production=use_production,
                 port=port,
+                no_browser=no_browser,
             )
-            logger.info(f"Opening browser for authentication at {origin + '/auth'}...")
+            if not no_browser:
+                logger.info(
+                    f"Opening browser for authentication at {origin + '/auth'}..."
+                )
             logger.info(
                 f"Listening for OAuth callback on http://localhost:{oauth.port}/callback..."
             )

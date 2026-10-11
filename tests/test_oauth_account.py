@@ -122,3 +122,83 @@ def test_set_token_refreshes_lookedup_account(temp_db):
     assert row_active["access_token"] == "token-active"
     assert row_active["current_instance"] == 1
     conn.close()
+
+
+def test_oauth_api_settings_default_redirect_uri():
+    from lkr.auth_service import OAuthApiSettings
+    from lkr.constants import OAUTH_REDIRECT_URI
+
+    settings = OAuthApiSettings("https://acme.cloud.looker.com")
+    config = settings.read_config()
+    assert config["redirect_uri"] == OAUTH_REDIRECT_URI
+
+
+def test_oauth_pkce_localhost_callback_wins_race(monkeypatch):
+    import socket
+    import threading
+    import time
+    import urllib.request
+
+    from lkr.auth.oauth import OAuth2PKCE
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("localhost", 0))
+        free_port = s.getsockname()[1]
+
+    monkeypatch.setattr("lkr.auth.oauth.kill_process_on_port", lambda _p: None)
+    monkeypatch.setattr("lkr.auth.oauth.webbrowser.open", lambda _u: True)
+
+    oauth = OAuth2PKCE(
+        new_token_callback=lambda _t: None,
+        use_production=False,
+        port=free_port,
+    )
+
+    def send_callback():
+        for _ in range(30):
+            if oauth.server is not None:
+                break
+            time.sleep(0.05)
+        with urllib.request.urlopen(
+            f"http://localhost:{free_port}/callback?code=auto_cb_code&state={oauth.state}"
+        ) as resp:
+            assert resp.status == 200
+            assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+            assert resp.headers.get("Access-Control-Allow-Private-Network") == "true"
+
+    t = threading.Thread(target=send_callback, daemon=True)
+    t.start()
+
+    result = oauth.initiate_login("https://acme.cloud.looker.com")
+    t.join(timeout=2.0)
+
+    assert result["auth_code"] == "auto_cb_code"
+    assert result["code_verifier"]
+    assert oauth.server is None
+
+
+def test_oauth_pkce_stdin_paste_wins_race(monkeypatch):
+    import io
+    import socket
+
+    from lkr.auth.oauth import OAuth2PKCE
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("localhost", 0))
+        free_port = s.getsockname()[1]
+
+    monkeypatch.setattr("lkr.auth.oauth.kill_process_on_port", lambda _p: None)
+    monkeypatch.setattr("lkr.auth.oauth.webbrowser.open", lambda _u: True)
+    monkeypatch.setattr("sys.stdin", io.StringIO("pasted_vm_code_999\n"))
+
+    oauth = OAuth2PKCE(
+        new_token_callback=lambda _t: None,
+        use_production=False,
+        port=free_port,
+    )
+
+    result = oauth.initiate_login("https://acme.cloud.looker.com")
+
+    assert result["auth_code"] == "pasted_vm_code_999"
+    assert result["code_verifier"]
+    assert oauth.server is None

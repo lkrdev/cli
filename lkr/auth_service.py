@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import sys
 import types
 from datetime import UTC, datetime, timedelta
 from typing import Self, Union
@@ -17,7 +18,7 @@ from pydantic import BaseModel, Field, computed_field
 from pydash import get
 
 from lkr.classes import LkrCtxObj, LookerApiKey
-from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID
+from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID, OAUTH_REDIRECT_URI
 from lkr.custom_types import NewTokenCallback
 from lkr.extended_sdk_methods import ExtendedLooker40SDK as Looker40SDK
 from lkr.logger import logger
@@ -68,9 +69,15 @@ class ApiKeyApiSettings(ApiSettings):
 
 
 class OAuthApiSettings(ApiSettings):
-    def __init__(self, base_url: str, port: int = 8000):
+    def __init__(
+        self,
+        base_url: str,
+        port: int = 8000,
+        redirect_uri: str | None = None,
+    ):
         self.base_url = base_url
         self.port = port
+        self.redirect_uri = redirect_uri or OAUTH_REDIRECT_URI
         super().__init__()
         self.agent_tag = "lkr-cli-oauth"
 
@@ -80,7 +87,7 @@ class OAuthApiSettings(ApiSettings):
             looker_url=self.base_url,
             client_id=OAUTH_CLIENT_ID,
             client_secret="",  # PKCE doesn't need client secret
-            redirect_uri=f"http://localhost:{self.port}/callback",
+            redirect_uri=self.redirect_uri,
         )
 
 
@@ -170,8 +177,9 @@ def get_auth_session(
     use_production: bool,
     access_token: AccessToken | None = None,
     port: int = 8000,
+    redirect_uri: str | None = None,
 ) -> DbOAuthSession:
-    settings = OAuthApiSettings(base_url, port=port)
+    settings = OAuthApiSettings(base_url, port=port, redirect_uri=redirect_uri)
     transport = MonkeyPatchTransport.configure(settings)
     auth = DbOAuthSession(
         settings=settings,
@@ -239,9 +247,10 @@ def init_oauth_sdk(
     access_token: AccessToken | None = None,
     use_production: bool = False,
     port: int = 8000,
+    redirect_uri: str | None = None,
 ) -> Looker40SDK:
     """Default dependency configuration"""
-    settings = OAuthApiSettings(base_url, port=port)
+    settings = OAuthApiSettings(base_url, port=port, redirect_uri=redirect_uri)
     settings.is_configured()
     transport = MonkeyPatchTransport.configure(settings)
 
@@ -251,6 +260,7 @@ def init_oauth_sdk(
         access_token=access_token,
         use_production=use_production,
         port=port,
+        redirect_uri=redirect_uri,
     )
     return Looker40SDK(
         auth=auth,
@@ -579,8 +589,16 @@ class SqlLiteAuth:
                 current_auth.set_token(self.conn, commit=True, new_token=token)
 
             # Initialize OAuth2 PKCE flow
+            # ponytail: detect headless SSH or terminal without DISPLAY to use copy-code flow
+            is_headless = not os.environ.get("DISPLAY") and (
+                "SSH_CLIENT" in os.environ
+                or "SSH_TTY" in os.environ
+                or not sys.stdin.isatty()
+            )
             oauth = OAuth2PKCE(
-                new_token_callback=add_auth, use_production=current_auth.use_production
+                new_token_callback=add_auth,
+                use_production=current_auth.use_production,
+                no_browser=is_headless,
             )
             login_response = oauth.initiate_login(current_auth.base_url)
             oauth.auth_code = login_response["auth_code"]
