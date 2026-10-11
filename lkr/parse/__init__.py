@@ -51,6 +51,10 @@ from lkr.parse.lookml_database_compare import (
     load_db_schema_file,
     parse_lookml_database_compare,
 )
+from lkr.parse.lookml_snapshot import (
+    LookmlSnapshotResult,
+    run_lookml_snapshot,
+)
 from lkr.parse.lookml_to_api import (
     ApiLookmlModel,
     ApiLookmlModelExplore,
@@ -77,6 +81,7 @@ from lkr.parse.main import (
     lookml_database_compare_command,
     lookml_group,
     lookml_to_api_command,
+    snapshot_command,
     sql_command,
     sql_lookml_compare_command,
     user_attributes_command,
@@ -194,6 +199,7 @@ __all__ = [
     "LookmlProject",
     "LookmlQueryFieldUsage",
     "LookmlSet",
+    "LookmlSnapshotResult",
     "LookmlSourceLocation",
     "LookmlTest",
     "LookmlTestAssert",
@@ -237,6 +243,8 @@ __all__ = [
     "parse_sql",
     "parse_sql_to_lookml",
     "parse_user_attributes",
+    "run_lookml_snapshot",
+    "snapshot_command",
     "sql_command",
     "sql_lookml_compare_command",
     "user_attributes_command",

@@ -682,6 +682,7 @@ $ lkr parse lookml [OPTIONS] COMMAND [ARGS]...
 **Commands**:
 
 * `user-attributes`: Extract all user attributes referenced in...
+* `snapshot`: Jest-style LookML snapshot testing to...
 
 #### `lkr parse lookml user-attributes`
 
@@ -703,4 +704,25 @@ $ lkr parse lookml user-attributes [OPTIONS]
 * `-o, --output <path>`: Optional output file path
 * `--validate`: Validate user attributes against Looker instance
 * `--format <str>`: Output format (text or json)  [default: text]
+* `--help`: Show this message and exit.
+
+#### `lkr parse lookml snapshot`
+
+Jest-style LookML snapshot testing to guard tests, access controls, connections, and manifest changes.
+
+**Usage**:
+
+```console
+$ lkr parse lookml snapshot [OPTIONS]
+```
+
+**Options**:
+
+* `-p, --path <path>`: Path to LookML directory to snapshot  [required]
+* `-u, --update`: Update snapshots in place with received data
+* `--ci`: CI mode: fail on missing or mismatched snapshots without writing
+* `--only <str>`: Comma-separated list of objects to snapshot (tests, access, connections, manifest)
+* `-m, --model <str>`: Optional model name filter for snapshot
+* `--format <console|json>`: Output format: console or json  [default: console]
+* `-o, --output <path>`: Optional output file path
 * `--help`: Show this message and exit.
