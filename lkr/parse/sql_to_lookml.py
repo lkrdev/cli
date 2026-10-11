@@ -1578,6 +1578,7 @@ def _analyze_query_joins(
     all_explore_graphs: list[LookmlExploreJoinGraph],
     models: dict[str, LookmlModel],
     query_explores: list[LookmlExploreFieldMatch],
+    views_by_model: dict[str, dict[str, LookmlView]] | None = None,
 ) -> list[ExploreJoinComparison]:
     if not pq.joins:
         return []
@@ -1611,17 +1612,18 @@ def _analyze_query_joins(
     if not candidate_graphs:
         candidate_graphs = all_explore_graphs
 
-    views_by_model: dict[str, dict[str, LookmlView]] = {}
-    for m_name, m_obj in models.items():
-        v_map: dict[str, LookmlView] = {}
-        if m_obj.view:
-            for v_k, v_v in m_obj.view.items():
-                if isinstance(v_v, list):
-                    for item in v_v:
-                        v_map[v_k] = item
-                else:
-                    v_map[v_k] = v_v
-        views_by_model[m_name] = v_map
+    if views_by_model is None:
+        views_by_model = {}
+        for m_name, m_obj in models.items():
+            v_map: dict[str, LookmlView] = {}
+            if m_obj.view:
+                for v_k, v_v in m_obj.view.items():
+                    if isinstance(v_v, list):
+                        for item in v_v:
+                            v_map[v_k] = item
+                    else:
+                        v_map[v_k] = v_v
+            views_by_model[m_name] = v_map
 
     results: list[ExploreJoinComparison] = []
 
@@ -1633,6 +1635,30 @@ def _analyze_query_joins(
         if bv and bv.sql_table_name:
             clean_tbl = re.sub(r"[\${}\s;]", "", bv.sql_table_name).split(".")[-1].lower()
             base_names.add(clean_tbl)
+
+        # Precompute explore-level safety warnings (fan trap detection)
+        explore_safety_warnings: list[JoinSafetyWarning] = []
+        o2m_joins = [
+            j
+            for j in target_graph.joins.values()
+            if (j.relationship or "").lower() in ("one_to_many", "many_to_many")
+        ]
+        if len(o2m_joins) >= 2:
+            for idx in range(len(o2m_joins)):
+                for jdx in range(idx + 1, len(o2m_joins)):
+                    j1, j2 = o2m_joins[idx], o2m_joins[jdx]
+                    explore_safety_warnings.append(
+                        JoinSafetyWarning(
+                            rule="fan_trap",
+                            severity="warning",
+                            message=(
+                                f"Potential fan trap detected: join '{j1.name}' ({j1.relationship}) "
+                                f"and join '{j2.name}' ({j2.relationship}) create a multi-fanout path "
+                                "which can multiply aggregate calculations"
+                            ),
+                            joins=[j1.name, j2.name],
+                        )
+                    )
 
         for sql_join in pq.joins:
             left_t = sql_join.left_table
@@ -1678,31 +1704,8 @@ def _analyze_query_joins(
                     matched_j = j_node
                     break
 
-            safety_warnings: list[JoinSafetyWarning] = []
+            safety_warnings = list(explore_safety_warnings)
             precedents: list[JoinPrecedent] = []
-
-            # Fan trap detection
-            o2m_joins = [
-                j
-                for j in target_graph.joins.values()
-                if (j.relationship or "").lower() in ("one_to_many", "many_to_many")
-            ]
-            if len(o2m_joins) >= 2:
-                for idx in range(len(o2m_joins)):
-                    for jdx in range(idx + 1, len(o2m_joins)):
-                        j1, j2 = o2m_joins[idx], o2m_joins[jdx]
-                        safety_warnings.append(
-                            JoinSafetyWarning(
-                                rule="fan_trap",
-                                severity="warning",
-                                message=(
-                                    f"Potential fan trap detected: join '{j1.name}' ({j1.relationship}) "
-                                    f"and join '{j2.name}' ({j2.relationship}) create a multi-fanout path "
-                                    "which can multiply aggregate calculations"
-                                ),
-                                joins=[j1.name, j2.name],
-                            )
-                        )
 
             # Missing required joins
             if matched_j and matched_j.required_joins:
@@ -1944,6 +1947,18 @@ def parse_sql_to_lookml(
                         )
                     )
 
+    views_by_model: dict[str, dict[str, LookmlView]] = {}
+    for m_name, m_obj in models.items():
+        v_map: dict[str, LookmlView] = {}
+        if m_obj.view:
+            for v_k, v_v in m_obj.view.items():
+                if isinstance(v_v, list):
+                    for item in v_v:
+                        v_map[v_k] = item
+                else:
+                    v_map[v_k] = v_v
+        views_by_model[m_name] = v_map
+
     mappings: list[QueryLookmlMapping] = []
     for raw_pq in sql_res.queries:
         coerced_tables = [
@@ -2017,6 +2032,7 @@ def parse_sql_to_lookml(
             all_explore_graphs,
             models,
             query_explores,
+            views_by_model=views_by_model,
         )
         mappings.append(
             QueryLookmlMapping(
