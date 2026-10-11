@@ -593,6 +593,7 @@ class SqlLiteAuth:
             is_headless = not os.environ.get("DISPLAY") and (
                 "SSH_CLIENT" in os.environ
                 or "SSH_TTY" in os.environ
+                or sys.stdin is None
                 or not sys.stdin.isatty()
             )
             oauth = OAuth2PKCE(

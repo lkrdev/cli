@@ -124,6 +124,40 @@ def test_set_token_refreshes_lookedup_account(temp_db):
     conn.close()
 
 
+def test_parse_auth_code_input():
+    from lkr.auth.oauth import parse_auth_code_input
+
+    assert parse_auth_code_input("  raw-code-123  ") == "raw-code-123"
+    assert (
+        parse_auth_code_input(
+            "https://www.lkr.dev/oauth/callback/?code=url-code-456&state=s1",
+            expected_state="s1",
+        )
+        == "url-code-456"
+    )
+    assert (
+        parse_auth_code_input(
+            "localhost:8000/callback?code=schemeless-789&state=s1",
+            expected_state="s1",
+        )
+        == "schemeless-789"
+    )
+    with pytest.raises(ValueError, match="state mismatch"):
+        parse_auth_code_input(
+            "https://www.lkr.dev/oauth/callback/?code=abc&state=wrong",
+            expected_state="expected",
+        )
+    with pytest.raises(ValueError, match="state mismatch"):
+        parse_auth_code_input(
+            "https://www.lkr.dev/oauth/callback/?code=abc",
+            expected_state="expected",
+        )
+    with pytest.raises(ValueError, match="Looker OAuth error: access_denied"):
+        parse_auth_code_input(
+            "https://www.lkr.dev/oauth/callback/?error=access_denied&error_description=nope"
+        )
+
+
 def test_oauth_api_settings_default_redirect_uri():
     from lkr.auth_service import OAuthApiSettings
     from lkr.constants import OAUTH_REDIRECT_URI

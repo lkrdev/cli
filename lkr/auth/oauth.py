@@ -1,3 +1,4 @@
+import errno
 import http.server
 import io
 import os
@@ -29,13 +30,18 @@ def parse_auth_code_input(raw_input: str, expected_state: str | None = None) -> 
         or "code=" in cleaned
         or "error=" in cleaned
     ):
-        parsed = urllib.parse.urlparse(cleaned)
-        query = parse_qs(parsed.query if parsed.scheme else cleaned.lstrip("?"))
+        query_str = cleaned
+        if "?" in cleaned:
+            query_str = cleaned.split("?", 1)[1]
+        elif cleaned.startswith(("http://", "https://")):
+            parsed = urllib.parse.urlparse(cleaned)
+            query_str = parsed.query
+        query = parse_qs(query_str)
         if "error" in query:
             err = query["error"][0]
             desc = query.get("error_description", [""])[0]
             raise ValueError(f"Looker OAuth error: {err} {desc}".strip())
-        if expected_state and "state" in query and query["state"][0] != expected_state:
+        if expected_state and query.get("state", [None])[0] != expected_state:
             raise ValueError("OAuth state mismatch in callback URL.")
         if "code" not in query or not query["code"][0]:
             raise ValueError("No 'code' parameter found in the provided URL.")
@@ -118,7 +124,15 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
 
         # Store the code in the server instance
         server = cast(OAuthCallbackServer, self.server)
-        if "code" in query_components:
+        if (
+            server.expected_state
+            and query_components.get("state", [None])[0] != server.expected_state
+        ):
+            logger.error("Looker OAuth callback state mismatch.")
+            self.wfile.write(
+                b"OAuth Authentication Failed: State mismatch. You can close this window."
+            )
+        elif "code" in query_components:
             server.auth_code = query_components["code"][0]
             logger.debug(
                 f"Authorization code received successfully: {server.auth_code[:5]}..."
@@ -144,7 +158,6 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
             )
 
         server.done_event.set()
-        threading.Thread(target=server.shutdown, daemon=True).start()
 
     def log_message(self, format, *args):
         """Suppress logging of requests"""
@@ -153,9 +166,10 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
 class OAuthCallbackServer(socketserver.TCPServer):
     allow_reuse_address = True
 
-    def __init__(self, server_address):
+    def __init__(self, server_address, expected_state: str | None = None):
         super().__init__(server_address, OAuthCallbackHandler)
         self.auth_code: str | None = None
+        self.expected_state = expected_state
         self.done_event = threading.Event()
 
 
@@ -203,12 +217,14 @@ class OAuth2PKCE:
             kill_process_on_port(self.port)
             for _ in range(20):
                 try:
-                    self.server = OAuthCallbackServer(("localhost", self.port))
+                    self.server = OAuthCallbackServer(
+                        ("localhost", self.port), expected_state=self.state
+                    )
                     break
                 except OSError as e:
                     if getattr(
                         e, "errno", None
-                    ) == 48 or "Address already in use" in str(e):
+                    ) == errno.EADDRINUSE or "Address already in use" in str(e):
                         time.sleep(1)
                     else:
                         raise
