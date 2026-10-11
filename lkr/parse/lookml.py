@@ -504,6 +504,12 @@ class LookmlVisualization(LookmlParserValues):
     dependencies: list[str] | None = None
 
 
+class LookmlLocalizationSettings(_LookmlBase):
+    default_locale: str | None = None
+    localization_level: str | None = None
+    import_locale_defs: bool | str | None = None
+
+
 class LookmlManifest(LookmlFileAttributes):
     project_name: str | None = None
     application: Any = None
@@ -513,6 +519,7 @@ class LookmlManifest(LookmlFileAttributes):
     visualization: list[LookmlVisualization] | dict[str, LookmlVisualization] | None = (
         None
     )
+    localization_settings: LookmlLocalizationSettings | dict[str, Any] | None = None
 
 
 class LookmlDashboard(LookmlFileAttributes):
@@ -615,9 +622,8 @@ def _ensure_lookml_parser(version: str = LOOKML_PARSER_VERSION) -> Path:
     LOOKML_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     mod_dir = LOOKML_CACHE_DIR / "node_modules" / "lookml-parser"
     pkg_json = mod_dir / "package.json"
-    if (
-        not pkg_json.exists()
-        or f'"version": "{version}"' not in pkg_json.read_text(encoding="utf-8")
+    if not pkg_json.exists() or f'"version": "{version}"' not in pkg_json.read_text(
+        encoding="utf-8"
     ):
         nodejs_wheel.npm(
             [

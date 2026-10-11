@@ -20,6 +20,12 @@ from lkr.parse.sql_to_lookml import (
     SqlToLookmlResult,
     parse_sql_to_lookml,
 )
+from lkr.parse.translations import (
+    TranslationAnalysisResult,
+    analyze_lookml_translations,
+    format_translations_console,
+    format_translations_text,
+)
 from lkr.parse.types import LookmlDatabaseCompareResult
 from lkr.parse.user_attributes import (
     LookmlUserAttributesResult,
@@ -36,6 +42,7 @@ __all__ = [
     "snapshot_command",
     "sql_command",
     "sql_lookml_compare_command",
+    "translations_command",
     "user_attributes_command",
 ]
 
@@ -99,7 +106,9 @@ def sql_command(
     dialect: Annotated[
         str | None,
         typer.Option(
-            "--dialect", "-d", help="Optional SQLGlot dialect (e.g. bigquery, snowflake)"
+            "--dialect",
+            "-d",
+            help="Optional SQLGlot dialect (e.g. bigquery, snowflake)",
         ),
     ] = None,
 ) -> SqlParseResult:
@@ -322,6 +331,71 @@ def snapshot_command(
     if not result.success:
         raise typer.Exit(1)
     return result
+
+
+@lookml_group.command(name="translations")
+def translations_command(
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Path to a LookML directory"),
+    ],
+    locale: Annotated[
+        str | None,
+        typer.Option("--locale", "-l", help="Optional specific locale to evaluate"),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Optional output file path"),
+    ] = None,
+    format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: console, json, or text"),
+    ] = "console",
+    strict: Annotated[
+        bool,
+        typer.Option(
+            "--strict",
+            help="Exit non-zero if missing or bypassed translations or missing labels are detected",
+        ),
+    ] = False,
+    validate: Annotated[
+        bool,
+        typer.Option(
+            "--validate",
+            help="Alias for --strict",
+        ),
+    ] = False,
+) -> TranslationAnalysisResult:
+    """Detect missing and bypassed locale strings across LookML models, explores, views, and fields."""
+    if not path.exists():
+        logger.error(f"LookML path not found: {path}")
+        raise typer.Exit(1)
+
+    try:
+        result = analyze_lookml_translations(path=path, locale=locale)
+    except (ValueError, FileNotFoundError) as e:
+        logger.error(str(e))
+        raise typer.Exit(1)
+
+    fmt = format.lower()
+    if fmt == "json":
+        text = result.model_dump_json(indent=2)
+    elif fmt in ("text", "txt"):
+        text = format_translations_text(result)
+    elif fmt == "console":
+        text = format_translations_console(result)
+    else:
+        logger.error(
+            f"Invalid format '{format}'. Supported formats: console, json, text"
+        )
+        raise typer.Exit(1)
+
+    _write_or_echo(text, output)
+
+    if (strict or validate) and result.missing_translations:
+        raise typer.Exit(1)
+
+    return result
 @group.command(name="sql-lookml-compare")
 def sql_lookml_compare_command(
     sql: Annotated[
@@ -347,7 +421,9 @@ def sql_lookml_compare_command(
     dialect: Annotated[
         str | None,
         typer.Option(
-            "--dialect", "-d", help="Optional SQLGlot dialect (e.g. bigquery, snowflake)"
+            "--dialect",
+            "-d",
+            help="Optional SQLGlot dialect (e.g. bigquery, snowflake)",
         ),
     ] = None,
     output: Annotated[
@@ -427,10 +503,6 @@ def sql_lookml_compare_command(
         result.model_dump_json(indent=2, by_alias=True, exclude_none=True), output
     )
     return result
-
-
-
-
 
 
 @group.command(name="lookml-to-api")
@@ -562,5 +634,3 @@ def lookml_database_compare_command(
     formatted = format_compare_result(result, fmt=format)
     _write_or_echo(formatted, output)
     return result
-
-
