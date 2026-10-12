@@ -730,17 +730,30 @@ def _find_datagroup_location(
 def _iter_view_fields(
     view_obj: LookmlView,
 ) -> list[tuple[str, str, Any]]:
-    out: list[tuple[str, str, Any]] = []
-    for ftype, fdict in (
-        ("dimension", view_obj.dimension or {}),
-        ("dimension_group", view_obj.dimension_group or {}),
-        ("measure", view_obj.measure or {}),
-        ("filter", view_obj.filter or {} if isinstance(view_obj.filter, dict) else {}),
-    ):
-        for fname, fobj in fdict.items():
-            if fobj is not None:
-                out.append((ftype, fname, fobj))
-    return out
+    f_val = view_obj.filter
+    filter_dict = (
+        f_val
+        if isinstance(f_val, dict)
+        else {f.name_: f for f in _as_list(f_val) if getattr(f, "name_", None)}
+    )
+    return [
+        (ftype, fname, fobj)
+        for ftype, fdict in (
+            ("dimension", view_obj.dimension or {}),
+            ("dimension_group", view_obj.dimension_group or {}),
+            ("measure", view_obj.measure or {}),
+            ("filter", filter_dict),
+        )
+        for fname, fobj in fdict.items()
+        if fobj is not None
+    ]
+
+
+def _get_view_field(view_obj: LookmlView, ftype: str, fname: str) -> Any:
+    return next(
+        (fobj for ft, fn, fobj in _iter_view_fields(view_obj) if ft == ftype and fn == fname),
+        None,
+    )
 
 
 # ponytail: seed SQLGlot schema from LookML views + Looker connection_columns
@@ -1408,7 +1421,7 @@ def _match_model_views(
         src_col = src_info.sql_column
         src_via = src_info.via
         src_ext = src_info.ext_aliases
-        src_fobj = getattr(model_views[src_view], src_ftype)[src_fname] if hasattr(model_views[src_view], src_ftype) and getattr(model_views[src_view], src_ftype) else None
+        src_fobj = _get_view_field(model_views[src_view], src_ftype, src_fname)
         src_cands = {src_fname.lower()}
         if isinstance(src_fobj, LookmlDimensionGroup) and src_fobj.timeframes:
             src_cands |= {f"{src_fname}_{tf}".lower() for tf in src_fobj.timeframes}
