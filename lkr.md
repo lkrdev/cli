@@ -81,6 +81,7 @@ $ lkr auth login [OPTIONS]
 
 * `-I, --instance-name <str>`: Name of the Looker instance to login or switch to
 * `-p, --port <int range>`: Port to run the local OAuth redirect web server on  [1&lt;=x&lt;=65535]
+* `--no-browser, --remote`: Do not automatically open a local browser; copy the authorization code from https://www.lkr.dev/oauth/callback/
 * `--help`: Show this message and exit.
 
 ### `lkr auth logout`

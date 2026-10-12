@@ -282,11 +282,32 @@ class LookmlExploreQueryMatch(BaseModel):
     position: list[int]
 
 
+class LookmlUsageMatch(BaseModel):
+    model_name: str | None = None
+    explore_name: str | None = None
+    view_name: str | None = None
+    join_name: str | None = None
+    field_name: str | None = None
+    datagroup_name: str | None = None
+    matched_property: str
+    property_path: str
+    expression: str | None = None
+    sql_table: str | None = None
+    sql_column: str | None = None
+    file: str
+    line: int
+    end_line: int
+    position: list[int] = Field(default_factory=list)
+
+
 class LookmlFieldMatch(BaseModel):
     sql_column: str
     field_type: str
     field_name: str
     sql: str | None = None
+    matched_property: str = "sql"
+    property_path: str | None = None
+    expression: str | None = None
     via: list[str] = Field(default_factory=list)
     file: str
     line: int
@@ -297,6 +318,7 @@ class LookmlFieldMatch(BaseModel):
     tests: list[LookmlTestMatch] = Field(default_factory=list)
     aggregate_tables: list[LookmlAggregateTableMatch] = Field(default_factory=list)
     explore_queries: list[LookmlExploreQueryMatch] = Field(default_factory=list)
+    usages: list[LookmlUsageMatch] = Field(default_factory=list)
 
 
 class LookmlViewMatch(BaseModel):
@@ -356,6 +378,7 @@ class QueryLookmlMapping(BaseModel):
     aggregate_tables: list[LookmlAggregateTableMatch] = Field(default_factory=list)
     explore_queries: list[LookmlExploreQueryMatch] = Field(default_factory=list)
     join_analysis: list[ExploreJoinComparison] = Field(default_factory=list)
+    usages: list[LookmlUsageMatch] = Field(default_factory=list)
 
 
 class SqlToLookmlResult(BaseModel):
@@ -399,6 +422,7 @@ __all__ = [
     "LookmlSourceLocation",
     "LookmlTestMatch",
     "LookmlToApiResult",
+    "LookmlUsageMatch",
     "LookmlViewMatch",
     "QueryLookmlMapping",
     "SqlLookmlCompareResult",
