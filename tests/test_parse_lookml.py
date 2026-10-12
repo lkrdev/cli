@@ -2302,3 +2302,164 @@ def test_parse_sql_to_lookml_aggregate_tables_and_explore_queries():
         "partial_with_pivots",
     }
 
+
+def test_parse_sql_to_lookml_property_level_impact_and_usages():
+    from lkr.parse import parse_sql_to_lookml
+
+    lkml = """
+datagroup: orders_dg {
+  sql_trigger: SELECT MAX(id) FROM db.s.orders ;;
+  interval_trigger: "12 hours"
+}
+
+explore: orders {
+  sql_always_where: ${orders.status} = 'active' ;;
+  sql_always_having: ${orders.total_amount} > 0 ;;
+  access_filter: {
+    field: orders.brand
+    user_attribute: brand
+  }
+  persist_with: orders_dg
+  join: users {
+    sql_on: ${orders.user_id} = ${users.id} ;;
+    sql_where: ${users.active} = 1 ;;
+  }
+  join: items {
+    foreign_key: item_id
+  }
+}
+
+view: users {
+  sql_table_name: db.s.users ;;
+  dimension: id {
+    type: number
+    sql: ${TABLE}.id ;;
+  }
+  dimension: active {
+    type: number
+    sql: ${TABLE}.active ;;
+  }
+}
+
+view: items {
+  sql_table_name: db.s.items ;;
+  dimension: id {
+    type: number
+    sql: ${TABLE}.id ;;
+  }
+}
+
+view: orders {
+  sql_table_name: db.s.orders ;;
+  dimension: id {
+    type: number
+    sql: ${TABLE}.id ;;
+  }
+  dimension: user_id {
+    type: number
+    sql: ${TABLE}.user_id ;;
+  }
+  dimension: item_id {
+    type: number
+    sql: ${TABLE}.item_id ;;
+  }
+  dimension: status {
+    type: string
+    sql: ${TABLE}.status ;;
+  }
+  dimension: brand {
+    type: string
+    sql: ${TABLE}.brand ;;
+  }
+  dimension: status_label {
+    case: {
+      when: {
+        sql: ${TABLE}.status = 'open' ;;
+        label: "Open"
+      }
+      else: "Closed"
+    }
+  }
+  dimension_group: duration_group {
+    type: duration
+    sql_start: ${TABLE}.created_at ;;
+    sql_end: ${TABLE}.delivered_at ;;
+  }
+  measure: total_amount {
+    type: sum
+    sql: ${TABLE}.amount ;;
+  }
+  measure: active_count {
+    type: count
+    filters: [status: "active"]
+  }
+  measure: deal_tier {
+    case: {
+      when: {
+        sql: ${TABLE}.amount > 100 ;;
+        label: "Big"
+      }
+    }
+  }
+  filter: date_filter {
+    type: string
+    sql: ${TABLE}.created_at > '2020-01-01' ;;
+  }
+}
+
+view: summary {
+  derived_table: {
+    sql: SELECT * FROM db.s.orders ;;
+    sql_trigger_value: SELECT MAX(id) FROM db.s.orders ;;
+  }
+  dimension: id {
+    type: number
+    sql: ${TABLE}.id ;;
+  }
+}
+"""
+    sql = "SELECT id, user_id, item_id, status, brand, created_at, delivered_at, amount FROM db.s.orders"
+    res = parse_sql_to_lookml(sql=sql, lookml=lkml, dialect="bigquery")
+    q = res.queries[0]
+    orders_vm = next(v for v in q.views if v.view_name == "orders")
+    f_map = {f.field_name: f for f in orders_vm.fields}
+
+    assert f_map["status_label"].matched_property == "dimension.case.when.sql"
+    assert f_map["status_label"].property_path == "view.orders.dimension.status_label.case.when.sql"
+    assert f_map["status_label"].expression == "${TABLE}.status = 'open'"
+    assert f_map["status_label"].sql_location is not None
+
+    assert f_map["deal_tier"].matched_property == "measure.case.when.sql"
+    assert f_map["deal_tier"].property_path == "view.orders.measure.deal_tier.case.when.sql"
+
+    assert f_map["active_count"].matched_property == "measure.filters"
+    assert f_map["active_count"].property_path == "view.orders.measure.active_count.filters"
+    assert "orders.status" in f_map["active_count"].via
+
+    dur_f = f_map["duration_group"]
+    assert dur_f.matched_property in ("dimension_group.sql_start", "dimension_group.sql_end")
+
+    assert f_map["date_filter"].matched_property == "filter.sql"
+
+    u_props = {u.matched_property for u in q.usages}
+    assert "join.sql_on" in u_props
+    assert "join.foreign_key" in u_props
+    assert "explore.sql_always_where" in u_props
+    assert "explore.sql_always_having" in u_props
+    assert "explore.access_filter" in u_props
+    assert "datagroup.sql_trigger" in u_props
+    assert "datagroup.interval_trigger" in u_props
+    assert "derived_table.sql_trigger_value" in u_props
+
+    sql_on_u = next(u for u in q.usages if u.matched_property == "join.sql_on")
+    assert sql_on_u.property_path == "explore.orders.join.users.sql_on"
+    assert sql_on_u.join_name == "users"
+
+    where_u = next(u for u in q.usages if u.matched_property == "explore.sql_always_where")
+    assert where_u.property_path == "explore.orders.sql_always_where"
+
+    dg_u = next(u for u in q.usages if u.matched_property == "datagroup.sql_trigger")
+    assert dg_u.property_path == "datagroup.orders_dg.sql_trigger"
+    assert dg_u.datagroup_name == "orders_dg"
+
+
