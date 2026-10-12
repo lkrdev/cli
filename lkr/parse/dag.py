@@ -324,7 +324,10 @@ def _extract_explore_equi_joins(
             if refs:
                 f_view, f_col = refs[0].split(".", 1) if "." in refs[0] else (base_alias, refs[0])
             else:
-                f_view, f_col = base_alias, re.sub(r"[\${}\s;]", "", fk_clean)
+                cleaned = re.sub(r"[\${}\s;]", "", fk_clean)
+                if cleaned.upper().startswith("TABLE."):
+                    cleaned = cleaned[6:]
+                f_view, f_col = base_alias, cleaned
         elif "." in fk_clean:
             f_view, f_col = fk_clean.split(".", 1)
         else:

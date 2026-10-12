@@ -1,3 +1,4 @@
+import itertools
 import json
 import os
 import re
@@ -1572,6 +1573,67 @@ def _normalize_lookml_join_type(jtype: str | None) -> str:
     return "LEFT"
 
 
+_FLIP_REL: dict[str, str] = {
+    "many_to_one": "one_to_many",
+    "one_to_many": "many_to_one",
+}
+
+
+def _view_table_tail(v: LookmlView | None) -> str:
+    return (
+        re.sub(r"[\${}\s;`\"'\[\]]", "", v.sql_table_name).split(".")[-1].lower()
+        if v and v.sql_table_name
+        else ""
+    )
+
+
+def _view_pk_columns(v: LookmlView | None) -> set[str]:
+    if not v or not v.dimension:
+        return set()
+    pks: set[str] = set()
+    for d_name, d_obj in v.dimension.items():
+        if getattr(d_obj, "primary_key", False):
+            pks.add(d_name.lower())
+            if d_obj.sql:
+                for m in _TABLE_COL_RE.finditer(d_obj.sql):
+                    pks.add((m.group(1) or m.group(2)).lower())
+    return pks
+
+
+def _resolve_table_view(
+    tbl_name: str,
+    tbl_alias: str,
+    target_graph: LookmlExploreJoinGraph,
+    m_views: dict[str, LookmlView],
+) -> LookmlView | None:
+    keys = {tbl_name, tbl_alias} - {""}
+    if not keys:
+        return None
+    if keys & {target_graph.base_view.lower(), target_graph.base_alias.lower()}:
+        return m_views.get(target_graph.base_view)
+    for j_name, j_node in target_graph.joins.items():
+        if keys & {j_name.lower(), j_node.target_view.lower(), j_node.view_alias.lower()}:
+            return m_views.get(j_node.target_view)
+    for v_name, v_obj in m_views.items():
+        v_tbl = _view_table_tail(v_obj)
+        if keys & ({v_name.lower()} | ({v_tbl} if v_tbl else set())):
+            return v_obj
+    return None
+
+
+def _build_views_by_model(
+    models: dict[str, LookmlModel],
+) -> dict[str, dict[str, LookmlView]]:
+    return {
+        m_name: {
+            v_k: items[-1]
+            for v_k, v_v in (m_obj.view or {}).items()
+            if (items := [x for x in _as_list(v_v) if isinstance(x, LookmlView)])
+        }
+        for m_name, m_obj in models.items()
+    }
+
+
 # ponytail: linear scan across project explores for precedent discovery and AST-based fan trap/required join checks
 def _analyze_query_joins(
     pq: ParsedQuery,
@@ -1613,52 +1675,36 @@ def _analyze_query_joins(
         candidate_graphs = all_explore_graphs
 
     if views_by_model is None:
-        views_by_model = {}
-        for m_name, m_obj in models.items():
-            v_map: dict[str, LookmlView] = {}
-            if m_obj.view:
-                for v_k, v_v in m_obj.view.items():
-                    if isinstance(v_v, list):
-                        for item in v_v:
-                            v_map[v_k] = item
-                    else:
-                        v_map[v_k] = v_v
-            views_by_model[m_name] = v_map
+        views_by_model = _build_views_by_model(models)
 
     results: list[ExploreJoinComparison] = []
 
     for target_graph in candidate_graphs:
         m_views = views_by_model.get(target_graph.model_name or "", {})
-
-        base_names = {target_graph.base_view.lower(), target_graph.base_alias.lower()}
-        bv = m_views.get(target_graph.base_view)
-        if bv and bv.sql_table_name:
-            clean_tbl = re.sub(r"[\${}\s;]", "", bv.sql_table_name).split(".")[-1].lower()
-            base_names.add(clean_tbl)
+        bv_tail = _view_table_tail(m_views.get(target_graph.base_view))
+        base_names = {target_graph.base_view.lower(), target_graph.base_alias.lower()} | (
+            {bv_tail} if bv_tail else set()
+        )
 
         # Precompute explore-level safety warnings (fan trap detection)
-        explore_safety_warnings: list[JoinSafetyWarning] = []
         o2m_joins = [
             j
             for j in target_graph.joins.values()
             if (j.relationship or "").lower() in ("one_to_many", "many_to_many")
         ]
-        if len(o2m_joins) >= 2:
-            for idx in range(len(o2m_joins)):
-                for jdx in range(idx + 1, len(o2m_joins)):
-                    j1, j2 = o2m_joins[idx], o2m_joins[jdx]
-                    explore_safety_warnings.append(
-                        JoinSafetyWarning(
-                            rule="fan_trap",
-                            severity="warning",
-                            message=(
-                                f"Potential fan trap detected: join '{j1.name}' ({j1.relationship}) "
-                                f"and join '{j2.name}' ({j2.relationship}) create a multi-fanout path "
-                                "which can multiply aggregate calculations"
-                            ),
-                            joins=[j1.name, j2.name],
-                        )
-                    )
+        explore_safety_warnings = [
+            JoinSafetyWarning(
+                rule="fan_trap",
+                severity="warning",
+                message=(
+                    f"Potential fan trap detected: join '{j1.name}' ({j1.relationship}) "
+                    f"and join '{j2.name}' ({j2.relationship}) create a multi-fanout path "
+                    "which can multiply aggregate calculations"
+                ),
+                joins=[j1.name, j2.name],
+            )
+            for j1, j2 in itertools.combinations(o2m_joins, 2)
+        ]
 
         for sql_join in pq.joins:
             left_t = sql_join.left_table
@@ -1668,40 +1714,57 @@ def _analyze_query_joins(
             right_name = (right_t.name if right_t else "").lower()
             right_alias = (right_t.alias if right_t and right_t.alias else right_name).lower()
 
+            left_view = _resolve_table_view(left_name, left_alias, target_graph, m_views)
+            right_view = _resolve_table_view(right_name, right_alias, target_graph, m_views)
+            left_pks = _view_pk_columns(left_view)
+            right_pks = _view_pk_columns(right_view)
+            inferred_rel: str | None = None
+            if sql_join.equi_joins and (left_pks or right_pks):
+                l_is_pk = bool(left_pks) and all(
+                    l_col.lower() in left_pks for (_, l_col), _ in sql_join.equi_joins
+                )
+                r_is_pk = bool(right_pks) and all(
+                    r_col.lower() in right_pks for _, (_, r_col) in sql_join.equi_joins
+                )
+                if l_is_pk and r_is_pk:
+                    inferred_rel = "one_to_one"
+                elif r_is_pk:
+                    inferred_rel = "many_to_one"
+                elif l_is_pk:
+                    inferred_rel = "one_to_many"
+                elif left_view is not None and right_view is not None:
+                    inferred_rel = "many_to_many"
+
             matched_j: LookmlExploreJoinNode | None = None
+            matched_inverted = False
 
             for j_name, j_node in target_graph.joins.items():
-                j_names = {j_name.lower(), j_node.target_view.lower(), j_node.view_alias.lower()}
-                jv = m_views.get(j_node.target_view)
-                if jv and jv.sql_table_name:
-                    clean_tbl = re.sub(r"[\${}\s;]", "", jv.sql_table_name).split(".")[-1].lower()
-                    j_names.add(clean_tbl)
+                jv_tail = _view_table_tail(m_views.get(j_node.target_view))
+                j_names = {
+                    j_name.lower(),
+                    j_node.target_view.lower(),
+                    j_node.view_alias.lower(),
+                } | ({jv_tail} if jv_tail else set())
 
                 from_v = (j_node.from_view or target_graph.base_alias).lower()
-                from_names = {from_v}
-                from_jv = m_views.get(j_node.from_view or "")
-                if from_jv and from_jv.sql_table_name:
-                    clean_tbl = re.sub(r"[\${}\s;]", "", from_jv.sql_table_name).split(".")[-1].lower()
-                    from_names.add(clean_tbl)
+                from_tail = _view_table_tail(m_views.get(j_node.from_view or ""))
+                from_names = {from_v} | ({from_tail} if from_tail else set())
 
-                if (
-                    (right_name in j_names or right_alias in j_names)
-                    and (
-                        left_name in base_names
-                        or left_alias in base_names
-                        or left_name in from_names
-                        or left_alias in from_names
-                    )
-                ) or (
-                    (left_name in j_names or left_alias in j_names)
-                    and (
-                        right_name in base_names
-                        or right_alias in base_names
-                        or right_name in from_names
-                        or right_alias in from_names
-                    )
-                ):
+                fwd_match = (right_name in j_names or right_alias in j_names) and (
+                    left_name in base_names
+                    or left_alias in base_names
+                    or left_name in from_names
+                    or left_alias in from_names
+                )
+                rev_match = (left_name in j_names or left_alias in j_names) and (
+                    right_name in base_names
+                    or right_alias in base_names
+                    or right_name in from_names
+                    or right_alias in from_names
+                )
+                if fwd_match or rev_match:
                     matched_j = j_node
+                    matched_inverted = rev_match and not fwd_match
                     break
 
             safety_warnings = list(explore_safety_warnings)
@@ -1776,6 +1839,30 @@ def _analyze_query_joins(
                     if (type_match and equi_match)
                     else "type_mismatch"
                 )
+                if inferred_rel is None:
+                    inferred_rel = (
+                        _FLIP_REL.get(matched_j.relationship, matched_j.relationship)
+                        if matched_inverted
+                        else matched_j.relationship
+                    )
+                else:
+                    expected_explore_rel = (
+                        _FLIP_REL.get(inferred_rel, inferred_rel)
+                        if matched_inverted
+                        else inferred_rel
+                    )
+                    if expected_explore_rel != matched_j.relationship:
+                        safety_warnings.append(
+                            JoinSafetyWarning(
+                                rule="relationship_mismatch",
+                                severity="warning",
+                                message=(
+                                    f"Join '{matched_j.name}' declares relationship '{matched_j.relationship}', "
+                                    f"but primary keys infer '{expected_explore_rel}'"
+                                ),
+                                joins=[matched_j.name],
+                            )
+                        )
 
                 results.append(
                     ExploreJoinComparison(
@@ -1787,6 +1874,7 @@ def _analyze_query_joins(
                         explore_join_type=matched_j.type,
                         sql_join_type=sql_type,
                         relationship=matched_j.relationship,
+                        inferred_relationship=inferred_rel,
                         safety_warnings=safety_warnings,
                         precedents=[],
                     )
@@ -1804,41 +1892,23 @@ def _analyze_query_joins(
                     ):
                         continue
                     o_views = views_by_model.get(other_g.model_name or "", {})
+                    obv_tail = _view_table_tail(o_views.get(other_g.base_view))
                     o_base_names = {
                         other_g.base_view.lower(),
                         other_g.base_alias.lower(),
-                    }
-                    obv = o_views.get(other_g.base_view)
-                    if obv and obv.sql_table_name:
-                        o_base_names.add(
-                            re.sub(r"[\${}\s;]", "", obv.sql_table_name)
-                            .split(".")[-1]
-                            .lower()
-                        )
+                    } | ({obv_tail} if obv_tail else set())
 
                     for oj_name, oj_node in other_g.joins.items():
+                        ojv_tail = _view_table_tail(o_views.get(oj_node.target_view))
                         oj_names = {
                             oj_name.lower(),
                             oj_node.target_view.lower(),
                             oj_node.view_alias.lower(),
-                        }
-                        ojv = o_views.get(oj_node.target_view)
-                        if ojv and ojv.sql_table_name:
-                            oj_names.add(
-                                re.sub(r"[\${}\s;]", "", ojv.sql_table_name)
-                                .split(".")[-1]
-                                .lower()
-                            )
+                        } | ({ojv_tail} if ojv_tail else set())
 
                         from_v = (oj_node.from_view or other_g.base_alias).lower()
-                        from_names = {from_v}
-                        from_jv = o_views.get(oj_node.from_view or "")
-                        if from_jv and from_jv.sql_table_name:
-                            from_names.add(
-                                re.sub(r"[\${}\s;]", "", from_jv.sql_table_name)
-                                .split(".")[-1]
-                                .lower()
-                            )
+                        from_tail = _view_table_tail(o_views.get(oj_node.from_view or ""))
+                        from_names = {from_v} | ({from_tail} if from_tail else set())
 
                         right_matches = bool(oj_names & {right_name, right_alias})
                         left_matches = bool(
@@ -1878,6 +1948,8 @@ def _analyze_query_joins(
                             target_precedents.append(prec_item)
 
                 precedents = both_precedents if both_precedents else target_precedents
+                if inferred_rel is None and both_precedents:
+                    inferred_rel = both_precedents[0].relationship
 
                 results.append(
                     ExploreJoinComparison(
@@ -1889,6 +1961,7 @@ def _analyze_query_joins(
                         explore_join_type=None,
                         sql_join_type=_normalize_sql_join_type(sql_join.side, sql_join.kind),
                         relationship=None,
+                        inferred_relationship=inferred_rel,
                         safety_warnings=safety_warnings,
                         precedents=precedents,
                     )
@@ -1947,17 +2020,7 @@ def parse_sql_to_lookml(
                         )
                     )
 
-    views_by_model: dict[str, dict[str, LookmlView]] = {}
-    for m_name, m_obj in models.items():
-        v_map: dict[str, LookmlView] = {}
-        if m_obj.view:
-            for v_k, v_v in m_obj.view.items():
-                if isinstance(v_v, list):
-                    for item in v_v:
-                        v_map[v_k] = item
-                else:
-                    v_map[v_k] = v_v
-        views_by_model[m_name] = v_map
+    views_by_model = _build_views_by_model(models)
 
     mappings: list[QueryLookmlMapping] = []
     for raw_pq in sql_res.queries:

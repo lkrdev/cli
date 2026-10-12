@@ -376,3 +376,77 @@ def test_cli_sql_lookml_compare_includes_join_analysis():
     assert len(ja) == 1
     assert ja[0]["status"] == "exact_match"
     assert ja[0]["matched_explore_join"] == "customers"
+    assert ja[0]["inferred_relationship"] == "many_to_one"
+
+
+def test_inferred_relationships_and_mismatch_warning():
+    lkml = """
+    model: shop {
+      explore: orders {
+        join: users {
+          type: left_outer
+          relationship: many_to_one
+          sql_on: ${orders.user_id} = ${users.id} ;;
+        }
+        join: order_facts {
+          type: left_outer
+          relationship: one_to_one
+          sql_on: ${orders.id} = ${order_facts.order_id} ;;
+        }
+        join: order_items {
+          type: left_outer
+          relationship: many_to_one
+          sql_on: ${orders.id} = ${order_items.order_id} ;;
+        }
+      }
+    }
+    view: orders {
+      sql_table_name: public.orders ;;
+      dimension: id { primary_key: yes sql: ${TABLE}.id ;; }
+      dimension: user_id { sql: ${TABLE}.user_id ;; }
+      dimension: status { sql: ${TABLE}.status ;; }
+    }
+    view: users {
+      sql_table_name: public.users ;;
+      dimension: id { primary_key: yes sql: ${TABLE}.id ;; }
+    }
+    view: order_facts {
+      sql_table_name: public.order_facts ;;
+      dimension: order_id { primary_key: yes sql: ${TABLE}.order_id ;; }
+    }
+    view: order_items {
+      sql_table_name: public.order_items ;;
+      dimension: id { primary_key: yes sql: ${TABLE}.id ;; }
+      dimension: order_id { sql: ${TABLE}.order_id ;; }
+      dimension: status { sql: ${TABLE}.status ;; }
+    }
+    """
+    sql = """
+    SELECT o.id, u.id, ofa.order_id, oi.id
+    FROM public.orders o
+    LEFT JOIN public.users u ON o.user_id = u.id
+    LEFT JOIN public.order_facts ofa ON o.id = ofa.order_id
+    LEFT JOIN public.order_items oi ON o.id = oi.order_id
+    LEFT JOIN public.order_items oi_status ON o.status = oi_status.status
+    """
+    res = parse_sql_to_lookml(sql=sql, lookml=lkml, sql_schema="public")
+    ja = res.queries[0].join_analysis
+    assert len(ja) == 4
+
+    # 1. orders.user_id = users.id -> many_to_one
+    assert ja[0].inferred_relationship == "many_to_one"
+    assert ja[0].relationship == "many_to_one"
+    assert "relationship_mismatch" not in {w.rule for w in ja[0].safety_warnings}
+
+    # 2. orders.id = order_facts.order_id -> one_to_one
+    assert ja[1].inferred_relationship == "one_to_one"
+    assert ja[1].relationship == "one_to_one"
+
+    # 3. orders.id = order_items.order_id -> PK infers one_to_many, LookML declared many_to_one -> mismatch warning
+    assert ja[2].inferred_relationship == "one_to_many"
+    assert ja[2].relationship == "many_to_one"
+    assert "relationship_mismatch" in {w.rule for w in ja[2].safety_warnings}
+
+    # 4. orders.status = order_items.status -> neither is PK -> many_to_many
+    assert ja[3].inferred_relationship == "many_to_many"
+

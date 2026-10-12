@@ -342,6 +342,7 @@ class ExploreJoinComparison(BaseModel):
     explore_join_type: str | None = None
     sql_join_type: str | None = None
     relationship: str | None = None
+    inferred_relationship: str | None = None
     safety_warnings: list[JoinSafetyWarning] = Field(default_factory=list)
     precedents: list[JoinPrecedent] = Field(default_factory=list)
 
