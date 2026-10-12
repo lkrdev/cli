@@ -1,3 +1,8 @@
+from lkr.parse.dag import (
+    LookmlExploreJoinGraph,
+    LookmlExploreJoinNode,
+    build_explore_join_graph,
+)
 from lkr.parse.lookml import (
     LOOKML_PARSER_VERSION,
     LookmlAction,
@@ -76,6 +81,9 @@ from lkr.parse.sql import (
 )
 from lkr.parse.sql_to_lookml import (
     SQL_TO_LOOKML_DOC,
+    ExploreJoinComparison,
+    JoinPrecedent,
+    JoinSafetyWarning,
     LookmlAggregateTableMatch,
     LookmlExploreFieldMatch,
     LookmlExploreQueryMatch,
@@ -110,6 +118,9 @@ __all__ = [
     "ApiLookmlModelNavExplore",
     "CTESpec",
     "ColumnSpec",
+    "ExploreJoinComparison",
+    "JoinPrecedent",
+    "JoinSafetyWarning",
     "JoinSpec",
     "LookmlAction",
     "LookmlAggregateTable",
@@ -125,6 +136,8 @@ __all__ = [
     "LookmlError",
     "LookmlExplore",
     "LookmlExploreFieldMatch",
+    "LookmlExploreJoinGraph",
+    "LookmlExploreJoinNode",
     "LookmlExploreQueryMatch",
     "LookmlExploreSource",
     "LookmlExploreSourceBindFilters",
@@ -163,6 +176,7 @@ __all__ = [
     "SqlParseResult",
     "SqlToLookmlResult",
     "TableRef",
+    "build_explore_join_graph",
     "group",
     "lookml_command",
     "lookml_to_all_lookml_models",

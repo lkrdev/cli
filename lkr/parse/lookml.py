@@ -307,12 +307,12 @@ class LookmlSet(LookmlParserValues):
 class LookmlJoin(LookmlParserValues):
     fields: list[str] | None = None
     foreign_key: str | None = None
-    sql_foreign_key: str | None = None
     from_: str | None = Field(default=None, alias="from")
     outer_only: bool | None = None
     relationship: str | None = None
     relationship_type: str | None = None
     required_joins: list[str] | None = None
+    sql_foreign_key: str | None = None
     sql_having: str | None = None
     sql_on: str | None = None
     sql_table_name: str | None = None
