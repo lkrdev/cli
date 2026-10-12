@@ -75,7 +75,7 @@ uvx lkr-dev-cli --client-id <your client id> --client-secret <your client secret
 
 ### OAuth2 Prerequisites
 
-If this if the first time you're using the Language Server, you'll need to register a new OAuth client to communicate with `lkr` cli.
+If this is the first time you're using the Language Server, you'll need to register a new OAuth client to communicate with `lkr` cli.
 
 `lkr` uses OAuth2 to authenticate to Looker and manages the authentication lifecycle for you. A Looker Admin will need to Register a new OAuth client to communicate with the Language Server:
 
@@ -87,10 +87,6 @@ Go to the Looker API Explorer for Register OAuth App (https://your.looker.instan
 ```json
 {
   "redirect_uri": "https://www.lkr.dev/oauth/callback/",
-  "redirect_uris": [
-    "https://www.lkr.dev/oauth/callback/",
-    "http://localhost:8000/callback"
-  ],
   "display_name": "LKR",
   "description": "lkr.dev language server, MCP and CLI",
   "enabled": true

@@ -158,13 +158,21 @@ def test_parse_auth_code_input():
         )
 
 
-def test_oauth_api_settings_default_redirect_uri():
+def test_oauth_api_settings_default_redirect_uri(monkeypatch):
     from lkr.auth_service import OAuthApiSettings
     from lkr.constants import OAUTH_REDIRECT_URI
 
+    monkeypatch.delenv("LKR_OAUTH_REDIRECT_URI", raising=False)
     settings = OAuthApiSettings("https://acme.cloud.looker.com")
     config = settings.read_config()
     assert config["redirect_uri"] == OAUTH_REDIRECT_URI
+
+    monkeypatch.setenv("LKR_OAUTH_REDIRECT_URI", "http://localhost:3000/oauth/callback")
+    local_settings = OAuthApiSettings("https://acme.cloud.looker.com")
+    assert (
+        local_settings.read_config()["redirect_uri"]
+        == "http://localhost:3000/oauth/callback"
+    )
 
 
 def test_oauth_pkce_localhost_callback_wins_race(monkeypatch):

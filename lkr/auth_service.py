@@ -77,7 +77,9 @@ class OAuthApiSettings(ApiSettings):
     ):
         self.base_url = base_url
         self.port = port
-        self.redirect_uri = redirect_uri or OAUTH_REDIRECT_URI
+        self.redirect_uri = (
+            redirect_uri or os.getenv("LKR_OAUTH_REDIRECT_URI") or OAUTH_REDIRECT_URI
+        )
         super().__init__()
         self.agent_tag = "lkr-cli-oauth"
 
