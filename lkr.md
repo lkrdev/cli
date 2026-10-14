@@ -563,6 +563,7 @@ $ lkr parse [OPTIONS] COMMAND [ARGS]...
 * `lookml`: Parse LookML from --path, --file, or...
 * `sql-lookml-compare`: Compare and map SQL queries (--sql /...
 * `lookml-to-api`: Generate Looker API all_lookml_models and...
+* `lookml-database-compare`: Compile explore SQL and validate tables...
 
 ### `lkr parse sql`
 
@@ -645,4 +646,35 @@ $ lkr parse lookml-to-api [OPTIONS]
 * `-m, --model <str>`: Optional LookML model name filter
 * `-e, --explore <str>`: Optional LookML explore name filter
 * `-o, --output <path>`: Optional output .json file path
+* `--help`: Show this message and exit.
+
+### `lkr parse lookml-database-compare`
+
+Compile explore SQL and validate tables and columns against the database.
+
+Complements Looker&#x27;s CI/CD and `spectacles` SQL Validator: while SQL validators
+verify that LookML fields generate runnable SQL across transformations, this
+command checks bidirectional schema coverage—verifying both that all database
+tables and columns are modeled in LookML (`unmodeled_in_lookml`) and that LookML
+references exist in the database (`missing_in_database`).
+
+**Usage**:
+
+```console
+$ lkr parse lookml-database-compare [OPTIONS]
+```
+
+**Options**:
+
+* `-p, --path <path>`: Path to a LookML directory
+* `-f, --lookml-file <path>`: Path to a LookML file
+* `-l, --lookml <str>`: Inline LookML string
+* `-m, --model <str>`: Filter to one or more LookML models (repeatable)
+* `-e, --explore <str>`: Filter to one or more LookML explores (repeatable)
+* `-c, --columns`: Include physical columns referenced on each table
+* `--validate`: Compare compiled LookML tables against the database schema
+* `--validate-columns`: Validate compiled tables and columns against the database schema
+* `--db-schema-file <path>`: Path to JSON file containing database schema for offline validation
+* `--format <console|json|txt>`: Output format: console, json, txt  [default: console]
+* `-o, --output <path>`: Optional output file path
 * `--help`: Show this message and exit.

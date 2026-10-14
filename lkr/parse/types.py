@@ -396,6 +396,102 @@ class SqlToLookmlResult(BaseModel):
 # Alias SqlLookmlCompareResult to SqlToLookmlResult
 SqlLookmlCompareResult = SqlToLookmlResult
 
+
+# LookML Database Compare models
+class CompiledTableInfo(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    table: str
+    catalog: str | None = None
+    schema_: str | None = Field(default=None, alias="schema")
+    name: str
+    connection: str | None = None
+    explores: list[str] = Field(default_factory=list)
+    columns: list[str] = Field(default_factory=list)
+
+    @property
+    def schema(self) -> str | None:
+        return self.schema_
+
+
+class MissingTableInfo(BaseModel):
+    table: str
+    explores: list[str] = Field(default_factory=list)
+
+
+class MissingColumnInfo(BaseModel):
+    table: str
+    column: str
+    explores: list[str] = Field(default_factory=list)
+
+
+class TypeMismatchInfo(BaseModel):
+    table: str
+    column: str
+    lookml_type: str | None = None
+    db_type: str | None = None
+    explores: list[str] = Field(default_factory=list)
+
+
+class UnmodeledColumnsInfo(BaseModel):
+    table: str
+    columns: list[str] = Field(default_factory=list)
+
+
+class MissingInDatabase(BaseModel):
+    tables: list[MissingTableInfo] = Field(default_factory=list)
+    columns: list[MissingColumnInfo] = Field(default_factory=list)
+    type_mismatches: list[TypeMismatchInfo] = Field(default_factory=list)
+
+
+class UnmodeledInLookml(BaseModel):
+    tables: list[str] = Field(default_factory=list)
+    columns: list[UnmodeledColumnsInfo] = Field(default_factory=list)
+
+
+class ValidationResult(BaseModel):
+    missing_in_database: MissingInDatabase = Field(default_factory=MissingInDatabase)
+    unmodeled_in_lookml: UnmodeledInLookml = Field(default_factory=UnmodeledInLookml)
+
+
+class CompileErrorInfo(BaseModel):
+    """Per-explore compilation error captured during `lookml-database-compare`."""
+
+    model: str
+    explore: str
+    error: str
+
+
+class LookmlDatabaseCompareResult(BaseModel):
+    """Result of compiling LookML explores and comparing against the database schema.
+
+    Attributes:
+        warnings: Non-fatal notices emitted during compilation or validation:
+            - `"ALL_FIELDS* SQL compilation does not evaluate filter-only fields or non-default parameter values."`
+            - `"Cannot validate against database: Looker SDK is not authenticated and no --db-schema-file was provided."`
+        tables: Deduplicated physical database tables and columns referenced across explores.
+        validation: Bidirectional database comparison (`missing_in_database` and `unmodeled_in_lookml`) when `--validate`, `--validate-columns`, or `--db-schema-file` is enabled.
+        compile_errors: Per-explore compilation errors (`{model, explore, error}`) when Looker SDK inline query compilation (`run_inline_query`) or static LookML AST compilation fails for an explore.
+    """
+
+    warnings: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Non-fatal notices such as ALL_FIELDS* filter/parameter coverage caveats "
+            "or missing database credentials/schema file when --validate is requested."
+        ),
+    )
+    tables: list[CompiledTableInfo] = Field(default_factory=list)
+    validation: ValidationResult | None = None
+    compile_errors: list[CompileErrorInfo] = Field(
+        default_factory=list,
+        description=(
+            "Per-explore errors captured when SDK SQL compilation (run_inline_query) "
+            "or static LookML AST compilation fails for a specific model.explore."
+        ),
+    )
+
+
 __all__ = [
     "ApiLookmlModel",
     "ApiLookmlModelExplore",
@@ -411,10 +507,13 @@ __all__ = [
     "ApiLookmlModelExploreSet",
     "ApiLookmlModelExploreTurtleLook",
     "ApiLookmlModelNavExplore",
+    "CompileErrorInfo",
+    "CompiledTableInfo",
     "ExploreJoinComparison",
     "JoinPrecedent",
     "JoinSafetyWarning",
     "LookmlAggregateTableMatch",
+    "LookmlDatabaseCompareResult",
     "LookmlExploreFieldMatch",
     "LookmlExploreQueryMatch",
     "LookmlFieldMatch",
@@ -424,7 +523,14 @@ __all__ = [
     "LookmlToApiResult",
     "LookmlUsageMatch",
     "LookmlViewMatch",
+    "MissingColumnInfo",
+    "MissingInDatabase",
+    "MissingTableInfo",
     "QueryLookmlMapping",
     "SqlLookmlCompareResult",
     "SqlToLookmlResult",
+    "TypeMismatchInfo",
+    "UnmodeledColumnsInfo",
+    "UnmodeledInLookml",
+    "ValidationResult",
 ]
