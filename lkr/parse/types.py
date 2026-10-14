@@ -2,7 +2,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from lkr.parse.sql import ParsedQuery
+from lkr.parse.sql import JoinSpec, ParsedQuery
 
 
 # LookML to API models
@@ -282,11 +282,32 @@ class LookmlExploreQueryMatch(BaseModel):
     position: list[int]
 
 
+class LookmlUsageMatch(BaseModel):
+    model_name: str | None = None
+    explore_name: str | None = None
+    view_name: str | None = None
+    join_name: str | None = None
+    field_name: str | None = None
+    datagroup_name: str | None = None
+    matched_property: str
+    property_path: str
+    expression: str | None = None
+    sql_table: str | None = None
+    sql_column: str | None = None
+    file: str
+    line: int
+    end_line: int
+    position: list[int] = Field(default_factory=list)
+
+
 class LookmlFieldMatch(BaseModel):
     sql_column: str
     field_type: str
     field_name: str
     sql: str | None = None
+    matched_property: str = "sql"
+    property_path: str | None = None
+    expression: str | None = None
     via: list[str] = Field(default_factory=list)
     file: str
     line: int
@@ -297,6 +318,7 @@ class LookmlFieldMatch(BaseModel):
     tests: list[LookmlTestMatch] = Field(default_factory=list)
     aggregate_tables: list[LookmlAggregateTableMatch] = Field(default_factory=list)
     explore_queries: list[LookmlExploreQueryMatch] = Field(default_factory=list)
+    usages: list[LookmlUsageMatch] = Field(default_factory=list)
 
 
 class LookmlViewMatch(BaseModel):
@@ -314,6 +336,39 @@ class LookmlViewMatch(BaseModel):
     missing_db_columns: list[str] = Field(default_factory=list)
 
 
+class JoinPrecedent(BaseModel):
+    model_name: str
+    explore_name: str
+    join_name: str
+    target_view: str
+    type: str | None = None
+    relationship: str | None = None
+    sql_on: str | None = None
+    file: str | None = None
+    line: int | None = None
+
+
+class JoinSafetyWarning(BaseModel):
+    rule: str
+    severity: str = "warning"
+    message: str
+    joins: list[str] = Field(default_factory=list)
+
+
+class ExploreJoinComparison(BaseModel):
+    explore_name: str
+    model_name: str | None = None
+    sql_join: JoinSpec
+    status: str
+    matched_explore_join: str | None = None
+    explore_join_type: str | None = None
+    sql_join_type: str | None = None
+    relationship: str | None = None
+    inferred_relationship: str | None = None
+    safety_warnings: list[JoinSafetyWarning] = Field(default_factory=list)
+    precedents: list[JoinPrecedent] = Field(default_factory=list)
+
+
 class QueryLookmlMapping(BaseModel):
     raw_sql: str
     parsed_query: ParsedQuery
@@ -322,6 +377,8 @@ class QueryLookmlMapping(BaseModel):
     tests: list[LookmlTestMatch] = Field(default_factory=list)
     aggregate_tables: list[LookmlAggregateTableMatch] = Field(default_factory=list)
     explore_queries: list[LookmlExploreQueryMatch] = Field(default_factory=list)
+    join_analysis: list[ExploreJoinComparison] = Field(default_factory=list)
+    usages: list[LookmlUsageMatch] = Field(default_factory=list)
 
 
 class SqlToLookmlResult(BaseModel):
@@ -354,6 +411,9 @@ __all__ = [
     "ApiLookmlModelExploreSet",
     "ApiLookmlModelExploreTurtleLook",
     "ApiLookmlModelNavExplore",
+    "ExploreJoinComparison",
+    "JoinPrecedent",
+    "JoinSafetyWarning",
     "LookmlAggregateTableMatch",
     "LookmlExploreFieldMatch",
     "LookmlExploreQueryMatch",
@@ -362,6 +422,7 @@ __all__ = [
     "LookmlSourceLocation",
     "LookmlTestMatch",
     "LookmlToApiResult",
+    "LookmlUsageMatch",
     "LookmlViewMatch",
     "QueryLookmlMapping",
     "SqlLookmlCompareResult",

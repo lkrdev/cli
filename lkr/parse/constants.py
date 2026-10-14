@@ -238,6 +238,7 @@ SQL_TO_LOOKML_DOC: dict[str, str] = {
     "queries[].tests": "All existing LookML tests across the LookML DAG that must still pass after changes",
     "queries[].aggregate_tables": "Explore aggregate tables overlapping with matched fields from this query",
     "queries[].explore_queries": "Explore quick start queries overlapping with matched fields from this query",
+    "queries[].join_analysis": "Structured join comparisons against explore join graphs, including match status, declared and PK-inferred table relationships (many_to_one, one_to_many, one_to_one, many_to_many), safety checks (fan traps, missing required joins, relationship mismatches), and precedent discovery",
 }
 
 __all__ = [

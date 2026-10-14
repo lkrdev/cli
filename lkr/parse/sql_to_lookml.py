@@ -1,3 +1,4 @@
+import itertools
 import json
 import os
 import re
@@ -12,6 +13,8 @@ from sqlglot import exp
 from lkr.logger import logger
 from lkr.parse.constants import SQL_TO_LOOKML_DOC
 from lkr.parse.dag import (
+    LookmlExploreJoinGraph,
+    LookmlExploreJoinNode,
     _as_list,
     _build_chain,
     _chain_root_pos,
@@ -20,15 +23,15 @@ from lkr.parse.dag import (
     _is_field_allowed_by_spec,
     _qualify_field_ref,
     _resolve_explore_base,
+    build_explore_join_graph,
 )
 from lkr.parse.lookml import (
+    LookmlDatagroup,
     LookmlDerivedTable,
-    LookmlDimension,
     LookmlDimensionGroup,
     LookmlExplore,
     LookmlExploreSource,
     LookmlFilter,
-    LookmlMeasure,
     LookmlModel,
     LookmlPositions,
     LookmlTest,
@@ -40,11 +43,15 @@ from lkr.parse.sql import (
     TableRef,
     _apply_default_db_schema,
     _has_projection_star,
+    _normalize_sql_join_type,
     _optimize_stars,
     _split_table_ref,
     parse_sql,
 )
 from lkr.parse.types import (
+    ExploreJoinComparison,
+    JoinPrecedent,
+    JoinSafetyWarning,
     LookmlAggregateTableMatch,
     LookmlExploreFieldMatch,
     LookmlExploreQueryMatch,
@@ -52,6 +59,7 @@ from lkr.parse.types import (
     LookmlQueryFieldUsage,
     LookmlSourceLocation,
     LookmlTestMatch,
+    LookmlUsageMatch,
     LookmlViewMatch,
     QueryLookmlMapping,
     SqlLookmlCompareResult,
@@ -149,6 +157,7 @@ __all__ = [
     "LookmlQueryFieldUsage",
     "LookmlSourceLocation",
     "LookmlTestMatch",
+    "LookmlUsageMatch",
     "LookmlViewMatch",
     "QueryLookmlMapping",
     "SqlLookmlCompareResult",
@@ -465,52 +474,307 @@ def _extract_query_columns(
     return result
 
 
+class _FieldProperty:
+    def __init__(
+        self,
+        prop_type: str,
+        prop_key: str,
+        expr: str | None,
+        refs: list[str],
+        sql_text: str | None = None,
+    ) -> None:
+        self.prop_type = prop_type
+        self.prop_key = prop_key
+        self.sub_key = prop_key
+        self.expr = expr
+        self.refs = refs
+        self.sql_text = sql_text
+
+
+class _FieldMatchInfo:
+    def __init__(
+        self,
+        sql_table: str,
+        sql_column: str,
+        via: list[str],
+        ext_aliases: set[str],
+        matched_property: str,
+        property_path: str,
+        expression: str | None,
+        sub_key: str,
+    ) -> None:
+        self.sql_table = sql_table
+        self.sql_column = sql_column
+        self.via = via
+        self.ext_aliases = ext_aliases
+        self.matched_property = matched_property
+        self.property_path = property_path
+        self.expression = expression
+        self.sub_key = sub_key
+
+
+# ponytail: extract simple field: value filter pairs from LookmlFilter or dict AST without full filter expression grammar parsing
+def _extract_filter_refs(filters: Any) -> list[tuple[str, str]]:
+    refs: list[tuple[str, str]] = []
+    for f in _as_list(filters):
+        if isinstance(f, LookmlFilter):
+            for item in _as_list(f.field):
+                if item:
+                    val_str = str(f.value) if f.value is not None else ""
+                    refs.append((str(item).strip(), f"{item}: {val_str}".strip()))
+            for k, v in (f.model_extra or {}).items():
+                if not k.startswith("$") and not k.startswith("_") and k != "type":
+                    refs.append((k.strip(), f"{k}: {v}".strip()))
+        elif isinstance(f, dict):
+            if "field" in f and isinstance(f["field"], str):
+                fld = f["field"].strip()
+                val = f.get("value", "")
+                refs.append((fld, f"{fld}: {val}".strip()))
+            for k, v in f.items():
+                if k not in ("field", "value", "$p", "$s", "$type", "$name", "type"):
+                    refs.append((k.strip(), f"{k}: {v}".strip()))
+    return refs
+
+
+def _get_field_properties(ftype: str, fname: str, fobj: Any) -> list[_FieldProperty]:
+    props: list[_FieldProperty] = []
+    if getattr(fobj, "sql", None):
+        raw_sql = str(fobj.sql)
+        props.append(
+            _FieldProperty(
+                prop_type=f"{ftype}.sql",
+                prop_key="sql",
+                expr=raw_sql.strip(),
+                refs=_extract_lookml_refs(raw_sql),
+                sql_text=raw_sql,
+            )
+        )
+    if case_obj := getattr(fobj, "case", None):
+        for w in _as_list(getattr(case_obj, "when", None)):
+            if w and getattr(w, "sql", None):
+                raw_wsql = str(w.sql)
+                props.append(
+                    _FieldProperty(
+                        prop_type=f"{ftype}.case.when.sql",
+                        prop_key="case.when.sql",
+                        expr=raw_wsql.strip(),
+                        refs=_extract_lookml_refs(raw_wsql),
+                        sql_text=raw_wsql,
+                    )
+                )
+    if ftype == "measure" and getattr(fobj, "filters", None):
+        for ref_field, filter_repr in _extract_filter_refs(fobj.filters):
+            props.append(
+                _FieldProperty(
+                    prop_type="measure.filters",
+                    prop_key="filters",
+                    expr=filter_repr,
+                    refs=[ref_field],
+                    sql_text=None,
+                )
+            )
+    for attr, p_suffix in (("sql_start", "sql_start"), ("sql_end", "sql_end")):
+        if val := getattr(fobj, attr, None):
+            raw_val = str(val)
+            props.append(
+                _FieldProperty(
+                    prop_type=f"{ftype}.{p_suffix}",
+                    prop_key=p_suffix,
+                    expr=raw_val.strip(),
+                    refs=_extract_lookml_refs(raw_val),
+                    sql_text=raw_val,
+                )
+            )
+    for attr, p_suffix in (("sql_latitude", "sql_latitude"), ("sql_longitude", "sql_longitude")):
+        if val := getattr(fobj, attr, None):
+            raw_val = str(val)
+            props.append(
+                _FieldProperty(
+                    prop_type=f"{ftype}.{p_suffix}",
+                    prop_key=p_suffix,
+                    expr=raw_val.strip(),
+                    refs=_extract_lookml_refs(raw_val),
+                    sql_text=raw_val,
+                )
+            )
+    if val := getattr(fobj, "sql_distinct_key", None):
+        raw_val = str(val)
+        props.append(
+            _FieldProperty(
+                prop_type=f"{ftype}.sql_distinct_key",
+                prop_key="sql_distinct_key",
+                expr=raw_val.strip(),
+                refs=_extract_lookml_refs(raw_val),
+                sql_text=raw_val,
+            )
+        )
+    return props
+
+
+def _find_field_prop_location(
+    chain: list[tuple[str, Any, dict[str, Any]]],
+    ftype: str,
+    fname: str,
+    sub_key: str,
+) -> LookmlSourceLocation | None:
+    for fpath, _, p_dict in chain:
+        type_pos = p_dict.get(ftype, {})
+        if not isinstance(type_pos, dict) or fname not in type_pos:
+            continue
+        f_pos = type_pos[fname]
+        if not isinstance(f_pos, dict):
+            continue
+        if sub_key == "case.when.sql":
+            case_p = f_pos.get("case", {})
+            if isinstance(case_p, dict):
+                when_p = case_p.get("when", {})
+                if isinstance(when_p, dict):
+                    if "sql" in when_p and isinstance(when_p["sql"], dict) and "$p" in when_p["sql"]:
+                        return _make_location(fpath, when_p["sql"]["$p"])
+                    if "$p" in when_p:
+                        return _make_location(fpath, when_p["$p"])
+                elif isinstance(when_p, list) and when_p:
+                    for item in when_p:
+                        if isinstance(item, dict) and "sql" in item and "$p" in item["sql"]:
+                            return _make_location(fpath, item["sql"]["$p"])
+                if "$p" in case_p:
+                    return _make_location(fpath, case_p["$p"])
+        elif sub_key in f_pos and isinstance(f_pos[sub_key], dict) and "$p" in f_pos[sub_key]:
+            return _make_location(fpath, f_pos[sub_key]["$p"])
+        elif "sql" in f_pos and isinstance(f_pos["sql"], dict) and "$p" in f_pos["sql"]:
+            return _make_location(fpath, f_pos["sql"]["$p"])
+    return None
+
+
+def _chain_prop_loc(
+    chain: list[tuple[str, Any, dict[str, Any]]],
+    prop_path: list[str],
+    default_file: str,
+    default_pos: list[int],
+) -> LookmlSourceLocation:
+    for fpath, _, p_dict in chain:
+        curr: Any = p_dict
+        found = True
+        for part in prop_path:
+            if isinstance(curr, dict) and part in curr:
+                curr = curr[part]
+            else:
+                found = False
+                break
+        if (
+            found
+            and isinstance(curr, dict)
+            and "$p" in curr
+            and (loc := _make_location(fpath, curr["$p"]))
+        ):
+            return loc
+    if len(prop_path) > 1:
+        for fpath, _, p_dict in chain:
+            curr = p_dict
+            found = True
+            for part in prop_path[:-1]:
+                if isinstance(curr, dict) and part in curr:
+                    curr = curr[part]
+                else:
+                    found = False
+                    break
+            if (
+                found
+                and isinstance(curr, dict)
+                and "$p" in curr
+                and (loc := _make_location(fpath, curr["$p"]))
+            ):
+                return loc
+    return (
+        _make_location(default_file, default_pos)
+        or LookmlSourceLocation(
+            file=default_file, line=1, end_line=1, position=default_pos
+        )
+    )
+
+
+def _find_datagroup_location(
+    positions: LookmlPositions | None,
+    model_name: str,
+    dg_name: str,
+    sub_key: str,
+) -> LookmlSourceLocation:
+    pos_models = positions.model if positions and positions.model else {}
+    pos_files = positions.file if positions and positions.file else {}
+
+    m_dg = pos_models.get(model_name, {}).get("datagroup", {}).get(dg_name, {})
+    if isinstance(m_dg, dict):
+        if sub_key in m_dg and isinstance(m_dg[sub_key], dict) and "$p" in m_dg[sub_key]:
+            raw_p = m_dg[sub_key]["$p"]
+            p = [int(x) for x in (raw_p[1:5] if len(raw_p) >= 5 else raw_p[:4])]
+            return LookmlSourceLocation(
+                file=f"{model_name}.model.lkml", line=p[0] + 1, end_line=p[2] + 1, position=p
+            )
+        if "$p" in m_dg:
+            raw_p = m_dg["$p"]
+            p = [int(x) for x in (raw_p[1:5] if len(raw_p) >= 5 else raw_p[:4])]
+            return LookmlSourceLocation(
+                file=f"{model_name}.model.lkml", line=p[0] + 1, end_line=p[2] + 1, position=p
+            )
+
+    for f_key, f_val in pos_files.items():
+        if isinstance(f_val, dict) and "datagroup" in f_val:
+            dg_dict = f_val["datagroup"].get(dg_name, {})
+            if isinstance(dg_dict, dict):
+                f_name = f_key if f_key.endswith(".lkml") else f"{f_key}.lkml"
+                if (
+                    sub_key in dg_dict
+                    and isinstance(dg_dict[sub_key], dict)
+                    and "$p" in dg_dict[sub_key]
+                    and (loc := _make_location(f_name, dg_dict[sub_key]["$p"]))
+                ):
+                    return loc
+                if "$p" in dg_dict and (loc := _make_location(f_name, dg_dict["$p"])):
+                    return loc
+
+    return LookmlSourceLocation(file=f"{model_name}.model.lkml", line=1, end_line=1, position=[0, 0, 0, 0])
+
+
 def _iter_view_fields(
     view_obj: LookmlView,
-) -> list[tuple[str, str, LookmlDimension | LookmlDimensionGroup | LookmlMeasure]]:
-    out: list[
-        tuple[str, str, LookmlDimension | LookmlDimensionGroup | LookmlMeasure]
-    ] = []
-    for ftype, fdict in (
-        ("dimension", view_obj.dimension or {}),
-        ("dimension_group", view_obj.dimension_group or {}),
-        ("measure", view_obj.measure or {}),
-    ):
-        for fname, fobj in fdict.items():
-            if isinstance(
-                fobj, (LookmlDimension, LookmlDimensionGroup, LookmlMeasure)
-            ):
-                out.append((ftype, fname, fobj))
-    return out
+) -> list[tuple[str, str, Any]]:
+    f_val = view_obj.filter
+    filter_dict = (
+        f_val
+        if isinstance(f_val, dict)
+        else {f.name_: f for f in _as_list(f_val) if getattr(f, "name_", None)}
+    )
+    return [
+        (ftype, fname, fobj)
+        for ftype, fdict in (
+            ("dimension", view_obj.dimension or {}),
+            ("dimension_group", view_obj.dimension_group or {}),
+            ("measure", view_obj.measure or {}),
+            ("filter", filter_dict),
+        )
+        for fname, fobj in fdict.items()
+        if fobj is not None
+    ]
+
+
+def _get_view_field(view_obj: LookmlView, ftype: str, fname: str) -> Any:
+    return next(
+        (fobj for ft, fn, fobj in _iter_view_fields(view_obj) if ft == ftype and fn == fname),
+        None,
+    )
 
 
 # ponytail: seed SQLGlot schema from LookML views + Looker connection_columns
 def _extract_view_columns(view_obj: LookmlView) -> dict[str, str]:
     cols: dict[str, str] = {}
     for ftype, fname, fobj in _iter_view_fields(view_obj):
-        sql_texts = [
-            s
-            for s in (
-                fobj.sql,
-                getattr(fobj, "sql_start", None),
-                getattr(fobj, "sql_end", None),
-                getattr(fobj, "sql_latitude", None),
-                getattr(fobj, "sql_longitude", None),
-            )
-            if s
-        ]
-        found = [
-            (m.group(1) or m.group(2)).lower()
-            for s in sql_texts
-            for m in _TABLE_COL_RE.finditer(s)
-        ]
-        if found:
-            for c in found:
-                cols[c] = "UNKNOWN"
-            continue
+        for p in _get_field_properties(ftype, fname, fobj):
+            if p.sql_text:
+                for m in _TABLE_COL_RE.finditer(p.sql_text):
+                    cols[(m.group(1) or m.group(2)).lower()] = "UNKNOWN"
         f_subtype = str(getattr(fobj, "type", "") or "")
         if (
-            not sql_texts
+            not getattr(fobj, "sql", None)
             and ftype in ("dimension", "dimension_group")
             and f_subtype not in ("location", "distance", "duration")
             and not f_subtype.startswith("duration_")
@@ -843,7 +1107,7 @@ def _match_model_views(
     dialect: str | None = None,
     sql_db: str | None = None,
     sql_schema: str | None = None,
-) -> list[LookmlViewMatch]:
+) -> tuple[list[LookmlViewMatch], list[LookmlUsageMatch]]:
     eff_conn = lkml_conn or model_obj.connection
     eff_db, eff_schema = lkml_db, lkml_schema
     meta_fetched = bool(eff_db and eff_schema) or not eff_conn
@@ -894,11 +1158,11 @@ def _match_model_views(
         positions=positions,
     )
 
-    # (view_name, ftype, fname) -> (sql_table, sql_col, via_list, required_ext_aliases)
+    # (view_name, ftype, fname) -> list[_FieldMatchInfo]
     matched_fields: dict[
-        tuple[str, str, str], tuple[str, str, list[str], set[str]]
+        tuple[str, str, str], list[_FieldMatchInfo]
     ] = {}
-    queue: deque[tuple[str, str, str]] = deque()
+    queue: deque[tuple[str, str, str, _FieldMatchInfo]] = deque()
     direct_views: dict[str, str] = {}
     view_order: list[str] = []
 
@@ -1121,50 +1385,51 @@ def _match_model_views(
                     if isinstance(fobj, LookmlDimensionGroup)
                     else None
                 )
-                f_sql = (
-                    fobj.sql
-                    or " ".join(
-                        s
-                        for s in (
-                            getattr(fobj, "sql_start", None),
-                            getattr(fobj, "sql_end", None),
-                            getattr(fobj, "sql_latitude", None),
-                            getattr(fobj, "sql_longitude", None),
-                        )
-                        if s
-                    )
-                    or None
-                )
-                if not _field_matches_column(
-                    target_col, fname, f_sql, ftype, tfs
-                ):
-                    continue
-                key = (view_name, ftype, fname)
-                if key not in matched_fields:
+                props = _get_field_properties(ftype, fname, fobj)
+                direct_hits: list[tuple[_FieldProperty | None, str, str, str | None]] = []
+                for p in props:
+                    if p.sql_text and _field_matches_column(target_col, fname, p.sql_text, ftype, tfs):
+                        direct_hits.append((p, p.prop_type, p.prop_key, p.expr))
+                if not direct_hits and _field_matches_column(target_col, fname, None, ftype, tfs):
+                    direct_hits.append((None, f"{ftype}.sql", "sql", fobj.sql.strip() if getattr(fobj, "sql", None) else None))
+
+                for fp_obj, m_prop, sub_key, expr_val in direct_hits:
+                    fkey = (view_name, ftype, fname)
+                    existing = matched_fields.get(fkey, [])
+                    if any(x.sql_column == col_name and x.matched_property == m_prop for x in existing):
+                        continue
                     if view_name not in direct_views:
                         direct_views[view_name] = raw_table_str
                         view_order.append(view_name)
+                    refs = fp_obj.refs if fp_obj else []
                     ext_aliases = {
                         r.split(".", 1)[0].lower()
-                        for r in _extract_lookml_refs(f_sql)
+                        for r in refs
                         if "." in r
                         and r.split(".", 1)[0].lower() not in self_names
                     }
-                    matched_fields[key] = (
-                        raw_table_str,
-                        col_name,
-                        [],
-                        ext_aliases,
+                    prop_path = f"view.{view_name}.{ftype}.{fname}.{sub_key}"
+                    minfo = _FieldMatchInfo(
+                        sql_table=raw_table_str,
+                        sql_column=col_name,
+                        via=[],
+                        ext_aliases=ext_aliases,
+                        matched_property=m_prop,
+                        property_path=prop_path,
+                        expression=expr_val,
+                        sub_key=sub_key,
                     )
-                    queue.append(key)
+                    matched_fields.setdefault(fkey, []).append(minfo)
+                    queue.append((view_name, ftype, fname, minfo))
 
     # Transitive forward ${...} and derived_table propagation
     while queue:
-        src_view, src_ftype, src_fname = queue.popleft()
-        src_tbl, src_col, src_via, src_ext = matched_fields[
-            (src_view, src_ftype, src_fname)
-        ]
-        src_fobj = getattr(model_views[src_view], src_ftype)[src_fname]
+        src_view, src_ftype, src_fname, src_info = queue.popleft()
+        src_tbl = src_info.sql_table
+        src_col = src_info.sql_column
+        src_via = src_info.via
+        src_ext = src_info.ext_aliases
+        src_fobj = _get_view_field(model_views[src_view], src_ftype, src_fname)
         src_cands = {src_fname.lower()}
         if isinstance(src_fobj, LookmlDimensionGroup) and src_fobj.timeframes:
             src_cands |= {f"{src_fname}_{tf}".lower() for tf in src_fobj.timeframes}
@@ -1179,52 +1444,82 @@ def _match_model_views(
             ]
             for c_ftype, c_fname, c_fobj in _iter_view_fields(cand_obj):
                 ckey = (cand_view, c_ftype, c_fname)
-                if ckey in matched_fields:
-                    continue
+                existing = matched_fields.get(ckey, [])
                 tfs = (
                     c_fobj.timeframes
                     if isinstance(c_fobj, LookmlDimensionGroup)
                     else None
                 )
                 hits_ndt = any(
-                    _field_matches_column(ndt_col, c_fname, c_fobj.sql, c_ftype, tfs)
+                    _field_matches_column(ndt_col, c_fname, getattr(c_fobj, "sql", None), c_ftype, tfs)
                     for ndt_col in matched_ndt_cols
                 )
-                refs = _extract_lookml_refs(c_fobj.sql)
-                hits_ref = (
-                    not c_fobj._sql_defaulted
-                    and bool(refs)
-                    and any(
-                        (cand_view == src_view and r.lower() in src_cands)
-                        if "." not in r
-                        else (
-                            r.split(".", 1)[1].lower() in src_cands
-                            and (
-                                r.split(".", 1)[0].lower() in src_aliases
-                                or (
-                                    cand_view == src_view
-                                    and r.split(".", 1)[0].lower() in cand_self
+                if hits_ndt:
+                    m_prop = f"{c_ftype}.sql"
+                    if not any(x.sql_column == src_col and x.matched_property == m_prop for x in existing):
+                        own_ext = {
+                            r.split(".", 1)[0].lower()
+                            for r in _extract_lookml_refs(getattr(c_fobj, "sql", None))
+                            if "." in r and r.split(".", 1)[0].lower() not in cand_self
+                        }
+                        minfo = _FieldMatchInfo(
+                            sql_table=src_tbl,
+                            sql_column=src_col,
+                            via=[*src_via, f"{src_view}.{src_fname}"],
+                            ext_aliases=own_ext,
+                            matched_property=m_prop,
+                            property_path=f"view.{cand_view}.{c_ftype}.{c_fname}.sql",
+                            expression=c_fobj.sql.strip() if getattr(c_fobj, "sql", None) else None,
+                            sub_key="sql",
+                        )
+                        matched_fields.setdefault(ckey, []).append(minfo)
+                        queue.append((cand_view, c_ftype, c_fname, minfo))
+                        if cand_view not in direct_views and cand_view not in view_order:
+                            view_order.append(cand_view)
+
+                for fp in _get_field_properties(c_ftype, c_fname, c_fobj):
+                    hits_ref = (
+                        not getattr(c_fobj, "_sql_defaulted", False)
+                        and bool(fp.refs)
+                        and any(
+                            (cand_view == src_view and r.lower() in src_cands)
+                            if "." not in r
+                            else (
+                                r.split(".", 1)[1].lower() in src_cands
+                                and (
+                                    r.split(".", 1)[0].lower() in src_aliases
+                                    or (
+                                        cand_view == src_view
+                                        and r.split(".", 1)[0].lower() in cand_self
+                                    )
                                 )
                             )
+                            for r in fp.refs
                         )
-                        for r in refs
                     )
-                )
-                if hits_ndt or hits_ref:
-                    own_ext = {
-                        r.split(".", 1)[0].lower()
-                        for r in refs
-                        if "." in r and r.split(".", 1)[0].lower() not in cand_self
-                    }
-                    matched_fields[ckey] = (
-                        src_tbl,
-                        src_col,
-                        [*src_via, f"{src_view}.{src_fname}"],
-                        own_ext if hits_ndt else (src_ext | own_ext),
-                    )
-                    queue.append(ckey)
-                    if cand_view not in direct_views and cand_view not in view_order:
-                        view_order.append(cand_view)
+                    if hits_ref and not any(
+                        x.sql_column == src_col and x.matched_property == fp.prop_type
+                        for x in existing
+                    ):
+                            own_ext = {
+                                r.split(".", 1)[0].lower()
+                                for r in fp.refs
+                                if "." in r and r.split(".", 1)[0].lower() not in cand_self
+                            }
+                            minfo = _FieldMatchInfo(
+                                sql_table=src_tbl,
+                                sql_column=src_col,
+                                via=[*src_via, f"{src_view}.{src_fname}"],
+                                ext_aliases=src_ext | own_ext,
+                                matched_property=fp.prop_type,
+                                property_path=f"view.{cand_view}.{c_ftype}.{c_fname}.{fp.sub_key}",
+                                expression=fp.expr,
+                                sub_key=fp.sub_key,
+                            )
+                            matched_fields.setdefault(ckey, []).append(minfo)
+                            queue.append((cand_view, c_ftype, c_fname, minfo))
+                            if cand_view not in direct_views and cand_view not in view_order:
+                                view_order.append(cand_view)
 
     results: list[LookmlViewMatch] = []
     for view_name in view_order:
@@ -1244,69 +1539,84 @@ def _match_model_views(
             key = (view_name, ftype, fname)
             if key not in matched_fields:
                 continue
-            f_sql_tbl, col_name, via_list, req_ext = matched_fields[key]
-            if not v_sql_tbl:
-                v_sql_tbl = f_sql_tbl
+            for minfo in matched_fields[key]:
+                if not v_sql_tbl:
+                    v_sql_tbl = minfo.sql_table
 
-            f_loc: LookmlSourceLocation | None = None
-            f_sql_loc: LookmlSourceLocation | None = None
-            for fpath, _, p_dict in chain:
-                type_pos = p_dict.get(ftype, {})
-                if isinstance(type_pos, dict) and fname in type_pos:
-                    f_pos_dict = type_pos[fname]
-                    if isinstance(f_pos_dict, dict):
-                        if "$p" in f_pos_dict:
+                f_loc: LookmlSourceLocation | None = None
+                for fpath, _, p_dict in chain:
+                    type_pos = p_dict.get(ftype, {})
+                    if isinstance(type_pos, dict) and fname in type_pos:
+                        f_pos_dict = type_pos[fname]
+                        if isinstance(f_pos_dict, dict) and "$p" in f_pos_dict:
                             f_loc = _make_location(fpath, f_pos_dict["$p"])
-                        sql_p = f_pos_dict.get("sql", {})
-                        if isinstance(sql_p, dict) and "$p" in sql_p:
-                            f_sql_loc = _make_location(fpath, sql_p["$p"])
 
-            loc = (
-                f_loc
-                or _make_location(view_file, view_pos)
-                or LookmlSourceLocation(
-                    file=view_file, line=1, end_line=1, position=view_pos
+                f_sql_loc = _find_field_prop_location(chain, ftype, fname, minfo.sub_key)
+                loc = (
+                    f_loc
+                    or _make_location(view_file, view_pos)
+                    or LookmlSourceLocation(
+                        file=view_file, line=1, end_line=1, position=view_pos
+                    )
                 )
-            )
-            tfs = (
-                fobj.timeframes if isinstance(fobj, LookmlDimensionGroup) else None
-            )
-            exp_matches = _find_explores_for_field(
-                model_name,
-                model_obj,
-                view_name,
-                fname,
-                ftype,
-                tfs,
-                req_ext,
-                exp_base_decls,
-                exp_ref_decls,
-            )
-            test_matches = _find_tests_for_field(
-                model_name=model_name,
-                view_name=view_name,
-                field_name=fname,
-                field_type=ftype,
-                timeframes=tfs,
-                explores=exp_matches,
-                test_infos=test_infos,
-            )
-            v_fields.append(
-                LookmlFieldMatch(
-                    sql_column=col_name,
-                    field_type=ftype,
+                tfs = (
+                    fobj.timeframes if isinstance(fobj, LookmlDimensionGroup) else None
+                )
+                exp_matches = _find_explores_for_field(
+                    model_name,
+                    model_obj,
+                    view_name,
+                    fname,
+                    ftype,
+                    tfs,
+                    minfo.ext_aliases,
+                    exp_base_decls,
+                    exp_ref_decls,
+                )
+                test_matches = _find_tests_for_field(
+                    model_name=model_name,
+                    view_name=view_name,
                     field_name=fname,
-                    sql=fobj.sql.strip() if fobj.sql else None,
-                    via=via_list,
-                    file=loc.file,
-                    line=loc.line,
-                    end_line=loc.end_line,
-                    position=loc.position,
-                    sql_location=f_sql_loc,
+                    field_type=ftype,
+                    timeframes=tfs,
                     explores=exp_matches,
-                    tests=test_matches,
+                    test_infos=test_infos,
                 )
-            )
+                u_loc = f_sql_loc or loc
+                usage_match = LookmlUsageMatch(
+                    model_name=model_name,
+                    view_name=view_name,
+                    field_name=fname,
+                    matched_property=minfo.matched_property,
+                    property_path=minfo.property_path,
+                    expression=minfo.expression,
+                    sql_table=minfo.sql_table,
+                    sql_column=minfo.sql_column,
+                    file=u_loc.file,
+                    line=u_loc.line,
+                    end_line=u_loc.end_line,
+                    position=u_loc.position,
+                )
+                v_fields.append(
+                    LookmlFieldMatch(
+                        sql_column=minfo.sql_column,
+                        field_type=ftype,
+                        field_name=fname,
+                        sql=fobj.sql.strip() if getattr(fobj, "sql", None) else None,
+                        matched_property=minfo.matched_property,
+                        property_path=minfo.property_path,
+                        expression=minfo.expression,
+                        via=minfo.via,
+                        file=loc.file,
+                        line=loc.line,
+                        end_line=loc.end_line,
+                        position=loc.position,
+                        sql_location=f_sql_loc,
+                        explores=exp_matches,
+                        tests=test_matches,
+                        usages=[usage_match],
+                    )
+                )
 
         db_cols = db_cols_by_view.get(view_name) if view_name in direct_views else None
         v_cols = set(view_cols_by_name.get(view_name, {}))
@@ -1371,16 +1681,290 @@ def _match_model_views(
                 unmatched.append(u.field)
         return m_usages, unmatched, m_fms, cov
 
+    explore_usages: list[LookmlUsageMatch] = []
+    matched_vms = {vm.view_name.lower(): vm for vm in results}
+    matched_fields_by_view: dict[str, dict[str, LookmlFieldMatch]] = {
+        vm.view_name.lower(): {fm.field_name.lower(): fm for fm in vm.fields}
+        for vm in results
+    }
+    matched_cols_by_view: dict[str, dict[str, LookmlFieldMatch]] = {
+        vm.view_name.lower(): {fm.sql_column.lower(): fm for fm in vm.fields}
+        for vm in results
+    }
+
+    def _match_explore_expr(
+        expr: str,
+        views_by_alias: dict[str, str],
+        default_alias: str,
+        jv_name: str | None = None,
+    ) -> tuple[bool, str | None, str | None, str | None, str | None]:
+        for r in _extract_lookml_refs(expr):
+            if "." in r:
+                a, f = r.split(".", 1)
+                v_name = views_by_alias.get(a.lower(), a.lower())
+            else:
+                v_name = views_by_alias.get(default_alias.lower(), default_alias.lower())
+                f = r
+            if v_name in matched_vms:
+                vm = matched_vms[v_name]
+                fm = matched_fields_by_view.get(v_name, {}).get(f.lower()) or matched_cols_by_view.get(v_name, {}).get(f.lower())
+                if fm:
+                    return True, vm.sql_table, fm.sql_column, v_name, fm.field_name
+                elif vm.fields:
+                    return True, vm.sql_table, vm.fields[0].sql_column, v_name, f
+                else:
+                    return True, vm.sql_table, None, v_name, f
+        for m in _TABLE_COL_RE.finditer(expr):
+            col = (m.group(1) or m.group(2)).lower()
+            cand_views = [jv_name.lower()] if jv_name else [views_by_alias.get(default_alias.lower(), default_alias.lower())]
+            for cv in cand_views:
+                if cv in matched_vms:
+                    vm = matched_vms[cv]
+                    fm = matched_cols_by_view.get(cv, {}).get(col)
+                    if fm:
+                        return True, vm.sql_table, fm.sql_column, cv, fm.field_name
+                    return True, vm.sql_table, col, cv, None
+        for v_name, vm in matched_vms.items():
+            tbl_clean = vm.sql_table.rsplit(".", 1)[-1].lower()
+            if re.search(rf"\b{re.escape(tbl_clean)}\b", expr, re.IGNORECASE) or re.search(rf"\b{re.escape(v_name)}\b", expr, re.IGNORECASE):
+                for col_name, fm in matched_cols_by_view.get(v_name, {}).items():
+                    if re.search(rf"\b{re.escape(col_name)}\b", expr, re.IGNORECASE):
+                        return True, vm.sql_table, fm.sql_column, v_name, fm.field_name
+                if vm.fields:
+                    return True, vm.sql_table, vm.fields[0].sql_column, v_name, None
+                return True, vm.sql_table, None, v_name, None
+        return False, None, None, None, None
+
     for exp_name, exp_val in (model_obj.explore or {}).items():
         for exp_obj in _as_list(exp_val):
-            if not isinstance(exp_obj, LookmlExplore) or (
-                not exp_obj.aggregate_table and not exp_obj.query
-            ):
+            if not isinstance(exp_obj, LookmlExplore):
                 continue
             exp_chain = _build_chain(exp_name, exp_base_decls, exp_ref_decls)
-            _, base_alias, exp_file, exp_pos = _resolve_explore_base(
+            base_view_name, base_alias, exp_file, exp_pos = _resolve_explore_base(
                 exp_name, exp_obj, exp_chain, model_views
             )
+            views_by_alias: dict[str, str] = {base_alias.lower(): base_view_name.lower()}
+            for j_name, j_obj in (exp_obj.join or {}).items():
+                jv_name = j_obj.from_ or j_obj.view_name or j_name
+                views_by_alias[j_name.lower()] = jv_name.lower()
+
+            if exp_obj.sql_always_where:
+                raw_expr = str(exp_obj.sql_always_where).strip()
+                hit, tbl, col, v_name, f_name = _match_explore_expr(raw_expr, views_by_alias, base_alias)
+                if hit:
+                    loc = _chain_prop_loc(exp_chain, ["sql_always_where"], exp_file, exp_pos)
+                    explore_usages.append(
+                        LookmlUsageMatch(
+                            model_name=model_name,
+                            explore_name=exp_name,
+                            view_name=v_name,
+                            field_name=f_name,
+                            matched_property="explore.sql_always_where",
+                            property_path=f"explore.{exp_name}.sql_always_where",
+                            expression=raw_expr,
+                            sql_table=tbl,
+                            sql_column=col,
+                            file=loc.file,
+                            line=loc.line,
+                            end_line=loc.end_line,
+                            position=loc.position,
+                        )
+                    )
+
+            if exp_obj.sql_always_having:
+                raw_expr = str(exp_obj.sql_always_having).strip()
+                hit, tbl, col, v_name, f_name = _match_explore_expr(raw_expr, views_by_alias, base_alias)
+                if hit:
+                    loc = _chain_prop_loc(exp_chain, ["sql_always_having"], exp_file, exp_pos)
+                    explore_usages.append(
+                        LookmlUsageMatch(
+                            model_name=model_name,
+                            explore_name=exp_name,
+                            view_name=v_name,
+                            field_name=f_name,
+                            matched_property="explore.sql_always_having",
+                            property_path=f"explore.{exp_name}.sql_always_having",
+                            expression=raw_expr,
+                            sql_table=tbl,
+                            sql_column=col,
+                            file=loc.file,
+                            line=loc.line,
+                            end_line=loc.end_line,
+                            position=loc.position,
+                        )
+                    )
+
+            for af in _as_list(exp_obj.access_filter):
+                if isinstance(af, dict):
+                    fld_val = af.get("field")
+                    if fld_val:
+                        fld_str = str(fld_val).strip()
+                        if "." in fld_str:
+                            a, f = fld_str.split(".", 1)
+                            v_name = views_by_alias.get(a.lower(), a.lower())
+                        else:
+                            v_name = views_by_alias.get(base_alias.lower(), base_alias.lower())
+                            f = fld_str
+                        if v_name in matched_vms:
+                            vm = matched_vms[v_name]
+                            fm = matched_fields_by_view.get(v_name, {}).get(f.lower()) or matched_cols_by_view.get(v_name, {}).get(f.lower())
+                            col = fm.sql_column if fm else f
+                            loc = _chain_prop_loc(exp_chain, ["access_filter"], exp_file, exp_pos)
+                            expr_str = f"field: {fld_str}, user_attribute: {af.get('user_attribute', '')}".strip()
+                            explore_usages.append(
+                                LookmlUsageMatch(
+                                    model_name=model_name,
+                                    explore_name=exp_name,
+                                    view_name=v_name,
+                                    field_name=f,
+                                    matched_property="explore.access_filter",
+                                    property_path=f"explore.{exp_name}.access_filter",
+                                    expression=expr_str,
+                                    sql_table=vm.sql_table,
+                                    sql_column=col,
+                                    file=loc.file,
+                                    line=loc.line,
+                                    end_line=loc.end_line,
+                                    position=loc.position,
+                                )
+                            )
+
+            for j_name, j_obj in (exp_obj.join or {}).items():
+                jv_name = j_obj.from_ or j_obj.view_name or j_name
+                if j_obj.sql_on:
+                    raw_expr = str(j_obj.sql_on).strip()
+                    hit, tbl, col, v_name, f_name = _match_explore_expr(raw_expr, views_by_alias, base_alias, jv_name=jv_name)
+                    if hit:
+                        loc = _chain_prop_loc(exp_chain, ["join", j_name, "sql_on"], exp_file, exp_pos)
+                        explore_usages.append(
+                            LookmlUsageMatch(
+                                model_name=model_name,
+                                explore_name=exp_name,
+                                view_name=v_name or jv_name,
+                                join_name=j_name,
+                                field_name=f_name,
+                                matched_property="join.sql_on",
+                                property_path=f"explore.{exp_name}.join.{j_name}.sql_on",
+                                expression=raw_expr,
+                                sql_table=tbl,
+                                sql_column=col,
+                                file=loc.file,
+                                line=loc.line,
+                                end_line=loc.end_line,
+                                position=loc.position,
+                            )
+                        )
+
+                if j_obj.sql_where:
+                    raw_expr = str(j_obj.sql_where).strip()
+                    hit, tbl, col, v_name, f_name = _match_explore_expr(raw_expr, views_by_alias, base_alias, jv_name=jv_name)
+                    if hit:
+                        loc = _chain_prop_loc(exp_chain, ["join", j_name, "sql_where"], exp_file, exp_pos)
+                        explore_usages.append(
+                            LookmlUsageMatch(
+                                model_name=model_name,
+                                explore_name=exp_name,
+                                view_name=v_name or jv_name,
+                                join_name=j_name,
+                                field_name=f_name,
+                                matched_property="join.sql_where",
+                                property_path=f"explore.{exp_name}.join.{j_name}.sql_where",
+                                expression=raw_expr,
+                                sql_table=tbl,
+                                sql_column=col,
+                                file=loc.file,
+                                line=loc.line,
+                                end_line=loc.end_line,
+                                position=loc.position,
+                            )
+                        )
+
+                if j_obj.sql:
+                    raw_expr = str(j_obj.sql).strip()
+                    hit, tbl, col, v_name, f_name = _match_explore_expr(raw_expr, views_by_alias, base_alias, jv_name=jv_name)
+                    if hit:
+                        loc = _chain_prop_loc(exp_chain, ["join", j_name, "sql"], exp_file, exp_pos)
+                        explore_usages.append(
+                            LookmlUsageMatch(
+                                model_name=model_name,
+                                explore_name=exp_name,
+                                view_name=v_name or jv_name,
+                                join_name=j_name,
+                                field_name=f_name,
+                                matched_property="join.sql",
+                                property_path=f"explore.{exp_name}.join.{j_name}.sql",
+                                expression=raw_expr,
+                                sql_table=tbl,
+                                sql_column=col,
+                                file=loc.file,
+                                line=loc.line,
+                                end_line=loc.end_line,
+                                position=loc.position,
+                            )
+                        )
+
+                sql_fk = getattr(j_obj, "sql_foreign_key", None) or (j_obj.model_extra or {}).get("sql_foreign_key")
+                if sql_fk:
+                    raw_expr = str(sql_fk).strip()
+                    hit, tbl, col, v_name, f_name = _match_explore_expr(raw_expr, views_by_alias, base_alias, jv_name=jv_name)
+                    if hit:
+                        loc = _chain_prop_loc(exp_chain, ["join", j_name, "sql_foreign_key"], exp_file, exp_pos)
+                        explore_usages.append(
+                            LookmlUsageMatch(
+                                model_name=model_name,
+                                explore_name=exp_name,
+                                view_name=v_name or jv_name,
+                                join_name=j_name,
+                                field_name=f_name,
+                                matched_property="join.sql_foreign_key",
+                                property_path=f"explore.{exp_name}.join.{j_name}.sql_foreign_key",
+                                expression=raw_expr,
+                                sql_table=tbl,
+                                sql_column=col,
+                                file=loc.file,
+                                line=loc.line,
+                                end_line=loc.end_line,
+                                position=loc.position,
+                            )
+                        )
+
+                if j_obj.foreign_key:
+                    raw_fk = str(j_obj.foreign_key).strip()
+                    hit, tbl, col, v_name, f_name = False, None, None, None, None
+                    base_v = base_view_name.lower()
+                    if base_v in matched_vms:
+                        vm = matched_vms[base_v]
+                        fm = matched_fields_by_view.get(base_v, {}).get(raw_fk.lower()) or matched_cols_by_view.get(base_v, {}).get(raw_fk.lower())
+                        if fm:
+                            hit, tbl, col, v_name, f_name = True, vm.sql_table, fm.sql_column, base_view_name, fm.field_name
+                        else:
+                            hit, tbl, col, v_name, f_name = True, vm.sql_table, raw_fk, base_view_name, raw_fk
+                    elif jv_name.lower() in matched_vms:
+                        vm = matched_vms[jv_name.lower()]
+                        hit, tbl, col, v_name, f_name = True, vm.sql_table, raw_fk, jv_name, raw_fk
+                    if hit:
+                        loc = _chain_prop_loc(exp_chain, ["join", j_name, "foreign_key"], exp_file, exp_pos)
+                        explore_usages.append(
+                            LookmlUsageMatch(
+                                model_name=model_name,
+                                explore_name=exp_name,
+                                view_name=v_name or jv_name,
+                                join_name=j_name,
+                                field_name=f_name,
+                                matched_property="join.foreign_key",
+                                property_path=f"explore.{exp_name}.join.{j_name}.foreign_key",
+                                expression=raw_fk,
+                                sql_table=tbl,
+                                sql_column=col,
+                                file=loc.file,
+                                line=loc.line,
+                                end_line=loc.end_line,
+                                position=loc.position,
+                            )
+                        )
+
+            if not exp_obj.aggregate_table and not exp_obj.query:
+                continue
             # ponytail: timeframe rollup compatibility (e.g. querying created_year against an aggregate_table with created_month) can start with exact field/timeframe matching + dimension_group base matching, adding coarseness hierarchy comparison only if needed.
             exp_entries: list[
                 tuple[
@@ -1394,9 +1978,8 @@ def _match_model_views(
             canon_by_unit: dict[tuple[str, str], str] = {}
             for vm in results:
                 for fm in vm.fields:
-                    f_sql_tbl, col_name, _, _ = matched_fields[
-                        (vm.view_name, fm.field_type, fm.field_name)
-                    ]
+                    f_sql_tbl = vm.sql_table
+                    col_name = fm.sql_column
                     uk = (f_sql_tbl.lower(), col_name.lower())
                     fobj = getattr(model_views[vm.view_name], fm.field_type)[
                         fm.field_name
@@ -1549,6 +2132,574 @@ def _match_model_views(
                         for fm in matched_fms:
                             fm.explore_queries.append(q_match)
 
+    for v_name, v_obj in model_views.items():
+        if not isinstance(v_obj, LookmlView):
+            continue
+        dt = getattr(v_obj, "derived_table", None)
+        if not dt:
+            continue
+        sql_trig = getattr(dt, "sql_trigger_value", None)
+        if not sql_trig:
+            continue
+        sql_trig_str = str(sql_trig).strip()
+        try:
+            trig_res = parse_sql(sql=sql_trig_str, dialect=dialect)
+            trig_tables = {
+                (t.name or "").lower()
+                for q in trig_res.queries
+                for t in q.tables
+                if t.name
+            }
+            trig_cols = {
+                c.lower()
+                for q in trig_res.queries
+                for _, c in _extract_query_columns(q, dialect=dialect)
+            }
+            matched_vm = None
+            matched_col = None
+            for vm in results:
+                v_tbl = vm.sql_table.rsplit(".", 1)[-1].lower()
+                if v_tbl in trig_tables or vm.view_name.lower() in trig_tables:
+                    matched_vm = vm
+                    for fm in vm.fields:
+                        if fm.sql_column.lower() in trig_cols:
+                            matched_col = fm.sql_column
+                            break
+                    if not matched_col and vm.fields:
+                        matched_col = vm.fields[0].sql_column
+                    break
+            if matched_vm or (v_name.lower() in matched_vms):
+                m_vm = matched_vm or matched_vms[v_name.lower()]
+                v_chain = view_chains.get(v_name, [])
+                v_file, v_pos = _chain_root_pos(v_chain, v_name)
+                loc = _chain_prop_loc(v_chain, ["derived_table", "sql_trigger_value"], v_file, v_pos)
+                explore_usages.append(
+                    LookmlUsageMatch(
+                        model_name=model_name,
+                        view_name=v_name,
+                        matched_property="derived_table.sql_trigger_value",
+                        property_path=f"view.{v_name}.derived_table.sql_trigger_value",
+                        expression=sql_trig_str,
+                        sql_table=m_vm.sql_table,
+                        sql_column=matched_col or (m_vm.fields[0].sql_column if m_vm.fields else None),
+                        file=loc.file,
+                        line=loc.line,
+                        end_line=loc.end_line,
+                        position=loc.position,
+                    )
+                )
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    for dg_name, dg_val in (getattr(model_obj, "datagroup", None) or {}).items():
+        for dg_obj in _as_list(dg_val):
+            if not isinstance(dg_obj, LookmlDatagroup):
+                continue
+            if dg_obj.sql_trigger:
+                sql_trig = str(dg_obj.sql_trigger).strip()
+                try:
+                    trig_res = parse_sql(sql=sql_trig, dialect=dialect)
+                    trig_tables = {
+                        (t.name or "").lower()
+                        for q in trig_res.queries
+                        for t in q.tables
+                        if t.name
+                    }
+                    trig_cols = {
+                        c.lower()
+                        for q in trig_res.queries
+                        for _, c in _extract_query_columns(q, dialect=dialect)
+                    }
+                    matched_vm = None
+                    matched_col = None
+                    for vm in results:
+                        v_tbl = vm.sql_table.rsplit(".", 1)[-1].lower()
+                        if v_tbl in trig_tables or vm.view_name.lower() in trig_tables:
+                            matched_vm = vm
+                            for fm in vm.fields:
+                                if fm.sql_column.lower() in trig_cols:
+                                    matched_col = fm.sql_column
+                                    break
+                            if not matched_col and vm.fields:
+                                matched_col = vm.fields[0].sql_column
+                            break
+                    if matched_vm:
+                        loc = _find_datagroup_location(positions, model_name, dg_name, "sql_trigger")
+                        explore_usages.append(
+                            LookmlUsageMatch(
+                                model_name=model_name,
+                                datagroup_name=dg_name,
+                                matched_property="datagroup.sql_trigger",
+                                property_path=f"datagroup.{dg_name}.sql_trigger",
+                                expression=sql_trig,
+                                sql_table=matched_vm.sql_table,
+                                sql_column=matched_col,
+                                file=loc.file,
+                                line=loc.line,
+                                end_line=loc.end_line,
+                                position=loc.position,
+                            )
+                        )
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
+            if dg_obj.interval_trigger:
+                interval_trig = str(dg_obj.interval_trigger).strip()
+                dg_used_by = False
+                matched_vm = None
+                for vm in results:
+                    v_obj = model_views.get(vm.view_name)
+                    if v_obj and getattr(v_obj, "persist_with", None) == dg_name:
+                        dg_used_by = True
+                        matched_vm = vm
+                        break
+                    dt = getattr(v_obj, "derived_table", None)
+                    if dt and (getattr(dt, "datagroup_trigger", None) == dg_name or getattr(dt, "persist_with", None) == dg_name):
+                        dg_used_by = True
+                        matched_vm = vm
+                        break
+                if not dg_used_by:
+                    for exp_name, exp_val in (model_obj.explore or {}).items():
+                        for exp_obj in _as_list(exp_val):
+                            if (
+                                isinstance(exp_obj, LookmlExplore)
+                                and getattr(exp_obj, "persist_with", None) == dg_name
+                                and any(
+                                    vm.view_name.lower() in (exp_obj.from_ or exp_name).lower()
+                                    for vm in results
+                                )
+                            ):
+                                dg_used_by = True
+                                matched_vm = results[0] if results else None
+                                break
+                if dg_used_by and matched_vm:
+                    loc = _find_datagroup_location(positions, model_name, dg_name, "interval_trigger")
+                    explore_usages.append(
+                        LookmlUsageMatch(
+                            model_name=model_name,
+                            datagroup_name=dg_name,
+                            matched_property="datagroup.interval_trigger",
+                            property_path=f"datagroup.{dg_name}.interval_trigger",
+                            expression=interval_trig,
+                            sql_table=matched_vm.sql_table,
+                            sql_column=matched_vm.fields[0].sql_column if matched_vm.fields else None,
+                            file=loc.file,
+                            line=loc.line,
+                            end_line=loc.end_line,
+                            position=loc.position,
+                        )
+                    )
+
+    return results, explore_usages
+
+
+def _normalize_lookml_join_type(jtype: str | None) -> str:
+    t = (jtype or "left_outer").lower()
+    if t in ("left_outer", "left"):
+        return "LEFT"
+    if t == "inner":
+        return "INNER"
+    if t in ("full_outer", "full"):
+        return "FULL"
+    if t == "cross":
+        return "CROSS"
+    return "LEFT"
+
+
+_FLIP_REL: dict[str, str] = {
+    "many_to_one": "one_to_many",
+    "one_to_many": "many_to_one",
+}
+
+
+def _view_table_tail(v: LookmlView | None) -> str:
+    return (
+        re.sub(r"[\${}\s;`\"'\[\]]", "", v.sql_table_name).split(".")[-1].lower()
+        if v and v.sql_table_name
+        else ""
+    )
+
+
+def _view_pk_columns(v: LookmlView | None) -> set[str]:
+    if not v or not v.dimension:
+        return set()
+    pks: set[str] = set()
+    for d_name, d_obj in v.dimension.items():
+        if getattr(d_obj, "primary_key", False):
+            pks.add(d_name.lower())
+            if d_obj.sql:
+                for m in _TABLE_COL_RE.finditer(d_obj.sql):
+                    pks.add((m.group(1) or m.group(2)).lower())
+    return pks
+
+
+def _resolve_table_view(
+    tbl_name: str,
+    tbl_alias: str,
+    target_graph: LookmlExploreJoinGraph,
+    m_views: dict[str, LookmlView],
+) -> LookmlView | None:
+    keys = {tbl_name, tbl_alias} - {""}
+    if not keys:
+        return None
+    if keys & {target_graph.base_view.lower(), target_graph.base_alias.lower()}:
+        return m_views.get(target_graph.base_view)
+    for j_name, j_node in target_graph.joins.items():
+        if keys & {j_name.lower(), j_node.target_view.lower(), j_node.view_alias.lower()}:
+            return m_views.get(j_node.target_view)
+    for v_name, v_obj in m_views.items():
+        v_tbl = _view_table_tail(v_obj)
+        if keys & ({v_name.lower()} | ({v_tbl} if v_tbl else set())):
+            return v_obj
+    return None
+
+
+def _build_views_by_model(
+    models: dict[str, LookmlModel],
+) -> dict[str, dict[str, LookmlView]]:
+    return {
+        m_name: {
+            v_k: items[-1]
+            for v_k, v_v in (m_obj.view or {}).items()
+            if (items := [x for x in _as_list(v_v) if isinstance(x, LookmlView)])
+        }
+        for m_name, m_obj in models.items()
+    }
+
+
+# ponytail: linear scan across project explores for precedent discovery and AST-based fan trap/required join checks
+def _analyze_query_joins(
+    pq: ParsedQuery,
+    all_explore_graphs: list[LookmlExploreJoinGraph],
+    models: dict[str, LookmlModel],
+    query_explores: list[LookmlExploreFieldMatch],
+    views_by_model: dict[str, dict[str, LookmlView]] | None = None,
+) -> list[ExploreJoinComparison]:
+    if not pq.joins:
+        return []
+
+    candidate_explore_keys = {
+        (em.model_name, em.explore_name) for em in query_explores
+    }
+    queried_table_names = {t.name.lower() for t in pq.tables if t.name}
+
+    candidate_graphs: list[LookmlExploreJoinGraph] = []
+    if candidate_explore_keys:
+        candidate_graphs = [
+            g
+            for g in all_explore_graphs
+            if (g.model_name, g.explore_name) in candidate_explore_keys
+        ]
+
+    if not candidate_graphs and queried_table_names:
+        candidate_graphs = [
+            g
+            for g in all_explore_graphs
+            if g.base_view.lower() in queried_table_names
+            or g.base_alias.lower() in queried_table_names
+            or any(
+                j.name.lower() in queried_table_names
+                or j.target_view.lower() in queried_table_names
+                for j in g.joins.values()
+            )
+        ]
+
+    if not candidate_graphs:
+        candidate_graphs = all_explore_graphs
+
+    if views_by_model is None:
+        views_by_model = _build_views_by_model(models)
+
+    results: list[ExploreJoinComparison] = []
+
+    for target_graph in candidate_graphs:
+        m_views = views_by_model.get(target_graph.model_name or "", {})
+        bv_tail = _view_table_tail(m_views.get(target_graph.base_view))
+        base_names = {target_graph.base_view.lower(), target_graph.base_alias.lower()} | (
+            {bv_tail} if bv_tail else set()
+        )
+
+        # Precompute explore-level safety warnings (fan trap detection)
+        o2m_joins = [
+            j
+            for j in target_graph.joins.values()
+            if (j.relationship or "").lower() in ("one_to_many", "many_to_many")
+        ]
+        explore_safety_warnings = [
+            JoinSafetyWarning(
+                rule="fan_trap",
+                severity="warning",
+                message=(
+                    f"Potential fan trap detected: join '{j1.name}' ({j1.relationship}) "
+                    f"and join '{j2.name}' ({j2.relationship}) create a multi-fanout path "
+                    "which can multiply aggregate calculations"
+                ),
+                joins=[j1.name, j2.name],
+            )
+            for j1, j2 in itertools.combinations(o2m_joins, 2)
+        ]
+
+        for sql_join in pq.joins:
+            left_t = sql_join.left_table
+            right_t = sql_join.right_table
+            left_name = (left_t.name if left_t else "").lower()
+            left_alias = (left_t.alias if left_t and left_t.alias else left_name).lower()
+            right_name = (right_t.name if right_t else "").lower()
+            right_alias = (right_t.alias if right_t and right_t.alias else right_name).lower()
+
+            left_view = _resolve_table_view(left_name, left_alias, target_graph, m_views)
+            right_view = _resolve_table_view(right_name, right_alias, target_graph, m_views)
+            left_pks = _view_pk_columns(left_view)
+            right_pks = _view_pk_columns(right_view)
+            inferred_rel: str | None = None
+            if sql_join.equi_joins and (left_pks or right_pks):
+                l_is_pk = bool(left_pks) and all(
+                    l_col.lower() in left_pks for (_, l_col), _ in sql_join.equi_joins
+                )
+                r_is_pk = bool(right_pks) and all(
+                    r_col.lower() in right_pks for _, (_, r_col) in sql_join.equi_joins
+                )
+                if l_is_pk and r_is_pk:
+                    inferred_rel = "one_to_one"
+                elif r_is_pk:
+                    inferred_rel = "many_to_one"
+                elif l_is_pk:
+                    inferred_rel = "one_to_many"
+                elif left_view is not None and right_view is not None:
+                    inferred_rel = "many_to_many"
+
+            matched_j: LookmlExploreJoinNode | None = None
+            matched_inverted = False
+
+            for j_name, j_node in target_graph.joins.items():
+                jv_tail = _view_table_tail(m_views.get(j_node.target_view))
+                j_names = {
+                    j_name.lower(),
+                    j_node.target_view.lower(),
+                    j_node.view_alias.lower(),
+                } | ({jv_tail} if jv_tail else set())
+
+                from_v = (j_node.from_view or target_graph.base_alias).lower()
+                from_tail = _view_table_tail(m_views.get(j_node.from_view or ""))
+                from_names = {from_v} | ({from_tail} if from_tail else set())
+
+                fwd_match = (right_name in j_names or right_alias in j_names) and (
+                    left_name in base_names
+                    or left_alias in base_names
+                    or left_name in from_names
+                    or left_alias in from_names
+                )
+                rev_match = (left_name in j_names or left_alias in j_names) and (
+                    right_name in base_names
+                    or right_alias in base_names
+                    or right_name in from_names
+                    or right_alias in from_names
+                )
+                if fwd_match or rev_match:
+                    matched_j = j_node
+                    matched_inverted = rev_match and not fwd_match
+                    break
+
+            safety_warnings = list(explore_safety_warnings)
+            precedents: list[JoinPrecedent] = []
+
+            # Missing required joins
+            if matched_j and matched_j.required_joins:
+                query_tables = {
+                    t.lower()
+                    for j in pq.joins
+                    for tbl in [j.left_table, j.right_table]
+                    if tbl
+                    for t in [tbl.name, tbl.alias]
+                    if t
+                }
+                for req in matched_j.required_joins:
+                    req_node = target_graph.joins.get(req)
+                    if not req_node:
+                        safety_warnings.append(
+                            JoinSafetyWarning(
+                                rule="missing_required_join",
+                                severity="warning",
+                                message=(
+                                    f"Join '{matched_j.name}' specifies required_joins '{req}', "
+                                    f"which is not defined in explore '{target_graph.explore_name}'"
+                                ),
+                                joins=[matched_j.name, req],
+                            )
+                        )
+                    else:
+                        req_aliases = {
+                            req.lower(),
+                            req_node.target_view.lower(),
+                            req_node.view_alias.lower(),
+                        }
+                        if not (req_aliases & query_tables):
+                            safety_warnings.append(
+                                JoinSafetyWarning(
+                                    rule="missing_required_join",
+                                    severity="warning",
+                                    message=(
+                                        f"Join '{matched_j.name}' specifies required_joins '{req}', "
+                                        "but it is not joined in the query"
+                                    ),
+                                    joins=[matched_j.name, req],
+                                )
+                            )
+
+            if matched_j is not None:
+                sql_type = _normalize_sql_join_type(sql_join.side, sql_join.kind)
+                lkml_type = _normalize_lookml_join_type(matched_j.type)
+                type_match = (sql_type == lkml_type)
+
+                equi_match = True
+                if sql_join.equi_joins and matched_j.equi_joins:
+                    sql_cols = {
+                        (l_col.lower(), r_col.lower())
+                        for (_, l_col), (_, r_col) in sql_join.equi_joins
+                    }
+                    sql_cols_rev = {
+                        (r_col.lower(), l_col.lower())
+                        for (_, l_col), (_, r_col) in sql_join.equi_joins
+                    }
+                    lkml_cols = {
+                        (f_col.lower(), j_col.lower())
+                        for (_, f_col), (_, j_col) in matched_j.equi_joins
+                    }
+                    equi_match = bool(sql_cols & lkml_cols or sql_cols_rev & lkml_cols)
+
+                status = (
+                    "exact_match"
+                    if (type_match and equi_match)
+                    else "type_mismatch"
+                )
+                if inferred_rel is None:
+                    inferred_rel = (
+                        _FLIP_REL.get(matched_j.relationship, matched_j.relationship)
+                        if matched_inverted
+                        else matched_j.relationship
+                    )
+                else:
+                    expected_explore_rel = (
+                        _FLIP_REL.get(inferred_rel, inferred_rel)
+                        if matched_inverted
+                        else inferred_rel
+                    )
+                    if expected_explore_rel != matched_j.relationship:
+                        safety_warnings.append(
+                            JoinSafetyWarning(
+                                rule="relationship_mismatch",
+                                severity="warning",
+                                message=(
+                                    f"Join '{matched_j.name}' declares relationship '{matched_j.relationship}', "
+                                    f"but primary keys infer '{expected_explore_rel}'"
+                                ),
+                                joins=[matched_j.name],
+                            )
+                        )
+
+                results.append(
+                    ExploreJoinComparison(
+                        explore_name=target_graph.explore_name,
+                        model_name=target_graph.model_name,
+                        sql_join=sql_join,
+                        status=status,
+                        matched_explore_join=matched_j.name,
+                        explore_join_type=matched_j.type,
+                        sql_join_type=sql_type,
+                        relationship=matched_j.relationship,
+                        inferred_relationship=inferred_rel,
+                        safety_warnings=safety_warnings,
+                        precedents=[],
+                    )
+                )
+            else:
+                both_precedents: list[JoinPrecedent] = []
+                target_precedents: list[JoinPrecedent] = []
+                seen_both: set[tuple[str, str, str]] = set()
+                seen_target: set[tuple[str, str, str]] = set()
+
+                for other_g in all_explore_graphs:
+                    if (other_g.model_name, other_g.explore_name) == (
+                        target_graph.model_name,
+                        target_graph.explore_name,
+                    ):
+                        continue
+                    o_views = views_by_model.get(other_g.model_name or "", {})
+                    obv_tail = _view_table_tail(o_views.get(other_g.base_view))
+                    o_base_names = {
+                        other_g.base_view.lower(),
+                        other_g.base_alias.lower(),
+                    } | ({obv_tail} if obv_tail else set())
+
+                    for oj_name, oj_node in other_g.joins.items():
+                        ojv_tail = _view_table_tail(o_views.get(oj_node.target_view))
+                        oj_names = {
+                            oj_name.lower(),
+                            oj_node.target_view.lower(),
+                            oj_node.view_alias.lower(),
+                        } | ({ojv_tail} if ojv_tail else set())
+
+                        from_v = (oj_node.from_view or other_g.base_alias).lower()
+                        from_tail = _view_table_tail(o_views.get(oj_node.from_view or ""))
+                        from_names = {from_v} | ({from_tail} if from_tail else set())
+
+                        right_matches = bool(oj_names & {right_name, right_alias})
+                        left_matches = bool(
+                            (o_base_names | from_names) & {left_name, left_alias}
+                        )
+                        rev_right_matches = bool(oj_names & {left_name, left_alias})
+                        rev_left_matches = bool(
+                            (o_base_names | from_names) & {right_name, right_alias}
+                        )
+
+                        is_both = (right_matches and left_matches) or (
+                            rev_right_matches and rev_left_matches
+                        )
+                        is_target = right_matches or rev_right_matches
+
+                        prec_key = (
+                            other_g.model_name or "",
+                            other_g.explore_name,
+                            oj_node.name,
+                        )
+                        prec_item = JoinPrecedent(
+                            model_name=other_g.model_name or "",
+                            explore_name=other_g.explore_name,
+                            join_name=oj_node.name,
+                            target_view=oj_node.target_view,
+                            type=oj_node.type,
+                            relationship=oj_node.relationship,
+                            sql_on=oj_node.sql_on,
+                            file=oj_node.file,
+                            line=oj_node.line,
+                        )
+                        if is_both and prec_key not in seen_both:
+                            seen_both.add(prec_key)
+                            both_precedents.append(prec_item)
+                        elif is_target and prec_key not in seen_target:
+                            seen_target.add(prec_key)
+                            target_precedents.append(prec_item)
+
+                precedents = both_precedents if both_precedents else target_precedents
+                if inferred_rel is None and both_precedents:
+                    inferred_rel = both_precedents[0].relationship
+
+                results.append(
+                    ExploreJoinComparison(
+                        explore_name=target_graph.explore_name,
+                        model_name=target_graph.model_name,
+                        sql_join=sql_join,
+                        status="missing_join",
+                        matched_explore_join=None,
+                        explore_join_type=None,
+                        sql_join_type=_normalize_sql_join_type(sql_join.side, sql_join.kind),
+                        relationship=None,
+                        inferred_relationship=inferred_rel,
+                        safety_warnings=safety_warnings,
+                        precedents=precedents,
+                    )
+                )
+
     return results
 
 
@@ -1585,6 +2736,25 @@ def parse_sql_to_lookml(
     )
     models: dict[str, LookmlModel] = project.model or {}
 
+    all_explore_graphs: list[LookmlExploreJoinGraph] = []
+    for m_name, m_obj in models.items():
+        m_views = m_obj.view or {}
+        for e_name, e_val in (m_obj.explore or {}).items():
+            for e_obj in _as_list(e_val):
+                if isinstance(e_obj, LookmlExplore):
+                    e_chain = _build_chain(e_name, exp_base_decls, exp_ref_decls)
+                    all_explore_graphs.append(
+                        build_explore_join_graph(
+                            explore_name=e_name,
+                            explore_obj=e_obj,
+                            explore_chain=e_chain,
+                            model_views=m_views,
+                            model_name=m_name,
+                        )
+                    )
+
+    views_by_model = _build_views_by_model(models)
+
     mappings: list[QueryLookmlMapping] = []
     for raw_pq in sql_res.queries:
         coerced_tables = [
@@ -1598,10 +2768,10 @@ def parse_sql_to_lookml(
             for tbl in raw_pq.tables
         ]
         pq = raw_pq.model_copy(update={"tables": coerced_tables})
-        view_matches = [
-            vm
-            for model_name, model_obj in models.items()
-            for vm in _match_model_views(
+        view_matches: list[LookmlViewMatch] = []
+        extra_usages: list[LookmlUsageMatch] = []
+        for model_name, model_obj in models.items():
+            vm_list, exp_u_list = _match_model_views(
                 pq,
                 model_name,
                 model_obj,
@@ -1619,7 +2789,8 @@ def parse_sql_to_lookml(
                 sql_db=sql_db,
                 sql_schema=sql_schema,
             )
-        ]
+            view_matches.extend(vm_list)
+            extra_usages.extend(exp_u_list)
         query_explores = list(
             {
                 (em.model_name, em.explore_name, em.field, em.join_name): em
@@ -1653,6 +2824,35 @@ def parse_sql_to_lookml(
                 for qm in fm.explore_queries
             }.values()
         )
+        query_join_analysis = _analyze_query_joins(
+            pq,
+            all_explore_graphs,
+            models,
+            query_explores,
+            views_by_model=views_by_model,
+        )
+        all_raw_usages = [
+            u for vm in view_matches for fm in vm.fields for u in fm.usages
+        ] + extra_usages
+        seen_keys: set[Any] = set()
+        query_usages: list[LookmlUsageMatch] = []
+        for u in all_raw_usages:
+            key = (
+                u.model_name,
+                u.explore_name,
+                u.view_name,
+                u.join_name,
+                u.field_name,
+                u.datagroup_name,
+                u.matched_property,
+                u.property_path,
+                u.file,
+                u.line,
+            )
+            if key not in seen_keys:
+                seen_keys.add(key)
+                query_usages.append(u)
+
         mappings.append(
             QueryLookmlMapping(
                 raw_sql=pq.raw_sql,
@@ -1662,6 +2862,8 @@ def parse_sql_to_lookml(
                 tests=query_tests,
                 aggregate_tables=query_agg_tables,
                 explore_queries=query_explore_queries,
+                join_analysis=query_join_analysis,
+                usages=query_usages,
             )
         )
 

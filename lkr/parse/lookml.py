@@ -204,6 +204,7 @@ class LookmlFilter(LookmlFieldProperties):
     type: str | None = None
     field: str | list[str | None] | None = None
     value: str | list[str | None] | None = None
+    sql: str | None = None
 
     def apply_defaults(self) -> Self:
         if self.type is None and self.name_:
@@ -311,6 +312,7 @@ class LookmlJoin(LookmlParserValues):
     relationship: str | None = None
     relationship_type: str | None = None
     required_joins: list[str] | None = None
+    sql_foreign_key: str | None = None
     sql_having: str | None = None
     sql_on: str | None = None
     sql_table_name: str | None = None
@@ -539,6 +541,14 @@ class LookmlMapLayer(LookmlParserValues):
     url: str | None = None
 
 
+class LookmlDatagroup(LookmlParserValues):
+    sql_trigger: str | None = None
+    interval_trigger: str | None = None
+    max_cache_age: str | None = None
+    label: str | None = None
+    description: str | None = None
+
+
 class LookmlModel(LookmlFileAttributes):
     connection: str | None = None
     label: str | None = None
@@ -552,6 +562,7 @@ class LookmlModel(LookmlFileAttributes):
     map_layer: dict[str, LookmlMapLayer] | None = None
     extension: str | bool | None = None
     tags: list[str] | None = None
+    datagroup: dict[str, LookmlDatagroup | list[LookmlDatagroup]] | None = None
 
     def apply_defaults(self) -> Self:
         for v in (self.view or {}).values():
@@ -570,6 +581,7 @@ class LookmlFileEntry(LookmlFileAttributes):
     test: dict[str, LookmlTest | list[LookmlTest]] | None = None
     manifest: dict[str, LookmlManifest] | LookmlManifest | None = None
     dashboard: dict[str, LookmlDashboard] | None = None
+    datagroup: dict[str, LookmlDatagroup | list[LookmlDatagroup]] | None = None
 
 
 class LookmlFile(_LookmlBase):
