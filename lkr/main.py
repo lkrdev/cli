@@ -32,6 +32,7 @@ def add_optional_typer_group(
         app.add_typer(group, name=group_name)
     except ModuleNotFoundError as import_error:
         extra = extra_name or group_name
+        err = import_error
 
         @app.command(
             name=group_name,
@@ -41,12 +42,12 @@ def add_optional_typer_group(
                 "ignore_unknown_options": True,
             },
         )
-        def fallback(import_error=import_error):
+        def fallback():
             msg = f"{group_name} tools (dependencies not available, try installing optional dependencies: lkr-dev-cli\\[{extra}])"
             if extra_message:
                 msg += f" {extra_message}"
             logger.error(msg)
-            logger.error(import_error)
+            logger.error(err)
             raise typer.Exit(1)
 
 
@@ -56,7 +57,6 @@ add_optional_typer_group(app, "lkr.tools.main.group", "tools")
 add_optional_typer_group(
     app, "lkr.codemode.main.group", "code-mode", extra_name="codemode"
 )
-add_optional_typer_group(app, "lkr.db_template.main.group", "db-template")
 add_optional_typer_group(app, "lkr.parse.main.group", "parse")
 
 
