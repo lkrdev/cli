@@ -1,20 +1,27 @@
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import typer
 
+from lkr.auth_service import get_auth
 from lkr.logger import logger
 from lkr.parse.lookml import LookmlProject, parse_lookml
+from lkr.parse.lookml_database_compare import (
+    format_compare_result,
+    parse_lookml_database_compare,
+)
 from lkr.parse.lookml_to_api import LookmlToApiResult, parse_lookml_to_api
 from lkr.parse.sql import SqlParseResult, parse_sql
 from lkr.parse.sql_to_lookml import (
     SqlToLookmlResult,
     parse_sql_to_lookml,
 )
+from lkr.parse.types import LookmlDatabaseCompareResult
 
 __all__ = [
     "group",
     "lookml_command",
+    "lookml_database_compare_command",
     "lookml_to_api_command",
     "sql_command",
     "sql_lookml_compare_command",
@@ -267,4 +274,96 @@ def lookml_to_api_command(
     )
     _write_or_echo(result.model_dump_json(indent=2, by_alias=True), output)
     return result
+
+
+@group.command(name="lookml-database-compare")
+def lookml_database_compare_command(
+    ctx: typer.Context,
+    path: Annotated[
+        Path | None,
+        typer.Option("--path", "-p", exists=True, help="Path to a LookML directory"),
+    ] = None,
+    lookml_file: Annotated[
+        Path | None,
+        typer.Option("--lookml-file", "-f", exists=True, help="Path to a LookML file"),
+    ] = None,
+    lookml: Annotated[
+        str | None,
+        typer.Option("--lookml", "-l", help="Inline LookML string"),
+    ] = None,
+    model: Annotated[
+        list[str] | None,
+        typer.Option("--model", "-m", help="Filter to one or more LookML models (repeatable)"),
+    ] = None,
+    explore: Annotated[
+        list[str] | None,
+        typer.Option("--explore", "-e", help="Filter to one or more LookML explores (repeatable)"),
+    ] = None,
+    columns: Annotated[
+        bool,
+        typer.Option("--columns", "-c", help="Include physical columns referenced on each table"),
+    ] = False,
+    validate: Annotated[
+        bool,
+        typer.Option("--validate", help="Compare compiled LookML tables against the database schema"),
+    ] = False,
+    validate_columns: Annotated[
+        bool,
+        typer.Option("--validate-columns", help="Validate compiled tables and columns against the database schema"),
+    ] = False,
+    db_schema_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--db-schema-file",
+            exists=True,
+            help="Path to JSON file containing database schema for offline validation",
+        ),
+    ] = None,
+    format: Annotated[
+        Literal["console", "json", "txt"],
+        typer.Option("--format", help="Output format: console, json, txt"),
+    ] = "console",
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Optional output file path"),
+    ] = None,
+) -> LookmlDatabaseCompareResult:
+    """Compile explore SQL and validate tables and columns against the database.
+
+    Complements Looker's CI/CD and `spectacles` SQL Validator: while SQL validators
+    verify that LookML fields generate runnable SQL across transformations, this
+    command checks bidirectional schema coverage—verifying both that all database
+    tables and columns are modeled in LookML (`unmodeled_in_lookml`) and that LookML
+    references exist in the database (`missing_in_database`).
+    """
+    _validate_lookml_args(path, lookml_file, lookml, "--lookml-file")
+    sdk = None
+    try:
+        auth = get_auth(ctx)
+        if auth.get_current_instance():
+            sdk = auth.get_current_sdk(prompt_refresh_invalid_token=False)
+    except (Exception, typer.Exit):  # noqa: BLE001
+        sdk = None
+
+    try:
+        result = parse_lookml_database_compare(
+            path=path,
+            lookml_file=lookml_file,
+            lookml=lookml,
+            model=model,
+            explore=explore,
+            columns=columns,
+            validate=validate,
+            validate_columns=validate_columns,
+            db_schema_file=db_schema_file,
+            sdk=sdk,
+        )
+    except (ValueError, FileNotFoundError) as e:
+        logger.error(str(e))
+        raise typer.Exit(1)
+
+    formatted = format_compare_result(result, fmt=format)
+    _write_or_echo(formatted, output)
+    return result
+
 

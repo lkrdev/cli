@@ -123,6 +123,12 @@ npx skills add lkrdev/cli --skill lkr-code-mode
 
 For full options, MCP server configuration, and PKCE recovery, see the [Code Mode docs](./codemode.md).
 
+## Parse (`lkr parse`)
+
+Parse SQL queries, assemble LookML projects (including `extends` and `+` refinements), map SQL queries to LookML fields (`sql-lookml-compare`), generate offline Looker API explore payloads (`lookml-to-api`), and bidirectionally compare LookML explores against database schemas (`lookml-database-compare`).
+
+For full usage, how `lookml-database-compare` complements Looker's CI/CD and `spectacles` SQL Validator, and the reference of `warnings` and `compile_errors`, see the [Parse docs](./parse.md).
+
 ## MCP
 Built into the `lkr` is an MCP server. Right now its tools are based on helping you work within an IDE. To use it a tool like [Cursor](https://www.cursor.com/), add this to your mcp.json
 
