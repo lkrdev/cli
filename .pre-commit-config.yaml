@@ -6,6 +6,11 @@ repos:
         args: ["--default-index", "https://pypi.org/simple", "--no-config"]
   - repo: local
     hooks:
+      - id: no-deprecated-node20-actions
+        name: disallow deprecated Node 20 GitHub Actions
+        entry: 'uses:\s*(actions/checkout@v[1-4]|actions/setup-python@v[1-5]|astral-sh/setup-uv@v[1-6]|google-github-actions/(auth|setup-gcloud)@v[1-2])\b'
+        language: pygrep
+        files: ^\.github/workflows/.*\.ya?ml$
       - id: uv-lock-index
         name: check uv.lock index
         entry: bash -c 'if grep -Fq "airlock-proxy.uplink" uv.lock; then echo "uv.lock needs default index, not proprietary"; exit 1; fi'

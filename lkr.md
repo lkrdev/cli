@@ -44,7 +44,7 @@ $ lkr db-template [OPTIONS]
 
 **Options**:
 
-* `--import-error <str>`: [default: No module named &#x27;lkr.db_template&#x27;]
+* `--import-error <str>`: [default: No module named &#x27;lkr.db_template.main&#x27;]
 
 ## `lkr auth`
 
