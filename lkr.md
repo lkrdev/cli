@@ -560,10 +560,10 @@ $ lkr parse [OPTIONS] COMMAND [ARGS]...
 **Commands**:
 
 * `sql`: Parse semicolon-delimited SQL queries from...
-* `lookml`: Parse LookML from --path, --file, or...
 * `sql-lookml-compare`: Compare and map SQL queries (--sql /...
 * `lookml-to-api`: Generate Looker API all_lookml_models and...
 * `lookml-database-compare`: Compile explore SQL and validate tables...
+* `lookml`: Parse LookML from --path, --file, or...
 
 ### `lkr parse sql`
 
@@ -581,24 +581,6 @@ $ lkr parse sql [OPTIONS]
 * `-f, --file <path>`: Path to SQL file (semicolon-delimited)
 * `-o, --output <path>`: Optional output .json file path
 * `-d, --dialect <str>`: Optional SQLGlot dialect (e.g. bigquery, snowflake)
-* `--help`: Show this message and exit.
-
-### `lkr parse lookml`
-
-Parse LookML from --path, --file, or --lookml with modelAssembly, extensions/refinements, and positions.
-
-**Usage**:
-
-```console
-$ lkr parse lookml [OPTIONS]
-```
-
-**Options**:
-
-* `-p, --path <path>`: Path to a LookML directory
-* `-f, --file <path>`: Path to a LookML file
-* `-l, --lookml <str>`: Inline LookML string
-* `-o, --output <path>`: Optional output .json file path
 * `--help`: Show this message and exit.
 
 ### `lkr parse sql-lookml-compare`
@@ -677,4 +659,48 @@ $ lkr parse lookml-database-compare [OPTIONS]
 * `--db-schema-file <path>`: Path to JSON file containing database schema for offline validation
 * `--format <console|json|txt>`: Output format: console, json, txt  [default: console]
 * `-o, --output <path>`: Optional output file path
+* `--help`: Show this message and exit.
+
+### `lkr parse lookml`
+
+Parse LookML from --path, --file, or --lookml with extensions/refinements and positions.
+
+**Usage**:
+
+```console
+$ lkr parse lookml [OPTIONS] COMMAND [ARGS]...
+```
+
+**Options**:
+
+* `-p, --path <path>`: Path to a LookML directory
+* `-f, --file <path>`: Path to a LookML file
+* `-l, --lookml <str>`: Inline LookML string
+* `-o, --output <path>`: Optional output .json file path
+* `--help`: Show this message and exit.
+
+**Commands**:
+
+* `user-attributes`: Extract all user attributes referenced in...
+
+#### `lkr parse lookml user-attributes`
+
+Extract all user attributes referenced in a LookML project, LookML dashboards (.dashboard.lookml), or JSON dashboard filters with optional instance validation.
+
+**Usage**:
+
+```console
+$ lkr parse lookml user-attributes [OPTIONS]
+```
+
+**Options**:
+
+* `-p, --path <path>`: Path to a LookML directory (defaults to &#x27;.&#x27; when no other input is specified)
+* `-f, --file <path>`: Path to a LookML or LookML dashboard (.dashboard.lookml) file
+* `-l, --lookml <str>`: Inline LookML string
+* `--dashboard-file <path>`: Path to a JSON file containing a Looker DashboardFilter object, a Dashboard object with dashboard_filters/dashboard_elements (e.g. looker-cli export), or a JSON array of DashboardFilter/Dashboard objects
+* `--dashboard-json, --dashboard-filters <str>`: Inline JSON string containing a DashboardFilter object, a Dashboard object with dashboard_filters/dashboard_elements, or a JSON array of DashboardFilter/Dashboard objects
+* `-o, --output <path>`: Optional output file path
+* `--validate`: Validate user attributes against Looker instance
+* `--format <str>`: Output format (text or json)  [default: text]
 * `--help`: Show this message and exit.
