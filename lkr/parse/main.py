@@ -10,6 +10,10 @@ from lkr.parse.lookml_database_compare import (
     format_compare_result,
     parse_lookml_database_compare,
 )
+from lkr.parse.lookml_snapshot import (
+    LookmlSnapshotResult,
+    run_lookml_snapshot,
+)
 from lkr.parse.lookml_to_api import LookmlToApiResult, parse_lookml_to_api
 from lkr.parse.sql import SqlParseResult, parse_sql
 from lkr.parse.sql_to_lookml import (
@@ -29,6 +33,7 @@ __all__ = [
     "lookml_database_compare_command",
     "lookml_group",
     "lookml_to_api_command",
+    "snapshot_command",
     "sql_command",
     "sql_lookml_compare_command",
     "user_attributes_command",
@@ -257,7 +262,66 @@ def user_attributes_command(
     return result
 
 
+@lookml_group.command(name="snapshot")
+def snapshot_command(
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Path to LookML directory to snapshot"),
+    ],
+    update: Annotated[
+        bool,
+        typer.Option(
+            "--update",
+            "-u",
+            help="Update snapshots in place with received data",
+        ),
+    ] = False,
+    ci: Annotated[
+        bool,
+        typer.Option(
+            "--ci",
+            help="CI mode: fail on missing or mismatched snapshots without writing",
+        ),
+    ] = False,
+    only: Annotated[
+        str | None,
+        typer.Option(
+            "--only",
+            help="Comma-separated list of objects to snapshot (tests, access, connections, manifest)",
+        ),
+    ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option(
+            "--model", "-m", help="Optional model name filter for snapshot"
+        ),
+    ] = None,
+    format: Annotated[
+        Literal["console", "json"],
+        typer.Option("--format", help="Output format: console or json"),
+    ] = "console",
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Optional output file path"),
+    ] = None,
+) -> LookmlSnapshotResult:
+    """Jest-style LookML snapshot testing to guard tests, access controls, connections, and manifest changes."""
+    result, console_output = run_lookml_snapshot(
+        path=path,
+        update=update,
+        ci=ci,
+        only=only,
+        model=model,
+        format_=format,
+    )
+    if format == "json":
+        _write_or_echo(result.model_dump_json(indent=2), output)
+    else:
+        _write_or_echo(console_output, output)
 
+    if not result.success:
+        raise typer.Exit(1)
+    return result
 @group.command(name="sql-lookml-compare")
 def sql_lookml_compare_command(
     sql: Annotated[
