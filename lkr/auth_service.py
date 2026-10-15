@@ -136,10 +136,9 @@ class DbOAuthSession(OAuthSession):
         self.use_production = use_production
 
     def _login(self, *args, **kwargs):
-        prev_refresh_token = self.token.refresh_token if self.token else ""
+        prev_refresh_token = self.token.refresh_token
         super()._login(*args, **kwargs)
-        if self.token:
-            self.token.refresh_token = self.token.refresh_token or prev_refresh_token
+        self.token.refresh_token = self.token.refresh_token or prev_refresh_token
         if not self.use_production:
             self._switch_to_dev_mode()
 
@@ -295,10 +294,9 @@ class CurrentAuth(BaseModel):
     def valid_refresh_token(self) -> bool:
         if not self.refresh_expires_at:
             return False
-        dt = datetime.fromisoformat(self.refresh_expires_at)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
-        return dt > datetime.now(UTC)
+        return datetime.fromisoformat(self.refresh_expires_at).replace(
+            tzinfo=UTC
+        ) > datetime.now(UTC)
 
     @computed_field
     @property
@@ -307,7 +305,7 @@ class CurrentAuth(BaseModel):
             datetime.now(UTC) + timedelta(seconds=self.expires_in)
         ).isoformat()
 
-    def update_from_token(self, other: AccessToken | AuthToken) -> Self:
+    def __add__(self, other: AccessToken | AuthToken) -> Self:
         self.access_token = other.access_token or ""
         if other.refresh_token:
             self.refresh_token = other.refresh_token
@@ -317,9 +315,6 @@ class CurrentAuth(BaseModel):
         self.token_type = other.token_type or ""
         self.expires_in = other.expires_in or 0
         return self
-
-    def __add__(self, other: AccessToken | AuthToken) -> Self:
-        return self.update_from_token(other)
 
     @classmethod
     def from_access_token(
@@ -597,7 +592,7 @@ class SqlLiteAuth:
         if confirmed:
 
             def add_auth(token: AccessToken | AuthToken):
-                current_auth.update_from_token(token)
+                current_auth + token
                 current_auth.update_refresh_expires_at(self.conn, commit=False)
                 current_auth.set_token(self.conn, commit=True, new_token=token)
 
