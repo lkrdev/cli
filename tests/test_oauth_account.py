@@ -309,7 +309,7 @@ def test_refresh_token_under_2h_rotates_and_preserves_in_memory(temp_db, monkeyp
 
     # 3) CurrentAuth.__add__ preserves refresh_token when omitted
     prev_exp = curr.refresh_expires_at
-    curr + AccessToken(access_token="token-3", refresh_token=None, expires_in=3600)
+    curr = curr + AccessToken(access_token="token-3", refresh_token=None, expires_in=3600)
     assert curr.refresh_token == "refresh-active"
     assert curr.refresh_expires_at == prev_exp
 

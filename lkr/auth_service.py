@@ -294,9 +294,8 @@ class CurrentAuth(BaseModel):
     def valid_refresh_token(self) -> bool:
         if not self.refresh_expires_at:
             return False
-        return datetime.fromisoformat(self.refresh_expires_at).replace(
-            tzinfo=UTC
-        ) > datetime.now(UTC)
+        dt = datetime.fromisoformat(self.refresh_expires_at)
+        return dt.replace(tzinfo=dt.tzinfo or UTC) > datetime.now(UTC)
 
     @computed_field
     @property
@@ -306,15 +305,16 @@ class CurrentAuth(BaseModel):
         ).isoformat()
 
     def __add__(self, other: AccessToken | AuthToken) -> Self:
-        self.access_token = other.access_token or ""
+        new_auth = self.model_copy(deep=True)
+        new_auth.access_token = other.access_token or ""
         if other.refresh_token:
-            self.refresh_token = other.refresh_token
-            self.refresh_expires_at = (
+            new_auth.refresh_token = other.refresh_token
+            new_auth.refresh_expires_at = (
                 datetime.now(UTC) + timedelta(days=30)
             ).isoformat()
-        self.token_type = other.token_type or ""
-        self.expires_in = other.expires_in or 0
-        return self
+        new_auth.token_type = other.token_type or ""
+        new_auth.expires_in = other.expires_in or 0
+        return new_auth
 
     @classmethod
     def from_access_token(
@@ -592,9 +592,9 @@ class SqlLiteAuth:
         if confirmed:
 
             def add_auth(token: AccessToken | AuthToken):
-                current_auth + token
-                current_auth.update_refresh_expires_at(self.conn, commit=False)
-                current_auth.set_token(self.conn, commit=True, new_token=token)
+                updated_auth = current_auth + token
+                updated_auth.update_refresh_expires_at(self.conn, commit=False)
+                updated_auth.set_token(self.conn, commit=True, new_token=token)
 
             # Initialize OAuth2 PKCE flow
             # ponytail: detect headless SSH or terminal without DISPLAY to use copy-code flow
