@@ -4,7 +4,7 @@ import sqlite3
 import sys
 import types
 from datetime import UTC, datetime, timedelta
-from typing import Self, Union
+from typing import Union
 
 import requests
 import typer
@@ -294,8 +294,9 @@ class CurrentAuth(BaseModel):
     def valid_refresh_token(self) -> bool:
         if not self.refresh_expires_at:
             return False
-        dt = datetime.fromisoformat(self.refresh_expires_at)
-        return dt.replace(tzinfo=dt.tzinfo or UTC) > datetime.now(UTC)
+        return datetime.fromisoformat(self.refresh_expires_at).astimezone(
+            UTC
+        ) > datetime.now(UTC)
 
     @computed_field
     @property
@@ -303,18 +304,6 @@ class CurrentAuth(BaseModel):
         return (
             datetime.now(UTC) + timedelta(seconds=self.expires_in)
         ).isoformat()
-
-    def __add__(self, other: AccessToken | AuthToken) -> Self:
-        new_auth = self.model_copy(deep=True)
-        new_auth.access_token = other.access_token or ""
-        if other.refresh_token:
-            new_auth.refresh_token = other.refresh_token
-            new_auth.refresh_expires_at = (
-                datetime.now(UTC) + timedelta(days=30)
-            ).isoformat()
-        new_auth.token_type = other.token_type or ""
-        new_auth.expires_in = other.expires_in or 0
-        return new_auth
 
     @classmethod
     def from_access_token(
@@ -362,16 +351,6 @@ class CurrentAuth(BaseModel):
             token_type=self.token_type,
             expires_in=self.expires_in,
         )
-
-    def update_refresh_expires_at(
-        self, connection: sqlite3.Connection, commit: bool = True
-    ):
-        connection.execute(
-            "UPDATE auth SET refresh_expires_at = ? WHERE instance_name = ?",
-            (self.refresh_expires_at, self.instance_name),
-        )
-        if commit:
-            connection.commit()
 
     def set_token(
         self,
@@ -592,9 +571,7 @@ class SqlLiteAuth:
         if confirmed:
 
             def add_auth(token: AccessToken | AuthToken):
-                updated_auth = current_auth + token
-                updated_auth.update_refresh_expires_at(self.conn, commit=False)
-                updated_auth.set_token(self.conn, commit=True, new_token=token)
+                current_auth.set_token(self.conn, commit=True, new_token=token)
 
             # Initialize OAuth2 PKCE flow
             # ponytail: detect headless SSH or terminal without DISPLAY to use copy-code flow
