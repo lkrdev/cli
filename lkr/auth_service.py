@@ -136,7 +136,9 @@ class DbOAuthSession(OAuthSession):
         self.use_production = use_production
 
     def _login(self, *args, **kwargs):
+        prev_refresh_token = self.token.refresh_token
         super()._login(*args, **kwargs)
+        self.token.refresh_token = self.token.refresh_token or prev_refresh_token
         if not self.use_production:
             self._switch_to_dev_mode()
 
@@ -294,7 +296,7 @@ class CurrentAuth(BaseModel):
             return False
         return datetime.fromisoformat(self.refresh_expires_at).replace(
             tzinfo=UTC
-        ) > (datetime.now(UTC) + timedelta(hours=24))
+        ) > datetime.now(UTC)
 
     @computed_field
     @property
@@ -305,12 +307,13 @@ class CurrentAuth(BaseModel):
 
     def __add__(self, other: AccessToken | AuthToken) -> Self:
         self.access_token = other.access_token or ""
-        self.refresh_token = other.refresh_token or ""
+        if other.refresh_token:
+            self.refresh_token = other.refresh_token
+            self.refresh_expires_at = (
+                datetime.now(UTC) + timedelta(days=30)
+            ).isoformat()
         self.token_type = other.token_type or ""
         self.expires_in = other.expires_in or 0
-        self.refresh_expires_at = (
-            datetime.now(UTC) + timedelta(days=30)
-        ).isoformat()
         return self
 
     @classmethod
@@ -385,7 +388,10 @@ class CurrentAuth(BaseModel):
             datetime.fromisoformat(expires_at) + timedelta(days=30)
         ).isoformat()
         if self.from_db and new_token:
-            if new_token.refresh_token:
+            if (
+                new_token.refresh_token
+                and new_token.refresh_token != self.refresh_token
+            ):
                 self.refresh_token = new_token.refresh_token
                 self.refresh_expires_at = refresh_expires_at
             self.access_token = new_token.access_token or self.access_token
