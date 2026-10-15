@@ -4,7 +4,7 @@ import sqlite3
 import sys
 import types
 from datetime import UTC, datetime, timedelta
-from typing import Self, Union
+from typing import Union
 
 import requests
 import typer
@@ -136,7 +136,9 @@ class DbOAuthSession(OAuthSession):
         self.use_production = use_production
 
     def _login(self, *args, **kwargs):
+        prev_refresh_token = self.token.refresh_token
         super()._login(*args, **kwargs)
+        self.token.refresh_token = self.token.refresh_token or prev_refresh_token
         if not self.use_production:
             self._switch_to_dev_mode()
 
@@ -292,9 +294,9 @@ class CurrentAuth(BaseModel):
     def valid_refresh_token(self) -> bool:
         if not self.refresh_expires_at:
             return False
-        return datetime.fromisoformat(self.refresh_expires_at).replace(
-            tzinfo=UTC
-        ) > (datetime.now(UTC) + timedelta(hours=24))
+        return datetime.fromisoformat(self.refresh_expires_at).astimezone(
+            UTC
+        ) > datetime.now(UTC)
 
     @computed_field
     @property
@@ -302,16 +304,6 @@ class CurrentAuth(BaseModel):
         return (
             datetime.now(UTC) + timedelta(seconds=self.expires_in)
         ).isoformat()
-
-    def __add__(self, other: AccessToken | AuthToken) -> Self:
-        self.access_token = other.access_token or ""
-        self.refresh_token = other.refresh_token or ""
-        self.token_type = other.token_type or ""
-        self.expires_in = other.expires_in or 0
-        self.refresh_expires_at = (
-            datetime.now(UTC) + timedelta(days=30)
-        ).isoformat()
-        return self
 
     @classmethod
     def from_access_token(
@@ -360,16 +352,6 @@ class CurrentAuth(BaseModel):
             expires_in=self.expires_in,
         )
 
-    def update_refresh_expires_at(
-        self, connection: sqlite3.Connection, commit: bool = True
-    ):
-        connection.execute(
-            "UPDATE auth SET refresh_expires_at = ? WHERE instance_name = ?",
-            (self.refresh_expires_at, self.instance_name),
-        )
-        if commit:
-            connection.commit()
-
     def set_token(
         self,
         connection: sqlite3.Connection,
@@ -385,7 +367,10 @@ class CurrentAuth(BaseModel):
             datetime.fromisoformat(expires_at) + timedelta(days=30)
         ).isoformat()
         if self.from_db and new_token:
-            if new_token.refresh_token:
+            if (
+                new_token.refresh_token
+                and new_token.refresh_token != self.refresh_token
+            ):
                 self.refresh_token = new_token.refresh_token
                 self.refresh_expires_at = refresh_expires_at
             self.access_token = new_token.access_token or self.access_token
@@ -586,8 +571,6 @@ class SqlLiteAuth:
         if confirmed:
 
             def add_auth(token: AccessToken | AuthToken):
-                current_auth + token
-                current_auth.update_refresh_expires_at(self.conn, commit=False)
                 current_auth.set_token(self.conn, commit=True, new_token=token)
 
             # Initialize OAuth2 PKCE flow
