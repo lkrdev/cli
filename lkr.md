@@ -683,6 +683,7 @@ $ lkr parse lookml [OPTIONS] COMMAND [ARGS]...
 
 * `user-attributes`: Extract all user attributes referenced in...
 * `snapshot`: Jest-style LookML snapshot testing to...
+* `translations`: Detect missing and bypassed locale strings...
 
 #### `lkr parse lookml user-attributes`
 
@@ -725,4 +726,24 @@ $ lkr parse lookml snapshot [OPTIONS]
 * `-m, --model <str>`: Optional model name filter for snapshot
 * `--format <console|json>`: Output format: console or json  [default: console]
 * `-o, --output <path>`: Optional output file path
+* `--help`: Show this message and exit.
+
+#### `lkr parse lookml translations`
+
+Detect missing and bypassed locale strings across LookML models, explores, views, and fields.
+
+**Usage**:
+
+```console
+$ lkr parse lookml translations [OPTIONS]
+```
+
+**Options**:
+
+* `-p, --path <path>`: Path to a LookML directory  [required]
+* `-l, --locale <str>`: Optional specific locale to evaluate
+* `-o, --output <path>`: Optional output file path
+* `--format <str>`: Output format: console, json, or text  [default: console]
+* `--strict`: Exit non-zero if missing or bypassed translations or missing labels are detected
+* `--validate`: Alias for --strict
 * `--help`: Show this message and exit.
