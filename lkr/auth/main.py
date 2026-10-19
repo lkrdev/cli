@@ -1,12 +1,17 @@
 import builtins
-import urllib.parse
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
 from looker_sdk.rtl.auth_token import AccessToken, AuthToken
 
 from lkr.auth.oauth import OAuth2PKCE
-from lkr.auth_service import get_auth
+from lkr.auth_service import (
+    ApiKeyAuthSession,
+    SqlLiteAuth,
+    get_auth,
+    init_api_key_sdk,
+    normalize_base_url,
+)
 from lkr.logger import logger
 
 QUESTIONARY_AVAILABLE = True
@@ -28,11 +33,40 @@ group = typer.Typer(name="auth", help="Authentication commands for LookML Reposi
 
 @group.callback()
 def callback(ctx: typer.Context):
-    if ctx.invoked_subcommand == "whoami":
+    if ctx.invoked_subcommand in ("whoami", "add-access-token"):
         return
     if ctx.obj["ctx_lkr"].use_sdk == "api_key":
         logger.error("API key authentication is not supported for auth commands")
         raise typer.Exit(1)
+
+
+@group.command(name="add-access-token")
+def add_access_token(ctx: typer.Context):
+    """Mint an access token via API key and save it to the database"""
+    ctx_lkr = ctx.obj["ctx_lkr"]
+    if not ctx_lkr.api_key:
+        logger.error(
+            "--client-id, --client-secret, and --base-url are required for add-access-token"
+        )
+        raise typer.Exit(1)
+    ctx_lkr.api_key.base_url, _ = normalize_base_url(ctx_lkr.api_key.base_url)
+    sql_auth = SqlLiteAuth(ctx_lkr)
+    sdk = init_api_key_sdk(ctx_lkr.api_key, use_production=True)
+    auth_session = cast(ApiKeyAuthSession, sdk.auth)
+    auth_session._login({})
+    if sql_auth.conn.execute(
+        "DELETE FROM auth WHERE access_token = ?", (auth_session.token.access_token,)
+    ).rowcount:
+        sql_auth.conn.commit()
+        sdk.logout()
+        auth_session.use_production = ctx_lkr.use_production
+        auth_session._login({})
+    elif not ctx_lkr.use_production:
+        auth_session._switch_to_dev_mode()
+    instance_name = sql_auth.add_access_token(
+        ctx_lkr.api_key.base_url, auth_session.token, ctx_lkr.use_production
+    )
+    logger.info(f"Saved access token for {instance_name} ({ctx_lkr.api_key.base_url})")
 
 
 @group.command()
@@ -113,13 +147,7 @@ def login(
         else:
             # Login flow for new instance
             base_url = typer.prompt("Enter your Looker instance base URL")
-            base_url = (base_url or "").strip()
-            if not base_url.startswith("http"):
-                base_url = f"https://{base_url}"
-            parsed_url = urllib.parse.urlparse(base_url)
-            origin = urllib.parse.urlunparse(
-                (parsed_url.scheme, parsed_url.netloc, "", "", "", "")
-            )
+            origin, clean_netloc = normalize_base_url(base_url)
             if QUESTIONARY_AVAILABLE:
                 mode = questionary.select(
                     "Do you want this instance to be used for production or development mode?",
@@ -134,11 +162,6 @@ def login(
                 use_production = mode
             else:
                 use_production = typer.confirm("Use production mode?", default=False)
-            clean_netloc = (
-                parsed_url.netloc.split(":")[0]
-                .removesuffix(".cloud.looker.com")
-                .removesuffix(".looker.com")
-            )
             instance_name = typer.prompt(
                 "Enter a name for this Looker instance",
                 default=f"{'prod' if use_production else 'dev'}-{clean_netloc}",

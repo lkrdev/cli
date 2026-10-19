@@ -307,3 +307,139 @@ def test_refresh_token_under_2h_rotates_and_preserves_in_memory(temp_db, monkeyp
     assert row2["refresh_token"] == "refresh-rotated"
     assert row2["refresh_expires_at"] > under_2h
 
+
+def test_add_access_token_and_reuse_isolated_dev_prod(temp_db, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import MagicMock
+
+    from typer.testing import CliRunner
+
+    from lkr.main import app
+
+    monkeypatch.setattr("lkr.auth_service.os.path.expanduser", lambda _p: temp_db)
+    monkeypatch.delenv("LOOKERSDK_CLIENT_ID", raising=False)
+    monkeypatch.delenv("LOOKERSDK_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("LOOKERSDK_BASE_URL", raising=False)
+
+    tokens = ["shared-tok-1", "shared-tok-1", "fresh-dev-tok-2"]
+    switched_dev = []
+    logged_out = []
+
+    def fake_init_api_key_sdk(api_key, use_production=True):
+        sdk = MagicMock()
+        sdk.auth.use_production = use_production
+
+        def fake_login(*_args, **_kwargs):
+            tok = tokens.pop(0)
+            sdk.auth.token = AccessToken(
+                access_token=tok,
+                refresh_token=None,
+                token_type="Bearer",
+                expires_in=3600,
+            )
+            if not sdk.auth.use_production:
+                sdk.auth._switch_to_dev_mode()
+
+        sdk.auth._login.side_effect = fake_login
+        sdk.auth._switch_to_dev_mode.side_effect = lambda: switched_dev.append(
+            sdk.auth.token.access_token
+        )
+        sdk.logout.side_effect = lambda: logged_out.append(sdk.auth.token.access_token)
+        return sdk
+
+    monkeypatch.setattr("lkr.auth.main.init_api_key_sdk", fake_init_api_key_sdk)
+
+    runner = CliRunner()
+    # 1) Mint prod token
+    res_prod = runner.invoke(
+        app,
+        [
+            "--client-id=id1",
+            "--client-secret=sec1",
+            "--base-url=https://acme.cloud.looker.com",
+            "auth",
+            "add-access-token",
+        ],
+    )
+    assert res_prod.exit_code == 0
+    assert switched_dev == []
+
+    # 2) Mint dev token when Looker initially returns same "shared-tok-1": logs out old token & mints "fresh-dev-tok-2"
+    res_dev = runner.invoke(
+        app,
+        [
+            "--client-id=id1",
+            "--client-secret=sec1",
+            "--base-url=https://acme.cloud.looker.com",
+            "--dev",
+            "auth",
+            "add-access-token",
+        ],
+    )
+    assert res_dev.exit_code == 0
+    assert logged_out == ["shared-tok-1"]
+    assert switched_dev == ["fresh-dev-tok-2"]
+
+    # Add a distinct prod token now so both prod and dev exist simultaneously
+    tokens.append("distinct-prod-tok-3")
+    assert (
+        runner.invoke(
+            app,
+            [
+                "--client-id=id2",
+                "--client-secret=sec2",
+                "--base-url=https://acme.cloud.looker.com",
+                "auth",
+                "add-access-token",
+            ],
+        ).exit_code
+        == 0
+    )
+
+    monkeypatch.delenv("LOOKERSDK_CLIENT_ID", raising=False)
+    monkeypatch.delenv("LOOKERSDK_CLIENT_SECRET", raising=False)
+
+    # 3) Reuse dev vs prod via --base-url without switching workspace again or touching current_instance
+    auth_dev = SqlLiteAuth(
+        LkrCtxObj(
+            force_oauth=False,
+            base_url="https://acme.cloud.looker.com",
+            use_production=False,
+        ),
+        db_path=temp_db,
+    )
+    curr_dev = auth_dev._get_current_auth()
+    assert curr_dev is not None and curr_dev.access_token == "fresh-dev-tok-2"
+
+    auth_prod = SqlLiteAuth(
+        LkrCtxObj(
+            force_oauth=False,
+            base_url="https://acme.cloud.looker.com",
+            use_production=True,
+        ),
+        db_path=temp_db,
+    )
+    curr_prod = auth_prod._get_current_auth()
+    assert curr_prod is not None and curr_prod.access_token == "distinct-prod-tok-3"
+    assert (
+        SqlLiteAuth(LkrCtxObj(force_oauth=False), db_path=temp_db).get_current_instance()
+        == "active-inst"
+    )
+
+    # 4) Expired access token is hidden from list_auth (while expired OAuth remains) and rejected on lookup
+    past_iso = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    auth_dev.conn.execute(
+        "UPDATE auth SET expires_at = ?, refresh_expires_at = ? WHERE instance_name IN ('token-dev-acme', 'active-inst')",
+        (past_iso, past_iso),
+    )
+    auth_dev.conn.commit()
+
+    listed_names = [row[0] for row in auth_dev.list_auth()]
+    assert "active-inst" in listed_names
+    assert "token-prod-acme" in listed_names
+    assert "token-dev-acme" not in listed_names
+
+    with pytest.raises(typer.Exit):
+        auth_dev._get_current_auth()
+
+

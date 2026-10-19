@@ -3,6 +3,7 @@ import os
 import sqlite3
 import sys
 import types
+import urllib.parse
 from datetime import UTC, datetime, timedelta
 from typing import Union
 
@@ -27,9 +28,26 @@ __all__ = [
     "ApiKeyAuthSession",
     "DbOAuthSession",
     "get_auth",
+    "init_api_key_sdk",
     "init_sdk",
     "is_auth_expired",
+    "normalize_base_url",
 ]
+
+
+def normalize_base_url(base_url: str) -> tuple[str, str]:
+    cleaned = (base_url or "").strip()
+    if not cleaned.startswith("http"):
+        cleaned = f"https://{cleaned}"
+    parsed = urllib.parse.urlparse(cleaned)
+    origin = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
+    clean_netloc = (
+        parsed.netloc.split(":")[0]
+        .removesuffix(".cloud.looker.com")
+        .removesuffix(".looker.com")
+    )
+    return origin, clean_netloc
+
 
 
 def is_auth_expired(e: Exception) -> bool:
@@ -47,6 +65,10 @@ def get_auth(
             logger.error("No Looker context found")
             raise typer.Exit(1)
     if lkr_ctx.use_sdk == "api_key" and lkr_ctx.api_key:
+        if not lkr_ctx.force_oauth and lkr_ctx.base_url:
+            sql_auth = SqlLiteAuth(lkr_ctx)
+            if sql_auth._get_access_token_auth():
+                return sql_auth
         logger.info("Using API key authentication")
         return ApiKeyAuth(lkr_ctx.api_key, use_production=lkr_ctx.use_production)
     else:
@@ -358,14 +380,20 @@ class CurrentAuth(BaseModel):
         *,
         new_token: AccessToken | AuthToken | None = None,
         commit: bool = True,
+        keep_current: bool = False,
     ):
         expires_at = (
             datetime.now(UTC)
             + timedelta(seconds=(new_token.expires_in or 0) if new_token else 0)
         ).isoformat()
+        has_refresh = (
+            new_token.refresh_token if new_token else None
+        ) or self.refresh_token
         refresh_expires_at = (
-            datetime.fromisoformat(expires_at) + timedelta(days=30)
-        ).isoformat()
+            (datetime.fromisoformat(expires_at) + timedelta(days=30)).isoformat()
+            if has_refresh
+            else expires_at
+        )
         if self.from_db and new_token:
             if (
                 new_token.refresh_token
@@ -388,7 +416,7 @@ class CurrentAuth(BaseModel):
             )
         else:
             connection.execute(
-                "INSERT INTO auth (instance_name, access_token, refresh_token, refresh_expires_at, token_type, expires_at, current_instance, base_url, use_production) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO auth (instance_name, access_token, refresh_token, refresh_expires_at, token_type, expires_at, current_instance, base_url, use_production) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     self.instance_name,
                     self.access_token,
@@ -396,7 +424,7 @@ class CurrentAuth(BaseModel):
                     refresh_expires_at,
                     self.token_type,
                     expires_at,
-                    1,
+                    0 if keep_current else 1,
                     self.base_url,
                     self.use_production,
                 ),
@@ -457,6 +485,37 @@ class SqlLiteAuth:
         ).set_token(self.conn, commit=False, new_token=access_token)
         self.conn.commit()
 
+    def add_access_token(
+        self,
+        base_url: str,
+        access_token: AuthToken | AccessToken,
+        use_production: bool,
+    ) -> str:
+        origin, clean_netloc = normalize_base_url(base_url)
+        instance_name = f"token-{'prod' if use_production else 'dev'}-{clean_netloc}"
+        CurrentAuth.from_access_token(
+            access_token=access_token,
+            instance_name=instance_name,
+            base_url=origin,
+            use_production=use_production,
+        ).set_token(self.conn, commit=True, new_token=access_token, keep_current=True)
+        return instance_name
+
+    def _get_access_token_auth(self) -> CurrentAuth | None:
+        if not self.ctx.base_url:
+            return None
+        origin, _ = normalize_base_url(self.ctx.base_url)
+        row = self.conn.execute(
+            "SELECT instance_name, access_token, refresh_token, refresh_expires_at, token_type, expires_at, base_url, use_production FROM auth WHERE base_url = ? AND use_production = ? AND (refresh_token IS NULL OR refresh_token = '')",
+            (origin, self.ctx.use_production),
+        ).fetchone()
+        if row:
+            curr = CurrentAuth.from_db_row(row)
+            if curr.valid_refresh_token:
+                return curr
+            self.delete_auth(curr.instance_name)
+        return None
+
     def set_current_instance(self, instance_name: str):
         self.conn.execute(
             "UPDATE auth SET current_instance = CASE WHEN instance_name = ? THEN 1 ELSE 0 END",
@@ -474,6 +533,13 @@ class SqlLiteAuth:
             if row:
                 return CurrentAuth.from_db_row(row)
             logger.error("couldnt find oauth account in db, run lkr auth login")
+            raise typer.Exit(1)
+        if self.ctx.base_url and not self.ctx.force_oauth:
+            if curr := self._get_access_token_auth():
+                return curr
+            logger.error(
+                "No valid access token found for base URL, run lkr auth add-access-token"
+            )
             raise typer.Exit(1)
         cursor = self.conn.execute(
             "SELECT instance_name, access_token, refresh_token, refresh_expires_at, token_type, expires_at, base_url, use_production FROM auth WHERE current_instance = 1"
@@ -493,6 +559,12 @@ class SqlLiteAuth:
         current_auth = self._get_current_auth()
         if current_auth:
             if not current_auth.valid_refresh_token:
+                if not current_auth.refresh_token:
+                    self.delete_auth(current_auth.instance_name)
+                    logger.error(
+                        f"Access token for {current_auth.instance_name} has expired, run lkr auth add-access-token"
+                    )
+                    raise typer.Exit(1)
                 from lkr.exceptions import InvalidRefreshTokenError
 
                 if prompt_refresh_invalid_token:
@@ -517,12 +589,12 @@ class SqlLiteAuth:
 
                 try:
                     sdk.auth.authenticate({})
-                    if not target_use_production and isinstance(
-                        sdk.auth, DbOAuthSession
-                    ):
-                        sdk.auth._switch_to_dev_mode()
                 except Exception as e:
-                    if is_auth_expired(e) and sys.stdin.isatty():
+                    if (
+                        current_auth.refresh_token
+                        and is_auth_expired(e)
+                        and sys.stdin.isatty()
+                    ):
                         self._cli_confirm_refresh_token(current_auth, quiet=False)
                         return self.get_current_sdk(
                             prompt_refresh_invalid_token=False
@@ -540,8 +612,10 @@ class SqlLiteAuth:
         self.conn.commit()
 
     def list_auth(self) -> list[tuple[str, str, bool, bool]]:
+        now_iso = datetime.now(UTC).isoformat()
         cursor = self.conn.execute(
-            "SELECT instance_name, base_url, current_instance, use_production FROM auth ORDER BY instance_name ASC"
+            "SELECT instance_name, base_url, current_instance, use_production FROM auth WHERE (refresh_token IS NOT NULL AND refresh_token != '') OR expires_at > ? ORDER BY instance_name ASC",
+            (now_iso,),
         )
         rows = cursor.fetchall()
         return [
@@ -673,6 +747,12 @@ def init_sdk(
             resolved_verify_ssl = True
 
     if resolved_base_url or resolved_client_id or resolved_client_secret:
+        if resolved_base_url and not instance_name:
+            sql_auth = SqlLiteAuth(
+                LkrCtxObj(base_url=resolved_base_url, use_production=use_production)
+            )
+            if sql_auth._get_access_token_auth():
+                return sql_auth.get_current_sdk(prompt_refresh_invalid_token=False)
         if not (
             resolved_base_url and resolved_client_id and resolved_client_secret
         ):

@@ -122,10 +122,11 @@ def callback(
         force_oauth=force_oauth,
         use_production=not dev if dev is not None else True,
         oauth_account=oauth_account,
+        base_url=base_url,
     )
     ctx.obj["ctx_lkr"] = ctx_obj
     # if the user passes --dev, but lkrCtxObj.use_sdk is oauth, then we need to log a warning saying we're ignoring the --dev flag
-    if dev and ctx_obj.use_sdk == "oauth":
+    if dev and ctx_obj.use_sdk == "oauth" and not base_url:
         logger.warning(
             "Ignoring --dev flag because OAuth token tracks dev/prod mode."
         )
