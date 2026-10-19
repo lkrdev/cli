@@ -5,7 +5,7 @@
 def main():
     user = me()  # ty: ignore[unresolved-reference]
     run_id = f"{ts_utc}_{user['id']}"  # ty: ignore[unresolved-reference]
-    proj = project(project_id=project_id)  # ty: ignore[unresolved-reference]
+    proj = project(project_id=project_id) or {}  # ty: ignore[unresolved-reference]
 
     try:
         reset_project_to_production(project_id=project_id)  # ty: ignore[unresolved-reference]
@@ -13,7 +13,7 @@ def main():
         create_developer_copy(project_id=project_id)  # ty: ignore[unresolved-reference]
         reset_project_to_production(project_id=project_id)  # ty: ignore[unresolved-reference]
 
-    prod_ref = git_branch(project_id=project_id).get("ref")  # ty: ignore[unresolved-reference]
+    prod_ref = (git_branch(project_id=project_id) or {}).get("ref")  # ty: ignore[unresolved-reference]
     create_git_branch(project_id=project_id, body={"name": run_id})  # ty: ignore[unresolved-reference]
     if prod_ref:
         update_git_branch(project_id=project_id, body={"name": run_id, "ref": prod_ref})  # ty: ignore[unresolved-reference]

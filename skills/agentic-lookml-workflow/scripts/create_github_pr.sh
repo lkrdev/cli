@@ -14,6 +14,10 @@ FILES=()
 for f in input.sql metrics.md compare_initial.json compare_post_refactor.json; do
   [[ -f "$SESSION_DIR/$f" ]] && FILES+=("$SESSION_DIR/$f")
 done
+if [[ ${#FILES[@]} -eq 0 ]]; then
+  echo "Error: No files found to attach to Gist." >&2
+  exit 1
+fi
 
 GIST_URL=$(gh gist create "${FILES[@]}" --desc "agentic-lookml attachments ($RUN_ID)")
 GIST_ID="${GIST_URL##*/}"
