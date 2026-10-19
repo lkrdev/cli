@@ -89,6 +89,7 @@ def run_python_code(
                 force_oauth=ctx_lkr.force_oauth,
                 use_production=ctx_lkr.use_production,
                 oauth_account=ctx_lkr.oauth_account,
+                base_url=ctx_lkr.base_url,
             )
             if ctx_lkr
             else LkrCtxObj(force_oauth=False)

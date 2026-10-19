@@ -30,6 +30,7 @@ class LkrCtxObj(BaseModel):
     force_oauth: bool = False
     use_production: bool = True
     oauth_account: str | None = None
+    base_url: str | None = None
 
     @property
     def use_sdk(self) -> Literal["oauth", "api_key"]:
@@ -41,3 +42,4 @@ class LkrCtxObj(BaseModel):
         super().__init__(*args, api_key=api_key, **kwargs)
         if not self.api_key:
             self.api_key = LookerApiKey.from_env()
+

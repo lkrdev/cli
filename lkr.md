@@ -49,10 +49,25 @@ $ lkr auth [OPTIONS] COMMAND [ARGS]...
 
 **Commands**:
 
+* `add-access-token`: Mint an access token via API key and save...
 * `login`: Login to Looker instance using OAuth2 or...
 * `logout`: Logout and clear saved credentials
 * `whoami`: Check current authentication
 * `list`: List all authenticated Looker instances
+
+### `lkr auth add-access-token`
+
+Mint an access token via API key and save it to the database
+
+**Usage**:
+
+```console
+$ lkr auth add-access-token [OPTIONS]
+```
+
+**Options**:
+
+* `--help`: Show this message and exit.
 
 ### `lkr auth login`
 
