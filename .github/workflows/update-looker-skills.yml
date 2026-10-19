@@ -28,7 +28,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 1. Update all existing skills tracked in skills-lock.json
+          # 1. Stage sub-skills into .agents/skills/ so npx skills update can sync them
+          if compgen -G "skills/lookml/sub-skills/lookml-*" > /dev/null; then
+            mv skills/lookml/sub-skills/lookml-* .agents/skills/
+          fi
+
           npx --yes skills update -p -y
 
           # 2. Check upstream looker-open-source/looker-skills for any new lookml-* writing skills
@@ -62,6 +66,10 @@ jobs:
             echo "new_skills=" >> "$GITHUB_OUTPUT"
           fi
 
+          # 3. Return all lookml-* skills to skills/lookml/sub-skills/ (.agents/skills/lookml/sub-skills/)
+          mkdir -p skills/lookml/sub-skills
+          mv .agents/skills/lookml-* skills/lookml/sub-skills/
+
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v7
         with:
@@ -70,10 +78,10 @@ jobs:
           body: |
             Automated weekly sync of LookML writing skills from [`looker-open-source/looker-skills`](https://github.com/looker-open-source/looker-skills) via `npx skills`.
 
-            - Updates existing skills tracked in `skills-lock.json` and `.agents/skills/lookml-*`.
+            - Updates existing skills tracked in `skills-lock.json` and `.agents/skills/lookml/sub-skills/*`.
             - Newly discovered `lookml-*` skills installed: `${{ steps.sync_skills.outputs.new_skills || 'none' }}`
 
-            If new `lookml-*` skills were added, consider adding them to the unified reference table in `skills/agentic-lookml/SKILL.md`.
+            If new `lookml-*` skills were added, consider adding them to `skills/lookml/SKILL.md` and `skills/agentic-lookml/SKILL.md`.
           branch: chore/update-looker-skills
           delete-branch: true
           labels: dependencies
