@@ -386,9 +386,12 @@ class CurrentAuth(BaseModel):
             datetime.now(UTC)
             + timedelta(seconds=(new_token.expires_in or 0) if new_token else 0)
         ).isoformat()
+        has_refresh = (
+            new_token.refresh_token if new_token else None
+        ) or self.refresh_token
         refresh_expires_at = (
             (datetime.fromisoformat(expires_at) + timedelta(days=30)).isoformat()
-            if self.refresh_token
+            if has_refresh
             else expires_at
         )
         if self.from_db and new_token:
