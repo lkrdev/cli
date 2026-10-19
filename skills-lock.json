@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "skills": {
+    "lookml-access-grants": {
+      "source": "looker-open-source/looker-skills",
+      "sourceType": "github",
+      "skillPath": "skills/lookml-access-grants/SKILL.md",
+      "computedHash": "89fb55cd7e2c9ac9f05c630dbfc881992090294e4f8b007cb03733f6a3a36262"
+    },
+    "lookml-explore": {
+      "source": "looker-open-source/looker-skills",
+      "sourceType": "github",
+      "skillPath": "skills/lookml-explore/SKILL.md",
+      "computedHash": "c5554a05d0e6e558cac73106defccae72138c23b349371b49e662ac9f95953b2"
+    },
+    "lookml-fields": {
+      "source": "looker-open-source/looker-skills",
+      "sourceType": "github",
+      "skillPath": "skills/lookml-fields/SKILL.md",
+      "computedHash": "d16c6a78f01e62d4e032f5996fac47d9033a959311f2e5511aa121e584bf31d7"
+    },
+    "lookml-liquid": {
+      "source": "looker-open-source/looker-skills",
+      "sourceType": "github",
+      "skillPath": "skills/lookml-liquid/SKILL.md",
+      "computedHash": "e136691ec30f3a84156e551ffb221be956034a610a95158045b21ce8f2b42fa9"
+    },
+    "lookml-model": {
+      "source": "looker-open-source/looker-skills",
+      "sourceType": "github",
+      "skillPath": "skills/lookml-model/SKILL.md",
+      "computedHash": "55ebcdd9b5c92bc0c3ce9c296c88edb3ac36ead0302726def0d97cadbf4faa57"
+    },
+    "lookml-refinements": {
+      "source": "looker-open-source/looker-skills",
+      "sourceType": "github",
+      "skillPath": "skills/lookml-refinements/SKILL.md",
+      "computedHash": "af3632508af03afc4302dcb166573fab8051f921cebe64d70d58cd5f2ea8f4b8"
+    },
+    "lookml-sets": {
+      "source": "looker-open-source/looker-skills",
+      "sourceType": "github",
+      "skillPath": "skills/lookml-sets/SKILL.md",
+      "computedHash": "21508c3bde39a213758f1e4535cd94e3e6ed6bd643b2c21e54eeb6a7cb71967c"
+    },
+    "lookml-tests": {
+      "source": "looker-open-source/looker-skills",
+      "sourceType": "github",
+      "skillPath": "skills/lookml-tests/SKILL.md",
+      "computedHash": "72786aede2ba8c3404d9c83117e83df048329b2aa4ff4637437e3c67d5953a92"
+    },
+    "lookml-view": {
+      "source": "looker-open-source/looker-skills",
+      "sourceType": "github",
+      "skillPath": "skills/lookml-view/SKILL.md",
+      "computedHash": "cf640d7aebe066f592f8eb6766c0112e918338a0dbcaeac8aa07f505cbb08e26"
+    }
+  }
+}
