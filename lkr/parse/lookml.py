@@ -597,6 +597,7 @@ class LookmlFile(_LookmlBase):
     explore: dict[str, LookmlFileEntry] | None = None
     manifest: dict[str, LookmlFileEntry] | LookmlManifest | None = None
     dashboard: dict[str, LookmlFileEntry] | None = None
+    test: dict[str, LookmlFileEntry] | None = None
 
 
 class LookmlError(LookmlFileAttributes):
@@ -677,6 +678,7 @@ def parse_lookml(
             return parse_lookml(file=root)
         if any(root.rglob("*.model.lkml")):
             opts["cwd"] = str(root)
+            opts["source"] = "**/*.lkml"
         else:
             files_input = [
                 {
@@ -701,9 +703,20 @@ lp.parseFiles({{
   positions: true,
   strings: true,
   legacyFileMetadata: true,
-  fileOutput: "by-type",
   console: []
-}}).then(p => process.stdout.write(JSON.stringify(p))).catch(err => {{
+}}).then(p => {{
+  if (p.file && !p.file.view) {{
+    const allFiles = Object.values(p.file);
+    p.file = {{
+      model: allFiles.filter(f => f.$file_type === "model" || (f.$file_path && f.$file_path.endsWith(".model.lkml"))).reduce((a, f) => (a[f.$file_rel || f.$file_path] = f, a), {{}}),
+      view: allFiles.filter(f => f.$file_type === "view" || (f.$file_path && f.$file_path.endsWith(".view.lkml"))).reduce((a, f) => (a[f.$file_rel || f.$file_path] = f, a), {{}}),
+      explore: allFiles.filter(f => f.$file_type === "explore" || (f.$file_path && f.$file_path.endsWith(".explore.lkml"))).reduce((a, f) => (a[f.$file_rel || f.$file_path] = f, a), {{}}),
+      test: allFiles.filter(f => f.$file_type === "test" || (f.$file_path && f.$file_path.endsWith(".test.lkml")) || f.test).reduce((a, f) => (a[f.$file_rel || f.$file_path] = f, a), {{}}),
+      manifest: p.manifest || undefined
+    }};
+  }}
+  process.stdout.write(JSON.stringify(p));
+}}).catch(err => {{
   console.error(err);
   process.exit(1);
 }});

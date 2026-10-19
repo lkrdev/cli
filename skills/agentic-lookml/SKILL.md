@@ -170,7 +170,12 @@ Every LookML modification prescribed by the agent follows this three-layer direc
 │   ├── orders_dynamic_rank.view.lkml            # Specialty views: bind_all_filters NDTs, Liquid SDTs, AS OF SDTs, OJOF COALESCE views
 │   └── explores/                                # Specialty Explores (extends: [silver_explore], tags: ["gold"])
 │       └── orders_subscription_attribution.explore.lkml # Inequality joins, OJOF, Long Metrics, Liquid/bind_all_filters + always_filter, aggregate_table
-└── project.model.lkml                           # Includes bronze/explores/*, silver/explores/*, and gold/explores/*
+├── tests/
+│   ├── bronze/
+│   │   └── order_items_base.test.lkml           # Single-table measures tested at table grain, grouped into 1 query, filtered to immutable data
+│   └── silver/
+│       └── orders.test.lkml                     # Silver metrics grouped by join path DAG branch, filtered to immutable data
+└── project.model.lkml                           # Includes bronze/explores/*, silver/explores/*, gold/explores/*, and tests/**/*.test.lkml
 ```
 
 ### Bronze layer (`bronze/`, raw physical tables and single-table refinements)
@@ -282,3 +287,126 @@ Inspect `views[].fields`, `views[].unmodeled_db_columns`, `views[].missing_db_co
 - Route window functions and `QUALIFY` ([08-window-functions-and-qualify.md](references/08-window-functions-and-qualify.md)) across query-layer Table Calculations (display-set windows), Silver NDT `derived_column:` (post-`GROUP BY` windows), Silver `extends: [base_view]` with `${EXTENDED}` (pre-`GROUP BY` row-level windows or single-table CDC `QUALIFY`), and Gold `bind_all_filters: yes` NDTs or `AS OF` SDTs.
 - Route `UNION ALL` and multi-fact stitching ([09-unions.md](references/09-unions.md), [05-dimensional-non-key-joins.md](references/05-dimensional-non-key-joins.md), [12-table-wildcards.md](references/12-table-wildcards.md)) across Bronze wildcard `_TABLE_SUFFIX` base explores (the sole Liquid exception outside Gold), Silver `UNION ALL` SDTs (`${}` substitution on every table and column, `extends: [base_view]`, mandatory compound PK, and `fields: [ALL_FIELDS*, -view.unmapped_col]`), and Gold OJOF (`FULL OUTER JOIN ON FALSE` + `COALESCE` view) or Long Metrics explores.
 - Enforce partition pruning and Liquid isolation ([13-large-tables-and-partitioning.md](references/13-large-tables-and-partitioning.md), [14-templated-filters-and-parameters.md](references/14-templated-filters-and-parameters.md)): model off actual partition columns (never redundant `_PARTITIONDATE` pseudo-dimensions when partitioned on a real column), document partition min-dates and clustering columns in `bronze/:table.refinement.lkml`, enforce `always_filter:` in `bronze/explores/:table_base.explore.lkml`, and keep `aggregate_table:`, `{% condition %}`, `{% parameter %}`, and `bind_all_filters: yes` strictly in `gold/` paired with `always_filter:`.
+
+## Opinionated LookML testing and evaluation (`tests/`)
+
+Reliable LookML requires deterministically verifying that semantic models, joins, and calculations compute the expected numbers without regressions. LookML tests (`test: [name] { explore_source: ... assert: ... }`) run in the Looker compiler and warehouse via `run_lookml_test`. Follow these opinionated rules whenever adding or refactoring LookML:
+
+### 1. The Pre-Modeling & Pre-Test Verification Gate (Validator & Query Parity)
+
+**Before writing any downstream LookML tests and before completing Silver modeling, execute the LookML Validator and Query Parity checks immediately after generating Bronze views and refinements.**
+
+Once `bronze/:table.view.lkml`, `bronze/:table.refinement.lkml`, and `bronze/explores/:table_base.explore.lkml` are generated:
+1. **Push Bronze to Dev Workspace**: Push the Bronze files to Looker development mode (`lkr --dev tools lookml push --no-reset`).
+2. **Execute the LookML Validator (`validate_project`)**: Run [verify_lookml_validation.py](file:///usr/local/google/home/bryanweber/lkrdev/cli/skills/agentic-lookml-workflow/scripts/verify_lookml_validation.py) via `lkr --dev code-mode sandbox --dev-mode`. If syntax errors, broken references, or explore definition bugs exist, resolve them immediately before writing any tests.
+3. **Execute SQL Runner Queries (`create_sql_query` -> `/sql/:sql_id`)**: For every query in `input.sql`, create a SQL Runner query using [init_sql_queries.py](file:///usr/local/google/home/bryanweber/lkrdev/cli/skills/agentic-lookml-workflow/scripts/init_sql_queries.py) to capture the exact SQL query ID and interactive SQL Runner URL (`/sql/:sql_id`).
+4. **Execute Early Parity Check (`run_inline_query` vs `run_sql_query`)**: Formulate the initial Looker explore query corresponding to the SQL query and run [record_query_parity.py](file:///usr/local/google/home/bryanweber/lkrdev/cli/skills/agentic-lookml-workflow/scripts/record_query_parity.py). Confirm that Looker's generated query yields identical rows to SQL Runner.
+5. **Gate Guarantee**: Never author LookML data tests on top of a model that fails validation or diverges from the user's SQL query results. Both checks must pass *before* writing tests and finalizing Silver modeling.
+
+### 2. The Silver layer testing rule
+
+**Any metric in any Silver layer must have a Looker test at an appropriate grain.**
+- Fact-level measures on base fact views (`orders.total_net_revenue`, `orders.order_count`), Silver NDT rollups (`user_order_facts.lifetime_orders`), and cross-view dimensions and measures in `silver/:view_a_:view_b_fields.view.lkml` (`inventory_items_order_items_fields.total_gross_margin`) must have corresponding test assertions in `tests/silver/:explore.test.lkml`.
+- Untested metrics in the Silver layer are considered incomplete.
+
+### 3. The Bronze refinement testing rule
+
+**Any measures added to Bronze refinements must be tested, and these must be grouped into a single test query per refinement.**
+- Self-contained single-table measures (`type: sum`, `type: count`, `type: average`, filtered single-table KPIs) in `bronze/:table.refinement.lkml` must be tested.
+- Instead of creating individual single-measure test queries, group all measures for that Bronze table into a single `explore_source` test block with multiple `column:` definitions and multiple `assert:` statements.
+- To test Bronze refinement measures without polluting public explores or colliding with Silver explore names, create a hidden base explore:
+  ```lookml
+  # In bronze/explores/order_items_base.explore.lkml
+  explore: order_items_base {
+    label: "Order Items (Base)"
+    view_name: order_items
+    hidden: yes
+  }
+  ```
+  Always use the `:table_base` naming convention with `hidden: yes` to eliminate any namespace collision with `silver/explores/order_items.explore.lkml`.
+
+### 4. Filtering to immutable data (Date heuristics & PK fallback)
+
+Tests that query volatile data (such as "today", "yesterday", or unconstrained table scans) will break over time as data changes. Tests must filter to immutable slices:
+- **Immutable date heuristic (Priority 1)**: Inspect the view's dimensions for immutable date or timestamp columns by matching name patterns such as `*_created_*`, `*_event_*`, `*_ordered_*`, `*_inserted_*`, `*_occurred_*`, `*_at`, or `*_date` (e.g. `orders.created_date`). Filter to a fixed, historical calendar date with stable data (e.g. `2026-01-01`).
+- **Primary key fallback (Priority 2)**: If no immutable timestamp or date dimension exists on the table, filter by a specific primary key (e.g. `id = 123` or a sample PK ID).
+- **Freezing baseline values via `code-mode`**: During test authoring, query the instance via `code-mode` (`run_inline_query` or `run_query`) on the chosen immutable slice (e.g. `created_date = '2026-01-01'`) to retrieve the exact calculated metric value, then freeze that exact number in the LookML `assert:` expression (e.g. `${order_items.total_sale_price} = 125.50`).
+
+Example Bronze test:
+```lookml
+# In tests/bronze/order_items_base.test.lkml
+test: order_items_base_refinement_metrics {
+  explore_source: order_items_base {
+    column: total_sale_price { field: order_items.total_sale_price }
+    column: order_item_count { field: order_items.count }
+    filters: {
+      field: order_items.created_date
+      value: "2026-01-01"
+    }
+  }
+  assert: total_sale_price_matches {
+    expression: ${order_items.total_sale_price} = 4520.25 ;;
+  }
+  assert: order_item_count_matches {
+    expression: ${order_items.count} = 84 ;;
+  }
+}
+```
+
+### 5. Grouping Silver layer tests by join path DAG branch
+
+In Silver Explores, foreign tables and bare-joined cross-view `*_fields` views are joined along explicit paths in the Explore DAG (`orders -> users`, `orders -> order_items -> inventory_items`).
+- **One test per join path branch**: Group all measures that depend on the same join path branch into a single `explore_source` test block.
+- For example, in `orders.explore.lkml`:
+  1. Base fact branch: Test `orders` measures (`order_count`, `total_revenue`) filtered to the immutable date.
+  2. `orders -> users` join branch: Test `users` measures joined to `orders` and `orders_users_fields` metrics (`revenue_per_user`) in one test block.
+  3. `orders -> order_items -> inventory_items` join branch: Test `inventory_items` and `inventory_items_order_items_fields` metrics (`total_gross_margin`) in one test block.
+
+Example Silver test:
+```lookml
+# In tests/silver/orders.test.lkml
+test: orders_fact_metrics_at_fixed_date {
+  explore_source: orders {
+    column: order_count { field: orders.order_count }
+    column: total_net_revenue { field: orders.total_net_revenue }
+    filters: {
+      field: orders.created_date
+      value: "2026-01-01"
+    }
+  }
+  assert: order_count_matches {
+    expression: ${orders.order_count} = 42 ;;
+  }
+  assert: total_net_revenue_matches {
+    expression: ${orders.total_net_revenue} = 3850.00 ;;
+  }
+}
+
+test: orders_users_join_path_metrics {
+  explore_source: orders {
+    column: user_count { field: users.count }
+    column: revenue_per_user { field: orders_users_fields.revenue_per_user }
+    filters: {
+      field: orders.created_date
+      value: "2026-01-01"
+    }
+  }
+  assert: user_count_matches {
+    expression: ${users.count} = 38 ;;
+  }
+  assert: revenue_per_user_matches {
+    expression: round(${orders_users_fields.revenue_per_user}, 2) = 101.32 ;;
+  }
+}
+```
+
+### 6. File structure & model inclusion
+
+- Tests are partitioned cleanly by Medallion layer in `tests/`:
+  - `tests/bronze/:table_base.test.lkml`
+  - `tests/silver/:explore.test.lkml`
+- In `project.model.lkml`, include all tests:
+  ```lookml
+  include: "tests/**/*.test.lkml"
+  ```
+- Tests are executed and evaluated in the workflow via Looker's `run_lookml_test` API inside `validate_and_commit_branch.py` before any commit is created. Commit is blocked if any test fails.

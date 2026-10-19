@@ -23,9 +23,21 @@ GIST_URL=$(gh gist create "${FILES[@]}" --desc "agentic-lookml attachments ($RUN
 GIST_ID="${GIST_URL##*/}"
 ATTACHMENTS=$(gh api "/gists/$GIST_ID" --jq '.files | map_values(.raw_url)')
 
+QUERIES_TABLE=""
+if jq -e '.queries and (.queries | length > 0)' "$DATA_JSON" >/dev/null 2>&1; then
+  QUERIES_TABLE=$'\n\n### Query Verification & Parity\n| # | SQL Runner URL | Looker Explore URL | Parity Status |\n| :--- | :--- | :--- | :--- |'
+  while read -r q_idx sql_url exp_url status; do
+    sql_link="[Open SQL Runner]($sql_url)"
+    [[ -z "$sql_url" || "$sql_url" == "null" ]] && sql_link="—"
+    exp_link="[Open Explore]($exp_url)"
+    [[ -z "$exp_url" || "$exp_url" == "null" ]] && exp_link="—"
+    QUERIES_TABLE+=$'\n'"| $q_idx | $sql_link | $exp_link | $status |"
+  done < <(jq -r '.queries[] | "\(.query_index) \(.sql_runner_url // "") \(.explore_url // "") \(.parity_status // "pending")"' "$DATA_JSON")
+fi
+
 PR_BODY="Automated SQL-to-LookML refactor (\`$RUN_ID\`).
 
-Attachments: $GIST_URL"
+Attachments: $GIST_URL$QUERIES_TABLE"
 
 PR_URL=$(gh pr create --repo "$REPO" --head "$HEAD_BRANCH" --base "$BASE_BRANCH" \
   --title "feat(lookml): SQL-to-LookML refactor ($RUN_ID)" \
