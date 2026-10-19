@@ -1,0 +1,136 @@
+# Standard foreign key joins (`pk_fk_joins`)
+
+This category (`pk_fk_joins`) maps primary-key-to-foreign-key equality joins to `silver/explores/:base_view.explore.lkml` and places `primary_key: yes` definitions in `bronze/:table.refinement.lkml`. Changes qualify for Tier 1 auto-application once primary key uniqueness is verified via the Join Cardinality Audit SQL.
+
+## Tool categorization rule (`lkr parse`)
+
+The parser tags a query with `pk_fk_joins` when `parsed_query.joins` and `queries[].join_analysis` meet all of these conditions:
+
+- `len(parsed_query.joins) >= 1`.
+- Each `join` has `join.equi_joins != []` and `join.non_equi_conditions == []` (equality comparisons `t1.fk = t2.pk`, optionally combined with static literal filter predicates).
+- `join.join_type in ("INNER", "LEFT")` (or `join.side in ("", "LEFT")`).
+- At least one side of `join.equi_joins` is a candidate primary or entity key (`id`, `*_id`, `uuid`, `code`, or a declared `primary_key: yes`), with `join_analysis[].inferred_relationship in ("many_to_one", "one_to_one", "one_to_many")`.
+
+## Representative SQL
+
+```sql
+SELECT
+  u.country,
+  p.category,
+  COUNT(DISTINCT o.order_id) AS order_count,
+  SUM(oi.sale_price) AS gross_revenue
+FROM `project.dataset.order_items` AS oi
+LEFT JOIN `project.dataset.orders` AS o
+  ON oi.order_id = o.order_id
+LEFT JOIN `project.dataset.users` AS u
+  ON o.user_id = u.id
+LEFT JOIN `project.dataset.products` AS p
+  ON oi.product_id = p.id
+GROUP BY 1, 2
+```
+
+## Impact of naive translation
+
+1. Omitting `primary_key: yes` on a joined view or defaulting `relationship:` to `many_to_one` when the join is actually `one_to_many` causes `SUM()` measures on the base table to multiply silently.
+2. Using raw table names like `orders.user_id = users.id` in `sql_on:` instead of `${orders.user_id} = ${users.id}` breaks view aliasing (`from:`).
+
+## How to handle
+
+### Choose the finest-grain fact table as the Silver Explore base
+
+Anchor `silver/explores/:base.explore.lkml` on the finest-grain transaction table (`order_items`), joining parent entities (`orders`, `users`, `products`, `calendar_dates`) outward via `many_to_one`. Inspect `queries[].join_analysis` for `status`, `relationship`, `inferred_relationship`, `safety_warnings`, and `precedents`. Always explicitly declare `view_name:` on the Explore.
+
+### Ensure primary keys on the "one" side of joins (cardinality audit SQL)
+
+While primary keys are not required for raw Bronze views operating without joins, a verified primary key is essential on the "one" side of any join as soon as a Bronze view is extended or joined into Silver or Gold. If the joined view lacks a verified `primary_key: yes`, run the cardinality audit via `lkr code-mode` (including a partition filter if the table is partitioned):
+
+```sql
+SELECT
+  COUNT(*) AS total_rows,
+  COUNT(DISTINCT join_key) AS distinct_keys,
+  COUNT(*) - COUNT(DISTINCT join_key) AS duplicate_rows
+FROM `project.dataset.target_table`
+WHERE _PARTITIONDATE >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) -- if partitioned
+```
+
+When `duplicate_rows == 0` on a single column, add `primary_key: yes` to the key dimension in `bronze/:target.refinement.lkml` (never hand-edit `bronze/:target.view.lkml`). When uniqueness requires multiple columns `(order_id, item_seq)`, add a hidden composite primary key to `bronze/:target.refinement.lkml`:
+
+```lookml
+dimension: pk {
+  primary_key: yes
+  hidden: yes
+  type: string
+  sql: CONCAT(CAST(${order_id} AS STRING), '_', CAST(${item_seq} AS STRING)) ;;
+}
+```
+
+Map the audit results to the LookML `relationship:` parameter:
+
+- When `duplicate_rows == 0` on the right table only, set `relationship: many_to_one`.
+- When `duplicate_rows == 0` on both tables, set `relationship: one_to_one`.
+- When `duplicate_rows > 0` on the right table and `0` on the left, set `relationship: one_to_many`.
+
+### Default `INNER JOIN` to `LEFT JOIN`
+
+When converting SQL queries, assume `INNER JOIN` means `LEFT JOIN` (`type: left_outer`) in Silver Explores unless the business logic for a specific metric strictly requires inner join filtering. Looker handles `NULL` values from `left_outer` joins cleanly by coalescing `sum` measures with 0. Using `left_outer` prevents accidental drop-off of base fact records when users explore dimensions from joined tables. Only use `type: inner` if a business rule explicitly requires dropping unmatched base records across all queries on that Explore.
+
+### Role-playing joins (same table joined multiple times)
+
+When `users` is joined twice (`buyer_id = u1.id` and `seller_id = u2.id`), use `from: users` and `view_label: "Buyer"` / `view_label: "Seller"` in `silver/explores/`.
+
+### Cross-view dimensions and measures (`*_fields.view.lkml` + bare join)
+
+Any dimension or measure that anywhere in its dependency DAG references different views belongs in its own Silver view named by sorting the referenced view names alphabetically and appending `_fields` (`silver/inventory_items_order_items_fields.view.lkml` or `silver/order_items_users_fields.view.lkml`), and is bare-joined (`sql: ;;`, `relationship: one_to_one`) into the Explore that joins those views together.
+
+## LookML templates
+
+```lookml
+# File: silver/order_items_users_fields.view.lkml
+view: order_items_users_fields {
+  measure: revenue_per_user {
+    type: number
+    sql: 1.0 * ${order_items.gross_revenue} / NULLIF(${users.count}, 0) ;;
+    value_format_name: usd
+    description: "Cross-join metric: Gross revenue divided by distinct users."
+  }
+}
+```
+
+```lookml
+# File: silver/explores/order_items.explore.lkml
+include: "/bronze/order_items.view.lkml"
+include: "/bronze/order_items.refinement.lkml"
+include: "/bronze/orders.view.lkml"
+include: "/bronze/orders.refinement.lkml"
+include: "/bronze/users.view.lkml"
+include: "/bronze/users.refinement.lkml"
+include: "/silver/order_items_users_fields.view.lkml"
+
+explore: order_items {
+  view_name: order_items
+
+  join: orders {
+    type: left_outer
+    relationship: many_to_one
+    sql_on: ${order_items.order_id} = ${orders.order_id} ;;
+  }
+
+  join: users {
+    type: left_outer
+    relationship: many_to_one
+    sql_on: ${orders.user_id} = ${users.id} ;;
+  }
+
+  join: order_items_users_fields {
+    view_label: "Order Items"
+    sql: ;;
+    relationship: one_to_one
+  }
+}
+```
+
+## Architecture rules
+
+Because `bronze/:table.view.lkml` is never hand-edited, single-column `primary_key: yes` overrides and composite `CONCAT(...)` primary keys (`type: string`, `hidden: yes`) are always declared in `bronze/:table.refinement.lkml`.
+
+Silver Explores default SQL `INNER JOIN` clauses to `type: left_outer` so ad-hoc exploration on joined dimensions does not silently drop unmatched fact rows. Set `type: inner` only when dropping unmatched rows is an invariant across all queries on that Explore. Any dimension or measure whose dependency DAG spans multiple joined views lives in `silver/:view_a_:view_b_fields.view.lkml` and is bare-joined (`sql: ;;`) into the Explore.
