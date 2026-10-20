@@ -35,6 +35,7 @@ jobs:
           uv tool install "lkr-dev-cli[tools,code-mode,parse]"
 
       - name: Check LookML Snapshots (Additive vs Material Changes)
+        id: snapshots
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref }}
@@ -47,8 +48,10 @@ jobs:
           fi
           if ! find "$LOOKML_DIR" -name "*.lkml" 2>/dev/null | grep -q .; then
             echo "No LookML (.lkml) files found in $LOOKML_DIR, skipping snapshot check."
+            echo "has_lookml=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "has_lookml=true" >> "$GITHUB_OUTPUT"
 
           BASE_ARGS=()
           if [[ -n "$BASE_REF" ]] && git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1; then
@@ -107,6 +110,7 @@ jobs:
           exit 1
 
       - name: Authenticate Looker API
+        if: steps.snapshots.outputs.has_lookml == 'true'
         env:
           LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
           LOOKERSDK_CLIENT_ID: ${{ secrets.LOOKERSDK_CLIENT_ID }}
@@ -115,6 +119,7 @@ jobs:
           lkr --base-url="$LOOKERSDK_BASE_URL" --client-id="$LOOKERSDK_CLIENT_ID" --client-secret="$LOOKERSDK_CLIENT_SECRET" --dev auth add-access-token
 
       - name: Run LookML Validator & Data Tests
+        if: steps.snapshots.outputs.has_lookml == 'true'
         env:
           LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
           PROJECT_ID: ${{ secrets.LOOKER_PROJECT_NAME || vars.LOOKER_PROJECT_NAME }}
@@ -126,6 +131,7 @@ jobs:
           echo "$OUT" | jq -e '.passed == true' >/dev/null
 
       - name: Verify Query Parity (SQL Runner vs Looker Inline Query)
+        if: steps.snapshots.outputs.has_lookml == 'true'
         env:
           LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
         run: |

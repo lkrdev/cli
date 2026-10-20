@@ -163,9 +163,9 @@ All workflow helper scripts live in `skills/agentic-lookml-workflow/scripts/`:
   bash skills/agentic-lookml-workflow/scripts/create_github_pr.sh "./data/$RUN_ID"
   ```
 
-## Automated GitHub PR checks (`.github/workflows/lookml-pr-checks.yml`)
+## Example GitHub PR checks workflow ([examples/lookml-pr-checks.yml](examples/lookml-pr-checks.yml))
 
-When pull requests containing LookML changes, snapshots, or `./data/*/data.json` session files are created, updated, or reviewed, GitHub Actions runs three sequential steps in a single job:
+Customers can copy [examples/lookml-pr-checks.yml](examples/lookml-pr-checks.yml) into `.github/workflows/lookml-pr-checks.yml` in their LookML repository. When pull requests containing LookML changes, snapshots, or `./data/*/data.json` session files are created, updated, or reviewed, GitHub Actions runs three sequential steps in a single job:
 
 1. The first step runs `lkr parse lookml snapshot --path "$LOOKML_DIR" --base-path "$BASE_LOOKML_DIR" --allow-additions --format json` against the base branch (`origin/${{ github.base_ref }}`). Purely additive changes (adding new tests, new assertions, new test columns or derived columns, new measures, or adding labels to previously unlabeled measures) pass automatically with `requires_review: false`. Material changes (modifying or removing an existing test assertion, modifying or removing an existing test field, changing a database connection name, changing or removing a label on an existing measure, or modifying/removing access controls or manifest entries) set `requires_review: true`, resolve the affected `.lkml` and `.snap` files (`material_change_files`) against `CODEOWNERS` (`required_reviewers`), post a summary of the material changes and required Code Owners, request reviews from the matched `CODEOWNERS` (plus `LOOKML_REVIEWERS` if configured), and block the check until the required Code Owners approve the PR.
 2. The second step runs [scripts/validate_and_commit_branch.py](scripts/validate_and_commit_branch.py) (without `commit_message`) via `lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode` to execute Looker's `validate_project` and `run_lookml_test` on the branch, failing immediately if syntax errors, broken references, or LookML data tests fail.
