@@ -57,8 +57,8 @@ All workflow helper scripts live in `.agents/skills/agentic-lookml-workflow/scri
 - [preflight.sh](scripts/preflight.sh) checks and installs `uv` if missing, installs `lkr-dev-cli[tools,code-mode,parse]` via `uv tool install`, and verifies `gh auth status` (passing `GH_TOKEN` / `GITHUB_TOKEN` directly to `gh`).
 - [init_branch.py](scripts/init_branch.py) runs in `lkr code-mode sandbox --dev-mode` to fetch `me()['id']` and `git_production_branch_name`, run `reset_project_to_production`, create branch `YYYYMMDD_HHMMSS_mmm_<looker_user_id>` from the production ref, and return the base `data.json` payload.
 - [configure_model.py](scripts/configure_model.py) runs in `lkr code-mode sandbox --dev-mode` to register or update the LookML model configuration on the Looker instance via `create_lookml_model` (or `update_lookml_model`) with `allowed_db_connection_names=[connection_name]`, defaulting `model_name` to `project_id` (with hyphens replaced by underscores) when the project does not have a model yet. Pair with [examples/template.model.lkml](examples/template.model.lkml) when creating `./data/:id/lookml/<model_name>.model.lkml`.
-- [init_sql_queries.py](scripts/init_sql_queries.py) runs in `lkr code-mode sandbox --dev-mode` to split multi-statement SQL in `input.sql`, create SQL Runner queries via `create_sql_query`, and populate `data.json["queries"]` with `sql_query_id` and `sql_runner_url` (`{BASE_URL}/sql/{sql_id}`).
-- [record_query_parity.py](scripts/record_query_parity.py) runs in `lkr code-mode sandbox --dev-mode` to optionally run `validate_project` (when `--var validate="true"` is passed), register Looker explore queries via `create_query` (when `inline_queries_json` is provided), store `query_id`, `query_slug`, and `explore_url` (`{BASE_URL}/x/{query_slug}`), cache baseline SQL Runner rows (`sql_rows`), and compare row outputs between SQL Runner (`run_sql_query`) and Looker (`run_inline_query` / `run_query`) both locally and in CI.
+- [init_sql_queries.py](scripts/init_sql_queries.py) runs in `lkr code-mode sandbox --dev-mode` to split multi-statement SQL in `input.sql`, create SQL Runner queries via `create_sql_query(body={"connection_name": connection_name, "sql": stmt})` by default (so query creation never fails with `400 Model ... has errors` before a new model is deployed to production), and populate `data.json["queries"]` with `0`-based `query_index`, `sql_query_id`, and `sql_runner_url` (`{BASE_URL}/sql/{sql_id}`).
+- [record_query_parity.py](scripts/record_query_parity.py) runs in `lkr code-mode sandbox --dev-mode` to optionally run `validate_project` (when `--var validate="true"` is passed), register Looker explore queries via `create_query` (when `inline_queries_json` is provided, keyed by `0`-based `query_index`: `{"0": {...}}`), store `query_id`, `query_slug`, and `explore_url` (`{BASE_URL}/x/{query_slug}`), cache baseline SQL Runner rows (`sql_rows`), and compare row outputs between SQL Runner (`run_sql_query`) and Looker (`run_inline_query` / `run_query`) both locally and in CI.
 - [validate_and_commit_branch.py](scripts/validate_and_commit_branch.py) runs in `lkr code-mode sandbox --dev-mode` to validate the project (`validate_project`), execute targeted LookML data tests (`run_lookml_test` filtered by `test_names` / `file_ids`, or skipped via `skip_tests="true"`), block commits if any test fails, and optionally commit (`commit`) and push (`push_branch`) the branch via the Looker API when `commit_message` is provided.
 - [create_github_pr.sh](scripts/create_github_pr.sh) runs `lkr parse lookml snapshot --allow-additions` if `snapshot_check.json` is not yet generated, embeds `summary.md`, the snapshot review status, the interactive SQL Runner (`/sql/:sql_id`) and Looker Explore (`/x/:query_id`) link table, and collapsible `<details>` sections for `./data/:id/input.sql`, `./data/:id/metrics.md`, `./data/:id/snapshot_check.json`, and `./data/:id/data.json` directly in the PR description, opens the GitHub PR against `git_production_branch_name` via `gh pr create` (requesting reviewers when material snapshot changes are detected), posts `./data/:id/compare_initial.json` and `./data/:id/compare_post_refactor.json` in a collapsible `<details>` PR comment (`gh pr comment`), and writes the PR URL into `./data/:id/data.json`.
 
@@ -87,18 +87,16 @@ All workflow helper scripts live in `.agents/skills/agentic-lookml-workflow/scri
   ```
 - Resolve the target model (`MODEL_NAME`) and database connection (`CONNECTION_NAME`) from `./data/$RUN_ID/lookml` before generating Bronze views or running initial snapshots (so `lkr parse lookml snapshot -u` never records a synthetic `inline.model.lkml` with `connection: null`):
   - If the project already contains an existing `.model.lkml` file and you are not creating a new model, read `MODEL_NAME` and its `connection: "$CONNECTION_NAME"` declaration from the model file.
-  - If the project does not have any models (`*.model.lkml`), or if you are creating a new model, set `MODEL_NAME="${PROJECT_ID//-/_}"` when no model name exists yet, and always ask the user which connection (`CONNECTION_NAME`) to use (or ask if they want to display a list of available connections from the Looker instance). After the user provides `CONNECTION_NAME`, create `./data/$RUN_ID/lookml/$MODEL_NAME.model.lkml` from [examples/template.model.lkml](examples/template.model.lkml) with `connection: "$CONNECTION_NAME"` and configure the model on the Looker instance via `create_lookml_model` using [scripts/configure_model.py](scripts/configure_model.py):
+  - If the project does not have any models (`*.model.lkml`), or if you are creating a new model, set `MODEL_NAME="${PROJECT_ID//-/_}"` when no model name exists yet, and always ask the user which connection (`CONNECTION_NAME`) to use (or ask if they want to display a list of available connections from the Looker instance). After the user provides `CONNECTION_NAME`, configure the model on the Looker instance via `create_lookml_model` using [scripts/configure_model.py](scripts/configure_model.py) (create `./data/$RUN_ID/lookml/$MODEL_NAME.model.lkml` *after* running `generate_bronze_view.py` + `lookml pull` so `lookml pull` never deletes a newly created local `.model.lkml` file as a local orphan):
     ```bash
     MODEL_NAME="${MODEL_NAME:-${PROJECT_ID//-/_}}"
-    LOOKML_DIR="./data/$RUN_ID/lookml" MODEL_NAME="$MODEL_NAME" CONNECTION_NAME="$CONNECTION_NAME" \
-      bash .agents/skills/agentic-lookml-workflow/scripts/setup_repo.sh
     lkr --base-url="$BASE_URL" --dev code-mode sandbox --dev-mode \
       --file=.agents/skills/agentic-lookml-workflow/scripts/configure_model.py \
       --var project_id="$PROJECT_ID" \
       --var model_name="$MODEL_NAME" \
       --var connection_name="$CONNECTION_NAME"
     ```
-  - Whenever LookML files are generated or written in `./data/$RUN_ID/lookml`, ensure `$MODEL_NAME.model.lkml` has `include:` statements covering the written files (based on [examples/template.model.lkml](examples/template.model.lkml), including only globs that match existing files on disk so Looker's validator does not fail on empty globs) and verify with `lkr parse lookml --path "./data/$RUN_ID/lookml"` that `model.<model_name>.view`, `model.<model_name>.explore`, and `model.<model_name>.test` pick up every written view, refinement, explore, and test present in `file.view`, `file.explore`, and `file.test`.
+  - Whenever LookML files are generated or written in `./data/$RUN_ID/lookml`, ensure `$MODEL_NAME.model.lkml` has `include:` statements covering the written files (based on [examples/template.model.lkml](examples/template.model.lkml), including only globs that match existing files on disk so Looker's validator does not fail on empty globs), ensure every standalone `.explore.lkml` and `.test.lkml` file explicitly `include:`s its referenced `.view.lkml`, `.refinement.lkml`, or `.explore.lkml` files (because Looker's project validator validates standalone `.explore.lkml` and `.test.lkml` files in their own scope), and verify with `lkr parse lookml --path "./data/$RUN_ID/lookml"` that `model.<model_name>.view`, `model.<model_name>.explore`, and `model.<model_name>.test` pick up every written view, refinement, explore, and test present in `file.view`, `file.explore`, and `file.test`.
 - Throughout the session, append high-level operation milestones to `./data/$RUN_ID/summary.md` as defined in [agentic-lookml](../agentic-lookml/SKILL.md):
   1. Generating base views (`bronze/:table.view.lkml`)
   2. Deconstructing query to canonical form (including the modeling decisions made and, whenever a derived table or Gold explore is used, the specific reason why the query could not be reduced further into a flat Canonical Looker Query)
@@ -125,25 +123,25 @@ All workflow helper scripts live in `.agents/skills/agentic-lookml-workflow/scri
   ```bash
   lkr --base-url="$BASE_URL" --dev tools lookml push "./data/$RUN_ID/lookml" --project-id="$PROJECT_ID" --no-reset
   ```
-- Generate the Explore query JSON Schema offline with `lkr parse lookml-to-api` and `lkr schema generate`, and validate your `INLINE_QUERIES_JSON` (`run_inline_query` payloads) with `lkr schema validate` before calling Looker:
+- Generate the Explore query JSON Schema offline with `lkr parse lookml-to-api --validate` (which also fails if duplicate field logic—such as a second unfiltered `type: count` measure alongside `measure: count`—exists on any view) and `lkr schema generate`, and validate your `INLINE_QUERIES_JSON` (`run_inline_query` payloads) with `lkr schema validate` before calling Looker:
   ```bash
-  lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" -m "$MODEL_NAME" -e "$EXPLORE_NAME" -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json"
+  lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" -m "$MODEL_NAME" -e "$EXPLORE_NAME" --validate -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json"
   lkr schema generate -m "$MODEL_NAME" -e "$EXPLORE_NAME" --explore-file "./data/$RUN_ID/explore_${EXPLORE_NAME}.json" -o "./data/$RUN_ID/schema_${EXPLORE_NAME}.json"
   lkr schema validate --schema-file "./data/$RUN_ID/schema_${EXPLORE_NAME}.json" --query "$SINGLE_INLINE_QUERY_JSON"
   ```
 - Execute the pre-modeling and pre-test verification gate immediately after Bronze generation and before writing tests or finalizing Silver modeling:
-  1. Initialize SQL Runner queries via `init_sql_queries.py` to capture `/sql/:sql_id` links in `data.json`:
+  1. Initialize SQL Runner queries via `init_sql_queries.py` using `--var connection_name="$CONNECTION_NAME"` (defaulting `create_sql_query` to `connection_name` rather than `model_name`) to capture `/sql/:sql_id` links in `data.json`:
      ```bash
      RAW_OUT=$(lkr --base-url="$BASE_URL" --dev code-mode sandbox --dev-mode \
        --file=.agents/skills/agentic-lookml-workflow/scripts/init_sql_queries.py \
        --var raw_sql="$(cat "./data/$RUN_ID/input.sql")" \
        --var data_json="$(cat "./data/$RUN_ID/data.json")" \
        --var base_url="$BASE_URL" \
-       --var model_name="$MODEL_NAME")
+       --var connection_name="$CONNECTION_NAME")
      JSON_OUT=$(echo "$RAW_OUT" | sed -n '/^{/,$p')
      echo "$JSON_OUT" | jq -e . >/dev/null && echo "$JSON_OUT" > "./data/$RUN_ID/data.json"
      ```
-  2. Run the LookML validator and early query parity check in a single `code-mode` sandbox call via [scripts/record_query_parity.py](scripts/record_query_parity.py) with `--var validate="true"` before writing any tests, logging any `Validation failed` and `Updating LookML` self-healing steps to `./data/$RUN_ID/summary.md`:
+  2. Run the LookML validator and early query parity check in a single `code-mode` sandbox call via [scripts/record_query_parity.py](scripts/record_query_parity.py) with `--var validate="true"` and `0`-based `INLINE_QUERIES_JSON` keys (`{"0": {...}}` matching `query_index: 0`) before writing any tests, logging any `Validation failed` and `Updating LookML` self-healing steps to `./data/$RUN_ID/summary.md`:
      ```bash
      RAW_OUT=$(lkr --base-url="$BASE_URL" --dev code-mode sandbox --dev-mode \
        --file=.agents/skills/agentic-lookml-workflow/scripts/record_query_parity.py \
@@ -154,15 +152,15 @@ All workflow helper scripts live in `.agents/skills/agentic-lookml-workflow/scri
      JSON_OUT=$(echo "$RAW_OUT" | sed -n '/^{/,$p')
      echo "$JSON_OUT" | jq -e . >/dev/null && echo "$JSON_OUT" > "./data/$RUN_ID/data.json"
      ```
-- Model Silver explores, cross-view `*_fields`, and author LookML data tests (`tests/bronze/` and `tests/silver/`) in `./data/$RUN_ID/lookml` following [agentic-lookml](../agentic-lookml/SKILL.md) (using the Explore JSON Schema from `lkr schema generate` to verify valid `view.field` references and filter expressions for `explore_source:`, and the verified immutable baseline values from the parity gate), log the authored LookML and tests in `./data/$RUN_ID/summary.md`, re-run compare, and evaluate LookML snapshots with `--allow-additions` so pure additions pass automatically while any modified or removed test assert, test field, connection name, measure label, access grant, or manifest setting is flagged in `snapshot_check.json`:
+- Model Silver explores, cross-view `*_fields`, and author LookML data tests (`tests/bronze/` and `tests/silver/`) in `./data/$RUN_ID/lookml` following [agentic-lookml](../agentic-lookml/SKILL.md) (never creating a duplicate field with identical logic on the same view, such as a second `type: count` measure when `measure: count { type: count }` already exists; refine `measure: count` instead, and use the Explore JSON Schema from `lkr schema generate` to verify valid `view.field` references and filter expressions for `explore_source:`), log the authored LookML and tests in `./data/$RUN_ID/summary.md`, re-run compare, and evaluate LookML snapshots with `--allow-additions` so pure additions pass automatically while any modified or removed test assert, test field, connection name, measure label, access grant, or manifest setting is flagged in `snapshot_check.json`:
   ```bash
-  lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" -m "$MODEL_NAME" -e "$EXPLORE_NAME" -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json"
+  lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" -m "$MODEL_NAME" -e "$EXPLORE_NAME" --validate -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json"
   lkr schema generate -m "$MODEL_NAME" -e "$EXPLORE_NAME" --explore-file "./data/$RUN_ID/explore_${EXPLORE_NAME}.json" -o "./data/$RUN_ID/schema_${EXPLORE_NAME}.json"
   lkr parse sql-lookml-compare --sql-file "./data/$RUN_ID/input.sql" --path "./data/$RUN_ID/lookml" --output "./data/$RUN_ID/compare_post_refactor.json"
   lkr parse lookml snapshot --path "./data/$RUN_ID/lookml" --allow-additions --format json --output "./data/$RUN_ID/snapshot_check.json" || true
   lkr parse lookml snapshot --path "./data/$RUN_ID/lookml" -u
   ```
-- Push final LookML edits (including `__snapshots__/*.snap.json`) to the active developer branch with `--no-reset`:
+- Push final LookML edits (including `__snapshots__/*.snap.strings.json`) to the active developer branch with `--no-reset`:
   ```bash
   lkr --base-url="$BASE_URL" --dev tools lookml push "./data/$RUN_ID/lookml" --project-id="$PROJECT_ID" --no-reset
   ```

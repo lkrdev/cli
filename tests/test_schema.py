@@ -798,6 +798,16 @@ def test_vgr_edge_cases(tmp_path: Path) -> None:
         schema,
     )
     assert non_obj_filters_res.valid is False
+
+    # 4. Unwrap lookml-to-api wrapper payload {"lookml_model_explores": {"model::explore": {...}}}
+    wrapped_schema = build_explore_query_schema(
+        "thelook",
+        "order_items",
+        {"all_lookml_models": [], "lookml_model_explores": {"thelook::order_items": MOCK_EXPLORE}},
+    )
+    assert "order_items.total_sale_price" in (
+        wrapped_schema["properties"]["body"]["properties"]["fields"]["items"]["enum"]
+    )
     assert any(
         "$.body.dynamic_fields[0].filters: expected object" in e
         for e in non_obj_filters_res.errors

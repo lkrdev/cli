@@ -26,7 +26,7 @@ def main():
     try:
         sql_text = str(raw_sql)  # ty: ignore[unresolved-reference]
         b_url = str(base_url).rstrip("/")  # ty: ignore[unresolved-reference]
-        m_name = str(model_name)  # ty: ignore[unresolved-reference]
+        c_name = str(connection_name).strip()  # ty: ignore[unresolved-reference]
     except NameError:
         return None
     try:
@@ -36,7 +36,7 @@ def main():
 
     created_queries = []
     for idx, stmt in enumerate(split_sql_statements(sql_text)):
-        res = create_sql_query(body={"model_name": m_name, "sql": stmt}) or {}  # ty: ignore[unresolved-reference]
+        res = create_sql_query(body={"connection_name": c_name, "sql": stmt}) or {}  # ty: ignore[unresolved-reference]
         slug = res.get("slug") or ""
         created_queries.append({
             "query_index": idx,

@@ -1176,6 +1176,111 @@ def _build_turtle_looks(
     return out
 
 
+def _find_duplicate_explore_fields(
+    all_dims: list[ApiLookmlModelExploreField],
+    all_meas: list[ApiLookmlModelExploreField],
+    views_by_alias: dict[str, LookmlView],
+) -> list[dict[str, Any]]:
+    dim_sql_map: dict[str, str] = {
+        d.name: re.sub(r"\$\{\s*TABLE\s*\}\.", f"{d.view}.", (d.sql or "").strip())
+        for d in all_dims
+    }
+
+    def _norm_sql(sql_str: str | None, view_alias: str) -> str:
+        if not sql_str:
+            return ""
+        s = re.sub(r"\$\{\s*TABLE\s*\}\.", f"{view_alias}.", sql_str.strip())
+        for _ in range(3):
+
+            def _repl(m: re.Match[str]) -> str:
+                ref = m.group(1).strip()
+                if ref.upper() == "TABLE" or "::" in ref:
+                    return m.group(0)
+                q_ref = _qualify_field_ref(ref, view_alias)
+                return dim_sql_map.get(q_ref, q_ref)
+
+            next_s = re.sub(r"\$\{([^}]+)\}", _repl, s)
+            if next_s == s:
+                break
+            s = next_s
+        return " ".join(s.split())
+
+    groups: dict[tuple[Any, ...], list[ApiLookmlModelExploreField]] = {}
+    for f in (*all_dims, *all_meas):
+        if f.hidden and f.category == "measure" and f.sql == f.name:
+            continue
+        nsql = _norm_sql(f.sql, f.view)
+        nfilts = tuple(
+            sorted(
+                (flt.field, " ".join(flt.condition.split()))
+                for flt in (f.filters or [])
+            )
+        )
+        ncase = tuple(
+            (c.value, _norm_sql(c.condition, f.view)) for c in (f.sql_case or [])
+        )
+        if f.category == "measure":
+            v_obj = views_by_alias.get(f.view)
+            raw_m = (
+                (v_obj.measure or {}).get(f.name.split(".", 1)[-1])
+                if isinstance(v_obj, LookmlView)
+                else None
+            )
+            pct = (
+                str(raw_m.percentile)
+                if raw_m and raw_m.percentile is not None
+                else None
+            )
+            sig: tuple[Any, ...] = (
+                f.view,
+                "measure",
+                f.type,
+                nsql,
+                nfilts,
+                ncase,
+                pct,
+            )
+        else:
+            if not nsql and not ncase:
+                continue
+            sig = (
+                f.view,
+                "dimension",
+                f.type,
+                nsql,
+                nfilts,
+                ncase,
+                bool(f.dimension_group),
+                f.suggestable,
+                f.suggest_dimension if f.suggest_dimension != f.name else None,
+                f.suggest_explore,
+                f.map_layer.name if f.map_layer else None,
+                f.value_format,
+            )
+        groups.setdefault(sig, []).append(f)
+
+    errors: list[dict[str, Any]] = []
+    for sig, flds in groups.items():
+        if len(flds) > 1:
+            names = sorted(f.name for f in flds)
+            view_alias, cat, ftype, nsql = sig[0], sig[1], sig[2], sig[3]
+            errors.append(
+                {
+                    "type": "duplicate_field_logic",
+                    "view": view_alias,
+                    "category": cat,
+                    "field_type": ftype,
+                    "sql": nsql or None,
+                    "fields": names,
+                    "message": (
+                        f"Duplicate {cat} logic on view '{view_alias}': "
+                        f"{names} share identical logic (type='{ftype}', sql={nsql or None!r})."
+                    ),
+                }
+            )
+    return errors
+
+
 def _build_explore_from_assembled(
     model_name: str,
     model_obj: LookmlModel,
@@ -1442,6 +1547,8 @@ def _build_explore_from_assembled(
                 )
         index_fields = list(dict.fromkeys(index_fields))
 
+    dup_errors = _find_duplicate_explore_fields(all_dims, all_meas, views_by_alias)
+
     return ApiLookmlModelExplore(
         id=f"{model_name}::{explore_name}",
         name=explore_name,
@@ -1467,6 +1574,7 @@ def _build_explore_from_assembled(
         index_fields=index_fields,
         sets=sets_list,
         tags=list(exp_obj.tags or []),
+        errors=dup_errors or None,
         fields=ApiLookmlModelExploreFieldset(
             dimensions=all_dims,
             measures=all_meas,

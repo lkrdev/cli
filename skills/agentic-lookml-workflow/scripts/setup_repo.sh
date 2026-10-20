@@ -56,7 +56,7 @@ for pattern in ".env" "data/" "tmp/"; do
   fi
 done
 
-# 5. Create initial <model_name>.model.lkml if MODEL_NAME and CONNECTION_NAME are provided and no model file exists
+# 5. Create or update <model_name>.model.lkml if MODEL_NAME and CONNECTION_NAME are provided
 TARGET_LOOKML_DIR="${LOOKML_DIR:-.}"
 MODEL_NAME="${MODEL_NAME:-${PROJECT_ID:-}}"
 MODEL_NAME="${MODEL_NAME//-/_}"
@@ -64,25 +64,25 @@ CONNECTION_NAME="${CONNECTION_NAME:-}"
 
 if [[ -n "$MODEL_NAME" && -n "$CONNECTION_NAME" ]]; then
   MODEL_FILE="$TARGET_LOOKML_DIR/${MODEL_NAME}.model.lkml"
+  mkdir -p "$TARGET_LOOKML_DIR"
   if [[ ! -f "$MODEL_FILE" ]]; then
-    mkdir -p "$TARGET_LOOKML_DIR"
-    {
-      echo "connection: \"$CONNECTION_NAME\""
-      for inc in \
-        "bronze/*.view.lkml:/bronze/**/*.view.lkml" \
-        "bronze/*.refinement.lkml:/bronze/**/*.refinement.lkml" \
-        "bronze/explores/*.explore.lkml:/bronze/explores/**/*.explore.lkml" \
-        "silver/*.view.lkml:/silver/**/*.view.lkml" \
-        "silver/explores/*.explore.lkml:/silver/explores/**/*.explore.lkml" \
-        "gold/*.view.lkml:/gold/**/*.view.lkml" \
-        "gold/explores/*.explore.lkml:/gold/explores/**/*.explore.lkml" \
-        "tests/*.test.lkml:/tests/**/*.test.lkml"; do
-        find "$TARGET_LOOKML_DIR" -path "$TARGET_LOOKML_DIR/${inc%%:*}" 2>/dev/null | grep -q . \
-          && echo "include: \"${inc#*:}\"" || true
-      done
-    } > "$MODEL_FILE"
+    echo "connection: \"$CONNECTION_NAME\"" > "$MODEL_FILE"
     echo "Created LookML model file: $MODEL_FILE"
   fi
+  for inc in \
+    "bronze/*.view.lkml:/bronze/**/*.view.lkml" \
+    "bronze/*.refinement.lkml:/bronze/**/*.refinement.lkml" \
+    "bronze/explores/*.explore.lkml:/bronze/explores/**/*.explore.lkml" \
+    "silver/*.view.lkml:/silver/**/*.view.lkml" \
+    "silver/explores/*.explore.lkml:/silver/explores/**/*.explore.lkml" \
+    "gold/*.view.lkml:/gold/**/*.view.lkml" \
+    "gold/explores/*.explore.lkml:/gold/explores/**/*.explore.lkml" \
+    "tests/*.test.lkml:/tests/**/*.test.lkml"; do
+    inc_line="include: \"${inc#*:}\""
+    if find "$TARGET_LOOKML_DIR" -path "$TARGET_LOOKML_DIR/${inc%%:*}" 2>/dev/null | grep -q .; then
+      grep -qxF "$inc_line" "$MODEL_FILE" 2>/dev/null || echo "$inc_line" >> "$MODEL_FILE"
+    fi
+  done
 fi
 
 # 6. Sync required GitHub Actions secrets (LOOKERSDK_BASE_URL, LOOKERSDK_CLIENT_ID, LOOKERSDK_CLIENT_SECRET, LOOKER_PROJECT_NAME) if missing

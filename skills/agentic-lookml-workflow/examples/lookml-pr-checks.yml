@@ -5,6 +5,7 @@ on:
     paths:
       - "**/*.lkml"
       - "**/*.lookml"
+      - "**/*.snap.strings.json"
       - "**/*.snap.json"
       - "**/data.json"
       - "**/input.sql"
@@ -55,14 +56,15 @@ jobs:
             exit 0
           fi
           echo "has_lookml=true" >> "$GITHUB_OUTPUT"
+          lkr parse lookml-to-api --path "$LOOKML_DIR" --validate >/dev/null
 
           BASE_ARGS=()
           if [[ -n "$BASE_REF" ]] && git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1; then
             rm -rf /tmp/base-branch
             git worktree add --detach /tmp/base-branch "origin/$BASE_REF"
-            if [[ -d "/tmp/base-branch/${LOOKML_DIR#./}" ]] && find "/tmp/base-branch/${LOOKML_DIR#./}" \( -name "*.lkml" -o -name "*.snap.json" \) 2>/dev/null | grep -q .; then
+            if [[ -d "/tmp/base-branch/${LOOKML_DIR#./}" ]] && find "/tmp/base-branch/${LOOKML_DIR#./}" \( -name "*.lkml" -o -name "*.snap.strings.json" -o -name "*.snap.json" \) 2>/dev/null | grep -q .; then
               BASE_ARGS=(--base-path "/tmp/base-branch/${LOOKML_DIR#./}")
-            elif find "/tmp/base-branch" \( -name "*.lkml" -o -name "*.snap.json" \) 2>/dev/null | grep -q .; then
+            elif find "/tmp/base-branch" \( -name "*.lkml" -o -name "*.snap.strings.json" -o -name "*.snap.json" \) 2>/dev/null | grep -q .; then
               BASE_ARGS=(--base-path "/tmp/base-branch")
             fi
           fi

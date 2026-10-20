@@ -25,6 +25,9 @@ def build_query_body_schema(
     base_query_def: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the strongly-typed `body` (`WriteQuery`) object schema for `<model> <explore>`."""
+    if isinstance(m := explore_data.get("lookml_model_explores"), dict):
+        v = m.get(f"{model}::{explore}")
+        explore_data = v if v is not None else next(iter(m.values()), {})
     visible = extract_visible_explore_fields(explore_data)
     dim_names = visible.dimension_names
     measure_names = visible.measure_names

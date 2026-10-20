@@ -2914,6 +2914,106 @@ def test_parse_lookml_manifest_autodiscovery_and_cli_overrides(tmp_path: Path):
     assert db_cmp.tables[0].connection == "db_cmp_conn"
 
 
+def test_lookml_to_api_duplicate_field_logic_and_count_star_matching(tmp_path: Path):
+    from typer.testing import CliRunner
+
+    from lkr.main import app
+    from lkr.parse import lookml_to_lookml_model_explore, parse_sql_to_lookml
+
+    runner = CliRunner()
+
+    dup_lkml = """
+    view: order_items {
+      sql_table_name: `looker-private-demo.ecomm.order_items` ;;
+      dimension: id {
+        primary_key: yes
+        type: number
+        sql: ${TABLE}.id ;;
+      }
+      dimension: sale_price {
+        type: number
+        sql: ${TABLE}.sale_price ;;
+      }
+      dimension: price_alias {
+        type: number
+        sql: ${sale_price} ;;
+      }
+      measure: count {
+        type: count
+      }
+      measure: total_line_items_sold {
+        type: count
+        label: "Total Line Items Sold"
+      }
+      measure: total_revenue {
+        type: sum
+        sql: ${TABLE}.sale_price ;;
+      }
+      measure: gross_sales {
+        type: sum
+        sql: ${sale_price} ;;
+      }
+    }
+    explore: order_items {}
+    """
+    exp = lookml_to_lookml_model_explore("inline", "order_items", lookml=dup_lkml)
+    assert exp.errors is not None
+    error_msgs = [e["message"] for e in exp.errors]
+    assert any("order_items.count" in m and "order_items.total_line_items_sold" in m for m in error_msgs)
+    assert any("order_items.total_revenue" in m and "order_items.gross_sales" in m for m in error_msgs)
+    assert any("order_items.sale_price" in m and "order_items.price_alias" in m for m in error_msgs)
+
+    (tmp_path / "dup.model.lkml").write_text('connection: "c"\n' + dup_lkml, encoding="utf-8")
+    cli_fail = runner.invoke(
+        app,
+        ["parse", "lookml-to-api", "--path", str(tmp_path), "--validate"],
+    )
+    assert cli_fail.exit_code == 1
+
+    clean_lkml = """
+    view: order_items {
+      sql_table_name: `looker-private-demo.ecomm.order_items` ;;
+      dimension: id {
+        primary_key: yes
+        type: number
+        sql: ${TABLE}.id ;;
+      }
+      dimension: status {
+        type: string
+        sql: ${TABLE}.status ;;
+      }
+      measure: count {
+        type: count
+      }
+    }
+    explore: order_items {
+      query: by_status {
+        dimensions: [status]
+        measures: [count]
+      }
+    }
+    """
+    (tmp_path / "dup.model.lkml").write_text('connection: "c"\n' + clean_lkml, encoding="utf-8")
+    cli_ok = runner.invoke(
+        app,
+        ["parse", "lookml-to-api", "--path", str(tmp_path), "--validate"],
+    )
+    assert cli_ok.exit_code == 0
+
+    cmp_res = parse_sql_to_lookml(
+        sql="SELECT status, COUNT(*) AS total_line_items_sold FROM `looker-private-demo.ecomm.order_items` GROUP BY 1",
+        path=tmp_path,
+    )
+    matched_fields = {
+        (f.field_name, f.field_type) for f in cmp_res.queries[0].views[0].fields
+    }
+    assert ("count", "measure") in matched_fields
+    assert ("status", "dimension") in matched_fields
+    eq = cmp_res.queries[0].explore_queries[0]
+    assert eq.coverage == "exact"
+
+
+
 
 
 

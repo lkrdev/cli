@@ -74,13 +74,13 @@ def test_snapshot_first_run_writes_files(sample_lookml_project: Path):
     assert "4 snapshots written" in res.output
 
     snap_dir = sample_lookml_project / "__snapshots__"
-    assert (snap_dir / "ecommerce_analytics.tests.snap.json").exists()
-    assert (snap_dir / "ecommerce_analytics.access.snap.json").exists()
-    assert (snap_dir / "ecommerce_analytics.connections.snap.json").exists()
-    assert (snap_dir / "ecommerce_analytics.manifest.snap.json").exists()
+    assert (snap_dir / "tests.snap.strings.json").exists()
+    assert (snap_dir / "access.snap.strings.json").exists()
+    assert (snap_dir / "connections.snap.strings.json").exists()
+    assert (snap_dir / "manifest.snap.strings.json").exists()
 
     # Verify content of connections
-    conn_data = json.loads((snap_dir / "ecommerce_analytics.connections.snap.json").read_text(encoding="utf-8"))
+    conn_data = json.loads((snap_dir / "connections.snap.strings.json").read_text(encoding="utf-8"))
     assert "shop" in conn_data
     assert conn_data["shop"]["connection"] == "snowflake_prod"
 
@@ -170,7 +170,7 @@ def test_snapshot_ci_flag_fails_on_missing_and_mismatch(sample_lookml_project: P
     assert "4 snapshots passed" in res_pass.output
 
     # 4. In CI mode, mismatch fails with exit code 1
-    conn_snap = snap_dir / "ecommerce_analytics.connections.snap.json"
+    conn_snap = snap_dir / "connections.snap.strings.json"
     conn_snap.write_text('{"shop": {"connection": "corrupted"}}\n', encoding="utf-8")
     res_fail = runner.invoke(app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project), "--ci"])
     assert res_fail.exit_code == 1
@@ -205,7 +205,7 @@ def test_snapshot_update_mode(sample_lookml_project: Path):
     assert "4 snapshots updated" in res_update.output
 
     # Verify updated content
-    conn_snap = sample_lookml_project / "__snapshots__" / "ecommerce_analytics.connections.snap.json"
+    conn_snap = sample_lookml_project / "__snapshots__" / "connections.snap.strings.json"
     data = json.loads(conn_snap.read_text(encoding="utf-8"))
     assert data["shop"]["connection"] == "bigquery_analytics"
 
@@ -219,10 +219,10 @@ def test_snapshot_only_filter(sample_lookml_project: Path):
     assert "2 snapshots written" in res.output
 
     snap_dir = sample_lookml_project / "__snapshots__"
-    assert (snap_dir / "ecommerce_analytics.tests.snap.json").exists()
-    assert (snap_dir / "ecommerce_analytics.access.snap.json").exists()
-    assert not (snap_dir / "ecommerce_analytics.connections.snap.json").exists()
-    assert not (snap_dir / "ecommerce_analytics.manifest.snap.json").exists()
+    assert (snap_dir / "tests.snap.strings.json").exists()
+    assert (snap_dir / "access.snap.strings.json").exists()
+    assert not (snap_dir / "connections.snap.strings.json").exists()
+    assert not (snap_dir / "manifest.snap.strings.json").exists()
 
 
 def test_snapshot_only_invalid_object(sample_lookml_project: Path):
@@ -248,7 +248,7 @@ def test_snapshot_model_filter(sample_lookml_project: Path):
     )
     assert res.exit_code == 0
 
-    conn_snap = sample_lookml_project / "__snapshots__" / "ecommerce_analytics.connections.snap.json"
+    conn_snap = sample_lookml_project / "__snapshots__" / "connections.snap.strings.json"
     data = json.loads(conn_snap.read_text(encoding="utf-8"))
     assert "shop" in data
     assert "other" not in data
@@ -568,7 +568,7 @@ def test_snapshot_base_path_comparison_and_update_guard(
     assert res_mut.requires_review is True
     assert res_mut.updated < 4
     conn_snap = (
-        sample_lookml_project / "__snapshots__" / "ecommerce_analytics.connections.snap.json"
+        sample_lookml_project / "__snapshots__" / "connections.snap.strings.json"
     )
     assert (
         json.loads(conn_snap.read_text(encoding="utf-8"))["shop"]["connection"]
@@ -586,7 +586,7 @@ def test_snapshot_codeowners_resolution_on_material_changes(
         "* @default-owner\n"
         "*.model.lkml @model-owner @org/data-eng\n"
         "/users.view.lkml @view-owner\n"
-        "__snapshots__/*.snap.json @snap-owner\n",
+        "__snapshots__/*.snap.strings.json @snap-owner\n",
         encoding="utf-8",
     )
     view_file = sample_lookml_project / "users.view.lkml"
@@ -615,7 +615,7 @@ def test_snapshot_codeowners_resolution_on_material_changes(
     assert res_view.requires_review is True
     assert "users.view.lkml" in res_view.material_change_files
     assert (
-        "__snapshots__/ecommerce_analytics.access.snap.json"
+        "__snapshots__/access.snap.strings.json"
         in res_view.material_change_files
     )
     assert res_view.required_reviewers == ["view-owner", "snap-owner"]

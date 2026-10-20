@@ -39,7 +39,8 @@ lookml_group = typer.Typer(
 VALID_EXTENSIONS = (
     ".lkml",
     ".lookml",
-    ".json",
+    ".strings.json",
+    ".topojson",
     ".geojson",
     ".md",
     ".gitkeep",

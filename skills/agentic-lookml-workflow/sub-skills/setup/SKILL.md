@@ -57,13 +57,14 @@ flowchart TD
      LOOKML_DIR="./tmp/setup_lookml" MODEL_NAME="$MODEL_NAME" CONNECTION_NAME="$CONNECTION_NAME" \
        bash .agents/skills/agentic-lookml-workflow/scripts/setup_repo.sh
      ```
-   - Register the model and connection on the Looker instance via `create_lookml_model` (or `update_lookml_model`) using [scripts/configure_model.py](../../scripts/configure_model.py):
+   - Register the model and connection on the Looker instance via `create_lookml_model` (or `update_lookml_model`) using [scripts/configure_model.py](../../scripts/configure_model.py) and push `<model_name>.model.lkml` to the dev workspace:
      ```bash
      lkr --base-url="$BASE_URL" --dev code-mode sandbox --dev-mode \
        --file=.agents/skills/agentic-lookml-workflow/scripts/configure_model.py \
        --var project_id="$PROJECT_ID" \
        --var model_name="$MODEL_NAME" \
        --var connection_name="$CONNECTION_NAME"
+     lkr --base-url="$BASE_URL" --dev tools lookml push "./tmp/setup_lookml" -f "${MODEL_NAME}.model.lkml" --project-id="$PROJECT_ID" --no-reset
      ```
    - Verify the model file parses cleanly with `lkr parse lookml`:
      ```bash

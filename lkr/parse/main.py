@@ -618,6 +618,13 @@ def lookml_to_api_command(
         str | None,
         typer.Option("--explore", "-e", help="Optional LookML explore name filter"),
     ] = None,
+    validate: Annotated[
+        bool,
+        typer.Option(
+            "--validate",
+            help="Fail with non-zero exit code if duplicate field logic is detected on any explore view",
+        ),
+    ] = False,
     manifest: ManifestOpt = None,
     constant: ConstantOpt = None,
     output: Annotated[
@@ -637,6 +644,16 @@ def lookml_to_api_command(
         constants=_parse_constant_overrides(constant),
     )
     _write_or_echo(result.model_dump_json(indent=2, by_alias=True), output)
+    if validate:
+        dup_msgs = [
+            f"Explore '{exp_id}': {err.get('message', err)}"
+            for exp_id, exp_obj in result.lookml_model_explores.items()
+            for err in (exp_obj.errors or [])
+        ]
+        if dup_msgs:
+            for msg in dup_msgs:
+                logger.error(msg)
+            raise typer.Exit(1)
     return result
 
 

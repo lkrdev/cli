@@ -138,6 +138,26 @@ def test_configure_model_defaults_to_project_id_and_creates_model():
     ]
 
 
+def test_init_sql_queries_defaults_to_connection_name():
+    script_path = SCRIPTS_DIR / "init_sql_queries.py"
+    source = script_path.read_text()
+    called_bodies = []
+
+    def fake_create_sql_query(body):
+        called_bodies.append(body)
+        return {"slug": "sql123"}
+
+    ns = {
+        "raw_sql": "SELECT 1",
+        "base_url": "https://example.looker.com",
+        "connection_name": "bq_conn",
+        "data_json": "{}",
+        "create_sql_query": fake_create_sql_query,
+    }
+    exec(compile(source, str(script_path), "exec"), ns)  # noqa: S102
+    assert called_bodies == [{"connection_name": "bq_conn", "sql": "SELECT 1"}]
+
+
 def test_validate_and_commit_pushes_branch_to_remote():
     script_path = SCRIPTS_DIR / "validate_and_commit_branch.py"
     source = script_path.read_text()
@@ -170,6 +190,31 @@ def test_no_monty_globals_in_skill_scripts():
         text = py_file.read_text()
         assert "globals().get(" not in text, f"{py_file} uses globals().get()"
         assert "locals().get(" not in text, f"{py_file} uses locals().get()"
+
+
+def test_record_query_parity_compare_row_sets_matches_aliased_count():
+    script_path = SCRIPTS_DIR / "record_query_parity.py"
+    source = script_path.read_text()
+    # Extract everything up to the main execution loop
+    helper_src = source.split("data = json.loads(data_json)")[0]
+    ns: dict = {}
+    exec(compile(helper_src, str(script_path), "exec"), ns)  # noqa: S102
+    compare_row_sets = ns["compare_row_sets"]
+
+    ok, diffs = compare_row_sets(
+        [{"total_line_items_sold": 181978}],
+        [{"order_items.count": 181978}],
+    )
+    assert ok is True
+    assert diffs == []
+
+    ok2, diffs2 = compare_row_sets(
+        [{"status": "Complete", "total_line_items_sold": 500}],
+        [{"order_items.status": "Complete", "order_items.count": 500}],
+    )
+    assert ok2 is True
+    assert diffs2 == []
+
 
 
 
