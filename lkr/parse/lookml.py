@@ -1,10 +1,17 @@
 import json
 import os
 from pathlib import Path
-from typing import Any, Self
+from typing import Annotated, Any, Self
 
 import nodejs_wheel
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PrivateAttr
+
+_StrList = Annotated[
+    list[str],
+    BeforeValidator(
+        lambda v: [x for x in v if x is not None] if isinstance(v, list) else v
+    ),
+]
 
 LOOKML_PARSER_VERSION = "9.0.0"
 LOOKML_CACHE_DIR = Path(
@@ -141,7 +148,7 @@ class LookmlAllowedValue(_LookmlBase):
 class LookmlFieldProperties(LookmlParserValues):
     _sql_defaulted: bool = PrivateAttr(default=False)
 
-    alias: list[str] | str | None = None
+    alias: _StrList | str | None = None
     allow_fill: bool | None = None
     alpha_sort: bool | None = None
     allow_approximate_optimization: bool | None = None
@@ -152,7 +159,7 @@ class LookmlFieldProperties(LookmlParserValues):
     map_layer_name: str | None = None
     precision: int | None = None
     primary_key: bool | None = None
-    required_access_grants: list[str] | None = None
+    required_access_grants: _StrList | None = None
     sql_distinct_key: str | None = None
     direction: str | None = None
     end_location_field: str | None = None
@@ -167,16 +174,16 @@ class LookmlFieldProperties(LookmlParserValues):
     label_from_parameter: str | None = None
     label: str | None = None
     order_by_field: str | None = None
-    required_fields: list[str] | None = None
+    required_fields: _StrList | None = None
     style: str | None = None
     suggest_dimension: str | None = None
     suggest_explore: str | None = None
     suggest_persist_for: str | None = None
     suggestable: bool | None = None
-    suggestions: str | list[str] | bool | None = None
-    synonyms: list[str] | str | None = None
-    tags: list[str] | None = None
-    timeframes: list[str] | None = None
+    suggestions: str | _StrList | bool | None = None
+    synonyms: _StrList | str | None = None
+    tags: _StrList | None = None
+    timeframes: _StrList | None = None
     units: str | None = None
     default_value: str | None = None
     value_format_name: str | None = None
@@ -253,7 +260,7 @@ class LookmlDimensionGroup(LookmlFieldProperties):
     convert_tz: bool | None = None
     sql_start: str | None = None
     sql_end: str | None = None
-    intervals: list[str] | None = None
+    intervals: _StrList | None = None
     string_datatype: str | None = None
     value_format: str | None = None
 
@@ -301,17 +308,17 @@ class LookmlMeasure(LookmlFieldProperties):
 
 
 class LookmlSet(LookmlParserValues):
-    fields: list[str] = Field(default_factory=list)
+    fields: _StrList = Field(default_factory=list)
 
 
 class LookmlJoin(LookmlParserValues):
-    fields: list[str] | None = None
+    fields: _StrList | None = None
     foreign_key: str | None = None
     from_: str | None = Field(default=None, alias="from")
     outer_only: bool | None = None
     relationship: str | None = None
     relationship_type: str | None = None
-    required_joins: list[str] | None = None
+    required_joins: _StrList | None = None
     sql_foreign_key: str | None = None
     sql_having: str | None = None
     sql_on: str | None = None
@@ -322,7 +329,7 @@ class LookmlJoin(LookmlParserValues):
     view: str | None = None
     view_name: str | None = None
     view_label: str | None = None
-    tags: list[str] | None = None
+    tags: _StrList | None = None
 
     def apply_defaults(self) -> Self:
         if not self.relationship and self.sql_on and self.type != "inner":
@@ -416,7 +423,7 @@ class LookmlView(LookmlParserValues):
     dimension: dict[str, LookmlDimension] | None = None
     drill_fields: list[str | None] | None = None
     extends_ref: str | None = None
-    extends: str | list[str] | None = None
+    extends: str | _StrList | None = None
     extension: str | bool | None = None
     fields_hidden_by_default: bool | None = None
     filter: (
@@ -429,7 +436,7 @@ class LookmlView(LookmlParserValues):
     persist_for: str | None = None
     persist_with: str | None = None
     relationship: str | None = None
-    required_access_grants: list[str] | None = None
+    required_access_grants: _StrList | None = None
     required: bool | None = None
     set: dict[str, LookmlSet] | None = None
     sql_always_having: str | None = None
@@ -437,7 +444,7 @@ class LookmlView(LookmlParserValues):
     sql_on: str | None = None
     sql_table_name: str | None = None
     suggestions: bool | None = None
-    tags: list[str] | None = None
+    tags: _StrList | None = None
     timezone: str | None = None
     view_label: str | None = None
 
@@ -458,9 +465,9 @@ class LookmlView(LookmlParserValues):
 
 class LookmlExplore(LookmlParserValues):
     extension: str | bool | None = None
-    extends: str | list[str] | None = None
-    fields: list[str] | None = None
-    tags: list[str] | None = None
+    extends: str | _StrList | None = None
+    fields: _StrList | None = None
+    tags: _StrList | None = None
     description: str | None = None
     group_label: str | None = None
     hidden: bool | None = None
@@ -473,13 +480,13 @@ class LookmlExplore(LookmlParserValues):
     case_sensitive: bool | None = None
     sql_always_having: str | None = None
     sql_always_where: str | None = None
-    always_join: list[str] | None = None
+    always_join: _StrList | None = None
     join: dict[str, LookmlJoin] | None = None
-    cancel_grouping_fields: list[str] | None = None
+    cancel_grouping_fields: _StrList | None = None
     from_: str | None = Field(default=None, alias="from")
     persist_for: str | None = None
     persist_with: str | None = None
-    required_access_grants: list[str] | None = None
+    required_access_grants: _StrList | None = None
     sql_table_name: str | None = None
     symmetric_aggregates: bool | None = None
     view_name: str | None = None

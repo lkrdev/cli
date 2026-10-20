@@ -9,16 +9,21 @@ from sqlglot.errors import SqlglotError
 
 from lkr.parse.lookml import LookmlExplore, LookmlJoin, LookmlProject, LookmlView
 
-_LOOKML_REF_RE = re.compile(r"\$\{\s*([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)?)\s*\}")
+_LOOKML_REF_RE = re.compile(
+    r"\$\{\s*([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)?)\s*\}"
+    r"|\{\{\s*(?:_view\.)?([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)?)\._sql\b[^}]*\}\}"
+)
 
 
 def _extract_lookml_refs(sql: str | None) -> list[str]:
     if not sql:
         return []
     return [
-        m.group(1)
+        ref
         for m in _LOOKML_REF_RE.finditer(sql)
-        if m.group(1).upper() not in ("TABLE", "EXTENDED")
+        if (ref := m.group(1) or m.group(2))
+        and ref.upper() not in ("TABLE", "EXTENDED")
+        and ref.split(".", 1)[0] not in ("_view", "_field", "_model", "_explore")
     ]
 
 
@@ -493,6 +498,7 @@ def build_explore_join_graph(
 
 
 __all__ = [
+    "_LOOKML_REF_RE",
     "LookmlExploreJoinGraph",
     "LookmlExploreJoinNode",
     "_as_list",

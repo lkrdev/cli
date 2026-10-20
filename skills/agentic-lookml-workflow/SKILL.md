@@ -76,7 +76,7 @@ All workflow helper scripts live in `skills/agentic-lookml-workflow/scripts/`:
   ```
 - Throughout the session, append high-level operation milestones to `./data/$RUN_ID/summary.md` as defined in [agentic-lookml](../agentic-lookml/SKILL.md):
   1. Generating base views (`bronze/:table.view.lkml`)
-  2. Deconstructing query to canonical form
+  2. Deconstructing query to canonical form (including the modeling decisions made and, whenever a derived table or Gold explore is used, the specific reason why the query could not be reduced further into a flat Canonical Looker Query)
   3. Query patterns from original query (for example, single-table with union: `simple_single_table`, `unions`)
   4. Writing LookML (Bronze refinements, hidden base explores, Silver and Gold views and explores)
   5. Validation failures (`Validation failed: ...`) and self-healing updates (`Updating LookML: ...`)
