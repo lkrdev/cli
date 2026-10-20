@@ -166,7 +166,6 @@ def _col_spec_from_proj(proj: exp.Expr, dialect: str | None = None) -> ColumnSpe
     )
 
 
-# ponytail: AST-only star expansion by default; pass schema (seeded from LookML or Looker API) to expand leaf-table stars
 def _optimize_stars(
     expr: exp.Expr,
     dialect: str | None = None,

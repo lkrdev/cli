@@ -301,7 +301,6 @@ class LookmlExploreJoinGraph(BaseModel):
     joins: dict[str, LookmlExploreJoinNode] = Field(default_factory=dict)
 
 
-# ponytail: extract simple equi-join pairs from sql_on, foreign_key, sql_foreign_key without full relational algebra optimizer
 def _extract_explore_equi_joins(
     sql_on: str | None,
     foreign_key: str | None,

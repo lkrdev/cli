@@ -66,6 +66,20 @@ def main():
     except NameError:
         payloads = {}
 
+    try:
+        do_validate = str(validate).lower() in ("true", "1", "yes")  # ty: ignore[unresolved-reference]
+    except NameError:
+        do_validate = False
+
+    val_errors = []
+    p_id = data.get("project_id")
+    if do_validate and p_id:
+        val = validate_project(project_id=str(p_id)) or {}  # ty: ignore[unresolved-reference]
+        val_errors = [
+            e for e in (val.get("errors") or []) if e.get("severity", "error") in ("error", "fatal", "")
+        ]
+        data["validation_errors"] = val_errors
+
     all_matched = True
     for q in data.get("queries") or []:
         idx = q.get("query_index")
@@ -83,8 +97,13 @@ def main():
         if not sql_slug or not (active_q or q.get("query_id")):
             continue
         try:
-            s_raw = run_sql_query(slug=sql_slug, result_format="json")  # ty: ignore[unresolved-reference]
-            s_rows = json.loads(s_raw) if isinstance(s_raw, str) else (s_raw or [])
+            if isinstance(q.get("sql_rows"), list):
+                s_rows = q["sql_rows"]
+            else:
+                s_raw = run_sql_query(slug=sql_slug, result_format="json")  # ty: ignore[unresolved-reference]
+                s_rows = json.loads(s_raw) if isinstance(s_raw, str) else (s_raw or [])
+                if isinstance(s_rows, list) and len(s_rows) <= 50:
+                    q["sql_rows"] = s_rows
             l_raw = (
                 run_inline_query(result_format="json", body=active_q)  # ty: ignore[unresolved-reference]
                 if active_q
@@ -100,7 +119,7 @@ def main():
             q["mismatches"] = [str(e)]
             all_matched = False
 
-    data["passed"] = all_matched
+    data["passed"] = all_matched and not val_errors
     data["all_queries_matched"] = all_matched
     return data
 

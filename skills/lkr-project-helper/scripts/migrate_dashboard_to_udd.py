@@ -10,8 +10,14 @@ Usage:
 
 
 def main():
-    dash_id = globals().get("dashboard_id", "")
-    target_folder = globals().get("space_id", "1")
+    try:
+        dash_id = str(dashboard_id)  # ty: ignore[unresolved-reference]
+    except NameError:
+        dash_id = ""
+    try:
+        target_folder = str(space_id) or "1"  # ty: ignore[unresolved-reference]
+    except NameError:
+        target_folder = "1"
 
     if not dash_id:
         return {

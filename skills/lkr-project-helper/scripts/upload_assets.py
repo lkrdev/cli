@@ -11,9 +11,18 @@ Usage:
 
 
 def main():
-    proj = globals().get("project_name", "my_new_project")
-    target_path = globals().get("file_path", "")
-    target_content = globals().get("file_content", "")
+    try:
+        proj = str(project_name) or "my_new_project"  # ty: ignore[unresolved-reference]
+    except NameError:
+        proj = "my_new_project"
+    try:
+        target_path = str(file_path)  # ty: ignore[unresolved-reference]
+    except NameError:
+        target_path = ""
+    try:
+        target_content = str(file_content)  # ty: ignore[unresolved-reference]
+    except NameError:
+        target_content = ""
 
     if not target_path:
         return {"error": "Missing file_path parameter."}

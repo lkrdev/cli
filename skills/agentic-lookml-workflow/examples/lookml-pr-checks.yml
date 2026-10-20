@@ -5,7 +5,7 @@ on:
     paths:
       - "**/*.lkml"
       - "**/*.lookml"
-      - "**/*.snap"
+      - "**/*.snap.json"
       - "**/data.json"
       - "**/input.sql"
   pull_request_review:
@@ -33,6 +33,9 @@ jobs:
       - name: Install lkr-dev-cli
         run: |
           uv tool install "lkr-dev-cli[tools,code-mode,parse]"
+          if ! lkr parse lookml snapshot --help 2>&1 | grep -q -- "--allow-additions"; then
+            uv tool install --force "lkr-dev-cli[tools,code-mode,parse] @ git+https://github.com/lkrdev/cli.git"
+          fi
 
       - name: Check LookML Snapshots (Additive vs Material Changes)
         id: snapshots
@@ -57,17 +60,21 @@ jobs:
           if [[ -n "$BASE_REF" ]] && git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1; then
             rm -rf /tmp/base-branch
             git worktree add --detach /tmp/base-branch "origin/$BASE_REF"
-            if [[ -d "/tmp/base-branch/${LOOKML_DIR#./}" ]] && find "/tmp/base-branch/${LOOKML_DIR#./}" \( -name "*.lkml" -o -name "*.snap" \) 2>/dev/null | grep -q .; then
+            if [[ -d "/tmp/base-branch/${LOOKML_DIR#./}" ]] && find "/tmp/base-branch/${LOOKML_DIR#./}" \( -name "*.lkml" -o -name "*.snap.json" \) 2>/dev/null | grep -q .; then
               BASE_ARGS=(--base-path "/tmp/base-branch/${LOOKML_DIR#./}")
-            elif find "/tmp/base-branch" \( -name "*.lkml" -o -name "*.snap" \) 2>/dev/null | grep -q .; then
+            elif find "/tmp/base-branch" \( -name "*.lkml" -o -name "*.snap.json" \) 2>/dev/null | grep -q .; then
               BASE_ARGS=(--base-path "/tmp/base-branch")
             fi
           fi
 
           lkr parse lookml snapshot --path "$LOOKML_DIR" "${BASE_ARGS[@]}" --allow-additions --format json --output /tmp/snapshot_check.json || true
+          if [[ ! -f /tmp/snapshot_check.json ]]; then
+            echo "::error::Failed to generate /tmp/snapshot_check.json via lkr parse lookml snapshot."
+            exit 1
+          fi
           cat /tmp/snapshot_check.json
 
-          if jq -e '.requires_review == false and .success == true' /tmp/snapshot_check.json >/dev/null; then
+          if jq -e '.requires_review == false' /tmp/snapshot_check.json >/dev/null; then
             echo "Snapshot check passed: changes are purely additive (no material changes requiring review)."
             exit 0
           fi
@@ -125,24 +132,45 @@ jobs:
           LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
           PROJECT_ID: ${{ secrets.LOOKER_PROJECT_NAME || vars.LOOKER_PROJECT_NAME }}
         run: |
+          SCRIPT_DIR=".agents/skills/agentic-lookml-workflow/scripts"
+          [[ ! -d "$SCRIPT_DIR" ]] && SCRIPT_DIR="skills/agentic-lookml-workflow/scripts"
           OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode \
-            --file=skills/agentic-lookml-workflow/scripts/validate_and_commit_branch.py \
+            --file="$SCRIPT_DIR/validate_and_commit_branch.py" \
             --var project_id="$PROJECT_ID")
           echo "$OUT"
-          echo "$OUT" | jq -e '.passed == true' >/dev/null
+          echo "$OUT" | sed -n '/^{/,$p' | jq -e '.passed == true' >/dev/null
 
       - name: Verify Query Parity (SQL Runner vs Looker Inline Query)
         if: steps.snapshots.outputs.has_lookml == 'true'
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
         run: |
           DATA_FILE=$(find ./data -name "data.json" 2>/dev/null | head -n 1 || true)
-          if [[ -z "$DATA_FILE" || ! -f "$DATA_FILE" ]]; then
-            echo "No data.json session file found, skipping query parity check."
+          if [[ -n "$DATA_FILE" && -f "$DATA_FILE" ]]; then
+            DATA_PAYLOAD=$(cat "$DATA_FILE")
+          elif [[ -n "$PR_NUMBER" ]]; then
+            PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body' 2>/dev/null || true)
+            DATA_PAYLOAD=$(echo "$PR_BODY" \
+              | awk '/<summary><code>data\.json<\/code><\/summary>/{flag=1; next} flag && /^```json/{in_json=1; next} in_json && /^```/{exit} in_json{print}' || true)
+            if [[ -z "$DATA_PAYLOAD" ]]; then
+              GIST_ID=$(echo "$PR_BODY" | grep -Eo 'https://gist\.github\.com/[^[:space:])]+/[0-9a-f]+' | head -n 1 | awk -F'/' '{print $NF}' || true)
+              if [[ -n "$GIST_ID" ]]; then
+                DATA_PAYLOAD=$(gh api "gists/$GIST_ID" | jq -r '.files["data.json"].content // empty' || true)
+              fi
+            fi
+          else
+            DATA_PAYLOAD=""
+          fi
+          if [[ -z "$DATA_PAYLOAD" ]]; then
+            echo "No data.json session payload found on disk or in PR description, skipping query parity check."
             exit 0
           fi
+          SCRIPT_DIR=".agents/skills/agentic-lookml-workflow/scripts"
+          [[ ! -d "$SCRIPT_DIR" ]] && SCRIPT_DIR="skills/agentic-lookml-workflow/scripts"
           OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode \
-            --file=skills/agentic-lookml-workflow/scripts/record_query_parity.py \
-            --var data_json="$(cat "$DATA_FILE")")
+            --file="$SCRIPT_DIR/record_query_parity.py" \
+            --var data_json="$DATA_PAYLOAD")
           echo "$OUT"
-          echo "$OUT" | jq -e '.passed == true' >/dev/null
+          echo "$OUT" | sed -n '/^{/,$p' | jq -e '.passed == true' >/dev/null

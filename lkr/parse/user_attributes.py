@@ -491,7 +491,6 @@ def _extract_from_file_entries(
 def _extract_from_lookml_dashboard(
     content: str, file_path: str | None = None
 ) -> list[UserAttributeRef]:
-    # ponytail: lightweight indentation scanner avoids adding PyYAML to [parse] extra while preserving 1-based line numbers
     refs: list[UserAttributeRef] = []
     dash_name: str | None = None
     dash_model: str | None = None

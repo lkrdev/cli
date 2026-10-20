@@ -511,7 +511,6 @@ class _FieldMatchInfo:
         self.sub_key = sub_key
 
 
-# ponytail: extract simple field: value filter pairs from LookmlFilter or dict AST without full filter expression grammar parsing
 def _extract_filter_refs(filters: Any) -> list[tuple[str, str]]:
     refs: list[tuple[str, str]] = []
     for f in _as_list(filters):
@@ -762,7 +761,6 @@ def _get_view_field(view_obj: LookmlView, ftype: str, fname: str) -> Any:
     )
 
 
-# ponytail: seed SQLGlot schema from LookML views + Looker connection_columns
 def _extract_view_columns(view_obj: LookmlView) -> dict[str, str]:
     cols: dict[str, str] = {}
     for ftype, fname, fobj in _iter_view_fields(view_obj):
@@ -1095,7 +1093,6 @@ def _preprocess_dt_sql(
     model_views: dict[str, LookmlView],
     alias_to_view: dict[str, str],
 ) -> str:
-    # ponytail: lightweight regex expansion of {{ _table }}, {{ field._sql }}, ${EXTENDED}, and ${field} for SQLGlot lineage extraction
     def _resolve_field_sql(t_view: str, qual: str, fname: str, depth: int = 0) -> str:
         tv = (
             model_views.get(t_view)
@@ -2075,7 +2072,6 @@ def _match_model_views(
 
             if not exp_obj.aggregate_table and not exp_obj.query:
                 continue
-            # ponytail: timeframe rollup compatibility (e.g. querying created_year against an aggregate_table with created_month) can start with exact field/timeframe matching + dimension_group base matching, adding coarseness hierarchy comparison only if needed.
             exp_entries: list[
                 tuple[
                     LookmlViewMatch,
@@ -2477,7 +2473,6 @@ def _build_views_by_model(
     }
 
 
-# ponytail: linear scan across project explores for precedent discovery and AST-based fan trap/required join checks
 def _analyze_query_joins(
     pq: ParsedQuery,
     all_explore_graphs: list[LookmlExploreJoinGraph],

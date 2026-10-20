@@ -14,17 +14,25 @@ Usage:
 """
 
 
+def _g(fn, default=""):
+    try:
+        val = fn()
+        return (str(val).strip() or default) if val is not None else default
+    except NameError:
+        return default
+
+
 def main():
-    proj = globals().get("project_name", "my_new_project")
-    model = globals().get("model_name", proj)
-    conn = globals().get("connection_name", "")
-    schema = globals().get("schema_name", "")
-    raw_tables = globals().get("table_names", "")
-    folder = globals().get("folder_name", "views")
-    file_type = globals().get("file_type_for_explores", "model")
-    intention = globals().get("user_intention", "")
-    questions = globals().get("questions", "")
-    instructions = globals().get("user_instructions", "")
+    proj = _g(lambda: project_name, "my_new_project")  # ty: ignore[unresolved-reference]
+    model = _g(lambda: model_name, proj)  # ty: ignore[unresolved-reference]
+    conn = _g(lambda: connection_name)  # ty: ignore[unresolved-reference]
+    schema = _g(lambda: schema_name)  # ty: ignore[unresolved-reference]
+    raw_tables = _g(lambda: table_names)  # ty: ignore[unresolved-reference]
+    folder = _g(lambda: folder_name, "views")  # ty: ignore[unresolved-reference]
+    file_type = _g(lambda: file_type_for_explores, "model")  # ty: ignore[unresolved-reference]
+    intention = _g(lambda: user_intention)  # ty: ignore[unresolved-reference]
+    q_text = _g(lambda: questions)  # ty: ignore[unresolved-reference]
+    instructions = _g(lambda: user_instructions)  # ty: ignore[unresolved-reference]
 
     if not conn:
         conns = all_connections()  # ty: ignore[unresolved-reference]
@@ -52,8 +60,8 @@ def main():
     sem_gen = {}
     if intention:
         sem_gen["user_intention"] = intention
-    if questions:
-        sem_gen["questions"] = questions
+    if q_text:
+        sem_gen["questions"] = q_text
     if instructions:
         sem_gen["user_instructions"] = instructions
     if sem_gen:

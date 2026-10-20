@@ -648,7 +648,6 @@ class SqlLiteAuth:
                 current_auth.set_token(self.conn, commit=True, new_token=token)
 
             # Initialize OAuth2 PKCE flow
-            # ponytail: detect headless SSH or terminal without DISPLAY to use copy-code flow
             is_headless = not os.environ.get("DISPLAY") and (
                 "SSH_CLIENT" in os.environ
                 or "SSH_TTY" in os.environ

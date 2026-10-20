@@ -808,7 +808,7 @@ def run_lookml_snapshot(
     snapshots_out: dict[str, Any] = {}
 
     for obj_name in target_objects:
-        snap_file = snapshot_dir / f"{proj_name}.{obj_name}.snap"
+        snap_file = snapshot_dir / f"{proj_name}.{obj_name}.snap.json"
         current_data = extract_snapshot_for_object(
             obj_name, project, model_filter=model
         )
@@ -821,8 +821,8 @@ def run_lookml_snapshot(
             )
         elif resolved_base_path is not None:
             candidate_snaps = [
-                resolved_base_path / "__snapshots__" / f"{proj_name}.{obj_name}.snap",
-                resolved_base_path / f"{proj_name}.{obj_name}.snap",
+                resolved_base_path / "__snapshots__" / f"{proj_name}.{obj_name}.snap.json",
+                resolved_base_path / f"{proj_name}.{obj_name}.snap.json",
             ]
             base_snap = next((p for p in candidate_snaps if p.exists()), None)
             if base_snap is not None:
@@ -891,7 +891,7 @@ def run_lookml_snapshot(
                 obj_name, saved_data, current_data, files_out=material_change_files
             )
             if obj_material:
-                snap_rel = f"__snapshots__/{proj_name}.{obj_name}.snap"
+                snap_rel = f"__snapshots__/{proj_name}.{obj_name}.snap.json"
                 if snap_rel not in material_change_files:
                     material_change_files.append(snap_rel)
             material_changes.extend(obj_material)
