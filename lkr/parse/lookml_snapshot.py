@@ -577,7 +577,13 @@ def _match_codeowner_pattern(pattern: str, rel_path: str) -> bool:
         return True
     if pat.endswith("/"):
         prefix = pat.strip("/")
-        return rel == prefix or rel.startswith(f"{prefix}/")
+        if pat.startswith("/"):
+            return rel == prefix or rel.startswith(f"{prefix}/")
+        return (
+            rel == prefix
+            or rel.startswith(f"{prefix}/")
+            or f"/{prefix}/" in f"/{rel}"
+        )
     anchored = pat.startswith("/")
     clean = pat.lstrip("/")
     if (
@@ -619,7 +625,7 @@ def resolve_codeowners(root_path: Path, files: list[str]) -> list[str]:
         return []
 
     rel_prefix = (
-        root_path.resolve().relative_to(owner_root).as_posix().strip(".")
+        root_path.resolve().relative_to(owner_root).as_posix()
         if owner_root != root_path.resolve()
         else ""
     )
@@ -829,6 +835,33 @@ def run_lookml_snapshot(
             else:
                 saved_data = {}
 
+        if model:
+            existing = saved_data
+            if existing is None and snap_file.exists():
+                try:
+                    existing = json.loads(snap_file.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError) as e:
+                    logger.debug(f"Could not merge snapshot for model {model}: {e}")
+            if isinstance(existing, dict):
+                merged = {
+                    k: v
+                    for k, v in existing.items()
+                    if k != model and not k.startswith(f"{model}.")
+                }
+                for k, v in current_data.items():
+                    if isinstance(v, dict) and isinstance(existing.get(k), dict):
+                        merged[k] = {
+                            **{
+                                sk: sv
+                                for sk, sv in existing[k].items()
+                                if not sk.startswith(f"{model}.")
+                            },
+                            **v,
+                        }
+                    else:
+                        merged[k] = v
+                current_data = merged
+
         if saved_data is None and not snap_file.exists():
             if ci_mode:
                 failed_count += 1
@@ -839,20 +872,6 @@ def run_lookml_snapshot(
                 _write_snap(snap_file, current_data)
                 written_count += 1
         elif update and not allow_additions:
-            if model and snap_file.exists():
-                try:
-                    existing_data = json.loads(snap_file.read_text(encoding="utf-8"))
-                    if isinstance(existing_data, dict):
-                        merged = dict(existing_data)
-                        for k, v in current_data.items():
-                            if isinstance(v, dict) and isinstance(merged.get(k), dict):
-                                merged[k] = {**merged[k], **v}
-                            else:
-                                merged[k] = v
-                        current_data = merged
-                except (json.JSONDecodeError, OSError) as e:
-                    logger.debug(f"Could not merge snapshot for model {model}: {e}")
-
             _write_snap(snap_file, current_data)
             updated_count += 1
         else:
