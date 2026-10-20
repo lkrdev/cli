@@ -210,8 +210,6 @@ def extract_tests_snapshot(
         raw_tests: dict[str, Any] | None, model_name: str, file_hint: str
     ) -> None:
         for test_name, test_val in sorted((raw_tests or {}).items()):
-            if test_name in seen_tests:
-                continue
             tests_list = test_val if isinstance(test_val, list) else [test_val]
             for idx, t in enumerate(tests_list):
                 if isinstance(t, LookmlTest):
@@ -220,6 +218,8 @@ def extract_tests_snapshot(
                         if len(tests_list) == 1
                         else f"{model_name}.{test_name}_{idx}"
                     )
+                    if key in tests_out:
+                        continue
                     tests_out[key] = _build_test_entry(
                         test_name, t, model_name, file_hint, positions
                     )
@@ -236,7 +236,11 @@ def extract_tests_snapshot(
         ):
             raw = getattr(file_entry, "test", None)
             if isinstance(raw, dict):
-                _add_tests(raw, default_model, f"{rel_key}.test")
+                _add_tests(
+                    {k: v for k, v in raw.items() if k not in seen_tests},
+                    default_model,
+                    f"{rel_key}.test",
+                )
 
     return tests_out
 
