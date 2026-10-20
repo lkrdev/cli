@@ -138,6 +138,26 @@ def test_configure_model_defaults_to_project_id_and_creates_model():
     ]
 
 
+def test_init_sql_queries_defaults_to_connection_name():
+    script_path = SCRIPTS_DIR / "init_sql_queries.py"
+    source = script_path.read_text()
+    called_bodies = []
+
+    def fake_create_sql_query(body):
+        called_bodies.append(body)
+        return {"slug": "sql123"}
+
+    ns = {
+        "raw_sql": "SELECT 1",
+        "base_url": "https://example.looker.com",
+        "connection_name": "bq_conn",
+        "data_json": "{}",
+        "create_sql_query": fake_create_sql_query,
+    }
+    exec(compile(source, str(script_path), "exec"), ns)  # noqa: S102
+    assert called_bodies == [{"connection_name": "bq_conn", "sql": "SELECT 1"}]
+
+
 def test_validate_and_commit_pushes_branch_to_remote():
     script_path = SCRIPTS_DIR / "validate_and_commit_branch.py"
     source = script_path.read_text()

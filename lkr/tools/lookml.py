@@ -39,7 +39,8 @@ lookml_group = typer.Typer(
 VALID_EXTENSIONS = (
     ".lkml",
     ".lookml",
-    ".json",
+    ".strings.json",
+    ".topojson",
     ".geojson",
     ".md",
     ".gitkeep",
@@ -278,7 +279,7 @@ def push(
 
         logger.info(f"Reading local files from {lookml_dir} for project {project_id}...")
         for root, _, files in os.walk(lookml_dir):
-            if ".git" in root.split(os.sep):
+            if any(p in root.split(os.sep) for p in (".git", "__snapshots__")):
                 continue
             for file in files:
                 if file in (".gitignore", ".DS_Store"):
@@ -511,7 +512,7 @@ def pull(
 
         logger.info("Cleaning up local orphans not present on the Looker instance...")
         for root, _, files in os.walk(target_dir):
-            if ".git" in root.split(os.sep):
+            if any(p in root.split(os.sep) for p in (".git", "__snapshots__")):
                 continue
             for file in files:
                 if file in (".gitignore", ".DS_Store"):

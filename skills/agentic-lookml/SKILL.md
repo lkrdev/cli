@@ -386,16 +386,19 @@ Every metric in any Silver layer must have a Looker test at an appropriate grain
 Every measure added to a Bronze refinement must be tested, and all measures for a given refinement must be grouped into a single test query:
 - Test all self-contained single-table measures (`type: sum`, `type: count`, `type: average`, filtered single-table KPIs) defined in `bronze/:table.refinement.lkml`.
 - Rather than creating individual single-measure test queries, group all measures for that Bronze table into a single `explore_source` test block with multiple `column:` definitions and multiple `assert:` statements.
-- To test Bronze refinement measures without polluting public explores or colliding with Silver explore names, create a hidden base explore:
+- To test Bronze refinement measures without polluting public explores or colliding with Silver explore names, create a hidden base explore that explicitly `include:`s its referenced `.view.lkml` and `.refinement.lkml` files (Looker's project validator validates standalone `.explore.lkml` and `.test.lkml` files in their own scope):
   ```lookml
   # In bronze/explores/order_items_base.explore.lkml
+  include: "../order_items.view.lkml"
+  include: "../order_items.refinement.lkml"
+
   explore: order_items_base {
     label: "Order Items (Base)"
     view_name: order_items
     hidden: yes
   }
   ```
-  Use the `:table_base` naming convention with `hidden: yes` to avoid any namespace collision with `silver/explores/order_items.explore.lkml`.
+  Use the `:table_base` naming convention with `hidden: yes` to avoid any namespace collision with `silver/explores/order_items.explore.lkml`. Every standalone `.explore.lkml` (`bronze/explores/*`, `silver/explores/*`, `gold/explores/*`) and `.test.lkml` (`tests/bronze/*`, `tests/silver/*`) file must explicitly `include:` the `.view.lkml`, `.refinement.lkml`, or `.explore.lkml` files it references.
 
 ### Filtering to immutable data
 
@@ -407,6 +410,8 @@ Tests that query volatile data (such as "today", "yesterday", or unconstrained t
 Example Bronze test:
 ```lookml
 # In tests/bronze/order_items_base.test.lkml
+include: "../../bronze/explores/order_items_base.explore.lkml"
+
 test: order_items_base_refinement_metrics {
   explore_source: order_items_base {
     column: total_sale_price { field: order_items.total_sale_price }
@@ -435,6 +440,8 @@ In Silver explores, foreign tables and bare-joined cross-view `*_fields` views j
 Example Silver test:
 ```lookml
 # In tests/silver/orders.test.lkml
+include: "../../silver/explores/orders.explore.lkml"
+
 test: orders_fact_metrics_at_fixed_date {
   explore_source: orders {
     column: order_count { field: orders.order_count }

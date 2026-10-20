@@ -473,6 +473,36 @@ def test_push_update_lookml_model_on_connection_change(tmp_path, mock_sdk, mock_
     assert "updated_conn" in updated_kwargs["body"].allowed_db_connection_names
 
 
+def test_push_and_pull_skip_snapshots_and_only_allow_strings_json(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+    (project_dir / "orders.view.lkml").write_text("view: orders {}")
+    (project_dir / "en.strings.json").write_text('{"Orders": "Orders"}')
+    snap_dir = project_dir / "__snapshots__"
+    snap_dir.mkdir()
+    snap_file = snap_dir / "lookml.manifest.snap.json"
+    snap_file.write_text("{}")
+
+    mock_sdk.all_project_files.return_value = [{"id": "orders.view.lkml"}]
+    mock_sdk.get_file_content.return_value = "view: orders {}"
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
+        push_res = runner.invoke(
+            app, ["tools", "lookml", "push", str(project_dir), "--no-reset"]
+        )
+        assert push_res.exit_code == 0
+        pushed_paths = {
+            call.kwargs["file_content"].path
+            for call in mock_sdk.update_file.call_args_list
+        }
+        assert pushed_paths == {"orders.view.lkml", "en.strings.json"}
+
+        pull_res = runner.invoke(app, ["tools", "lookml", "pull", str(project_dir)])
+        assert pull_res.exit_code == 0
+        assert snap_file.exists()
+
+
+
 
 
 
