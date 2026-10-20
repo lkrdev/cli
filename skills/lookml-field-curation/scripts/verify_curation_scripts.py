@@ -117,7 +117,7 @@ class _CurationMockSDK(ExtendedLooker40SDK):
                     "partition_count": 1375,
                 }
             ])
-        if "CAST(status AS STRING)" in sql:
+        if "CAST(status AS" in sql:
             return json.dumps([
                 {"val": "Pending", "cnt": 50, "total_groups": 4, "max_len": 9},
                 {"val": "Shipped", "cnt": 40, "total_groups": 4, "max_len": 9},

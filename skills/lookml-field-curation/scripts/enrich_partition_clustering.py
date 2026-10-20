@@ -115,7 +115,7 @@ def main():
         fields_meta = (
             json.loads(raw_fields) if isinstance(raw_fields, str) else (raw_fields or [])
         )
-    except NameError:
+    except (NameError, ValueError):
         fields_meta = []
 
     parts = [p.strip('`" ') for p in t_name.split(".") if p.strip('`" ')]
@@ -125,7 +125,7 @@ def main():
     bare_table = tbl or t_name
 
     target_view = v_name or bare_table
-    schema_prefix = f"`{p_id}.{d_name}`." if (p_id and d_name) else (f"{d_name}." if d_name else "")
+    schema_prefix = f"`{p_id}.{d_name}`." if (p_id and d_name) else (f"`{d_name}`." if d_name else "")
 
     cols_sql = (
         "SELECT column_name, data_type, is_partitioning_column, clustering_ordinal_position "
@@ -190,7 +190,7 @@ def main():
         prefix = (existing_desc.rstrip(".") + ". ") if existing_desc else ""
         min_date_str = f" Min date available: {min_partition_date}." if min_partition_date else ""
         rec_desc = f"{prefix}Physical partition column (required).{min_date_str} Do not use 'is any value'."
-        escaped_desc = rec_desc.replace('"', '\\"')
+        escaped_desc = rec_desc.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
         snippet = f'  {construct}: {lname} {{\n    description: "{escaped_desc}"\n  }}'
         refinement_snippets.append(snippet)
         partition_recommendation = {
@@ -217,7 +217,7 @@ def main():
         rec_desc = (
             f"{prefix}Clustering column (order {pos}). Filtering {target} enables block pruning."
         )
-        escaped_desc = rec_desc.replace('"', '\\"')
+        escaped_desc = rec_desc.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
         snippet = f'  {construct}: {lname} {{\n    description: "{escaped_desc}"\n  }}'
         refinement_snippets.append(snippet)
         clustering_recommendations.append({

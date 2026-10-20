@@ -163,7 +163,7 @@ def classify_string_field(
             desc_text,
         )
 
-    escaped_desc = rec_desc.replace('"', '\\"')
+    escaped_desc = rec_desc.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
     snippet = (
         f"  dimension: {short_name} {{\n"
         f"    hidden: {'yes' if rec_hidden else 'no'}\n"
@@ -222,7 +222,7 @@ def main():
     try:
         raw_fields = fields_json  # ty: ignore[unresolved-reference]
         field_list = json.loads(raw_fields) if isinstance(raw_fields, str) else (raw_fields or [])
-    except NameError:
+    except (NameError, ValueError):
         field_list = []
     if not field_list:
         try:
@@ -261,26 +261,26 @@ def main():
 
     try:
         enum_max = int(enum_threshold)  # ty: ignore[unresolved-reference]
-    except NameError:
+    except (NameError, ValueError):
         enum_max = 15
     try:
         cat_max = int(categorical_threshold)  # ty: ignore[unresolved-reference]
-    except NameError:
+    except (NameError, ValueError):
         cat_max = 100
     try:
         top_k = int(top_n)  # ty: ignore[unresolved-reference]
-    except NameError:
+    except (NameError, ValueError):
         top_k = 10
     try:
         q_limit = int(query_limit)  # ty: ignore[unresolved-reference]
-    except NameError:
+    except (NameError, ValueError):
         q_limit = 500
     try:
         raw_filters = filters_json  # ty: ignore[unresolved-reference]
         explore_filters = (
             json.loads(raw_filters) if isinstance(raw_filters, str) else (raw_filters or {})
         )
-    except NameError:
+    except (NameError, ValueError):
         explore_filters = {}
 
     recommendations = []
@@ -291,8 +291,8 @@ def main():
 
         if q_mode == "sql" and t_name:
             sql_stmt = (
-                f"SELECT CAST({col_name} AS STRING) AS val, COUNT(1) AS cnt, "
-                f"COUNT(1) OVER () AS total_groups, MAX(LENGTH(CAST({col_name} AS STRING))) OVER () AS max_len "
+                f"SELECT CAST({col_name} AS VARCHAR) AS val, COUNT(1) AS cnt, "
+                f"COUNT(1) OVER () AS total_groups, MAX(LENGTH(CAST({col_name} AS VARCHAR))) OVER () AS max_len "
                 f"FROM {t_name} GROUP BY 1 ORDER BY cnt DESC, val ASC LIMIT {q_limit}"
             )
             sql_body = {"sql": sql_stmt}
@@ -325,7 +325,7 @@ def main():
         null_empty_cnt = null_empty_groups = total_cnt = 0
         for r in dict_rows:
             v = r.get(val_key)
-            row_cnt = int(r.get(cnt_key) or 1) if cnt_key and r.get(cnt_key) is not None else 1
+            row_cnt = int(r[cnt_key]) if cnt_key and r.get(cnt_key) is not None else 1
             total_cnt += row_cnt
             if v is None or str(v).strip() == "":
                 null_empty_cnt += row_cnt
