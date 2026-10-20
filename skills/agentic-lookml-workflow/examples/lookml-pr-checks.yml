@@ -55,6 +55,7 @@ jobs:
 
           BASE_ARGS=()
           if [[ -n "$BASE_REF" ]] && git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1; then
+            rm -rf /tmp/base-branch
             git worktree add --detach /tmp/base-branch "origin/$BASE_REF"
             if [[ -d "/tmp/base-branch/${LOOKML_DIR#./}" ]] && find "/tmp/base-branch/${LOOKML_DIR#./}" \( -name "*.lkml" -o -name "*.snap" \) 2>/dev/null | grep -q .; then
               BASE_ARGS=(--base-path "/tmp/base-branch/${LOOKML_DIR#./}")

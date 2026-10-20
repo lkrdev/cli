@@ -594,7 +594,7 @@ def _match_codeowner_pattern(pattern: str, rel_path: str) -> bool:
         return True
     if "**" in clean:
         regex = (
-            "^"
+            ("^" if anchored else "^(?:.*/)?")
             + re.escape(clean)
             .replace(r"\*\*/", "(?:.+/)?")
             .replace(r"\*\*", ".*")
@@ -603,7 +603,9 @@ def _match_codeowner_pattern(pattern: str, rel_path: str) -> bool:
             + "$"
         )
         return bool(re.match(regex, rel))
-    return fnmatch.fnmatchcase(rel, clean)
+    return fnmatch.fnmatchcase(rel, clean) or (
+        not anchored and fnmatch.fnmatchcase(rel, f"*/{clean}")
+    )
 
 
 def resolve_codeowners(root_path: Path, files: list[str]) -> list[str]:
