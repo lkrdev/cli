@@ -226,7 +226,11 @@ def discover_strings_files(root: Path) -> dict[str, tuple[str, dict[str, Any]]]:
     """Find and parse all *.strings.json files under root."""
     found: dict[str, tuple[str, dict[str, Any]]] = {}
     for f in sorted(root.rglob("*.strings.json")):
-        if not f.is_file():
+        if (
+            not f.is_file()
+            or f.name.endswith(".snap.strings.json")
+            or "__snapshots__" in f.parts
+        ):
             continue
         locale = f.name[: -len(".strings.json")]
         rel_path = f.relative_to(root).as_posix()

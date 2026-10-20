@@ -461,6 +461,12 @@ def _extract_query_columns(
                         and not isinstance(col_expr.this, exp.Star)
                     ):
                         _add(col_expr.table or None, col_expr.name)
+                for cnt_expr in opt_expr.find_all(exp.Count):
+                    arg = cnt_expr.this
+                    if isinstance(arg, (exp.Star, exp.Literal)):
+                        _add(None, "COUNT(*)")
+                    elif isinstance(arg, exp.Column) and isinstance(arg.this, exp.Star):
+                        _add(arg.table or None, "COUNT(*)")
     except Exception:  # noqa: BLE001, S110
         pass
 
@@ -1484,7 +1490,11 @@ def _match_model_views(
             }:
                 continue
             if ((tbl_qual or "").lower() or None, col_name.lower()) in non_join_col_set:
-                non_join_units.add((raw_table_str.lower(), col_name.lower()))
+                non_join_units.add(
+                    ("*", "count(*)")
+                    if col_name == "COUNT(*)"
+                    else (raw_table_str.lower(), col_name.lower())
+                )
             target_col = dt_col_pair[0] if dt_col_pair else col_name
             for ftype, fname, fobj in _iter_view_fields(view_obj):
                 tfs = (
@@ -1499,6 +1509,14 @@ def _match_model_views(
                         direct_hits.append((p, p.prop_type, p.prop_key, p.expr))
                 if not direct_hits and _field_matches_column(target_col, fname, None, ftype, tfs):
                     direct_hits.append((None, f"{ftype}.sql", "sql", fobj.sql.strip() if getattr(fobj, "sql", None) else None))
+                if (
+                    not direct_hits
+                    and target_col == "COUNT(*)"
+                    and ftype == "measure"
+                    and getattr(fobj, "type", None) == "count"
+                    and not getattr(fobj, "filters", None)
+                ):
+                    direct_hits.append((None, "measure.type", "type", "count"))
 
                 for fp_obj, m_prop, sub_key, expr_val in direct_hits:
                     fkey = (view_name, ftype, fname)
@@ -2086,7 +2104,11 @@ def _match_model_views(
                 for fm in vm.fields:
                     f_sql_tbl = vm.sql_table
                     col_name = fm.sql_column
-                    uk = (f_sql_tbl.lower(), col_name.lower())
+                    uk = (
+                        ("*", "count(*)")
+                        if col_name == "COUNT(*)"
+                        else (f_sql_tbl.lower(), col_name.lower())
+                    )
                     fobj = getattr(model_views[vm.view_name], fm.field_type)[
                         fm.field_name
                     ]
@@ -2108,6 +2130,13 @@ def _match_model_views(
                                 for tf in (tfs or ())
                             }
                         exp_entries.append((vm, fm, em, uk, cands))
+                        if (
+                            fm.field_type == "measure"
+                            and getattr(fobj, "type", None) == "count"
+                            and uk != ("*", "count(*)")
+                            and ("*", "count(*)") in non_join_units
+                        ):
+                            exp_entries.append((vm, fm, em, ("*", "count(*)"), cands))
                         if (not non_join_units or uk in non_join_units) and (
                             not fm.via or uk not in canon_by_unit
                         ):

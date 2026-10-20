@@ -123,9 +123,9 @@ All workflow helper scripts live in `.agents/skills/agentic-lookml-workflow/scri
   ```bash
   lkr --base-url="$BASE_URL" --dev tools lookml push "./data/$RUN_ID/lookml" --project-id="$PROJECT_ID" --no-reset
   ```
-- Generate the Explore query JSON Schema offline with `lkr parse lookml-to-api` and `lkr schema generate`, and validate your `INLINE_QUERIES_JSON` (`run_inline_query` payloads) with `lkr schema validate` before calling Looker:
+- Generate the Explore query JSON Schema offline with `lkr parse lookml-to-api --validate` (which also fails if duplicate field logic—such as a second unfiltered `type: count` measure alongside `measure: count`—exists on any view) and `lkr schema generate`, and validate your `INLINE_QUERIES_JSON` (`run_inline_query` payloads) with `lkr schema validate` before calling Looker:
   ```bash
-  lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" -m "$MODEL_NAME" -e "$EXPLORE_NAME" -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json"
+  lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" -m "$MODEL_NAME" -e "$EXPLORE_NAME" --validate -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json"
   lkr schema generate -m "$MODEL_NAME" -e "$EXPLORE_NAME" --explore-file "./data/$RUN_ID/explore_${EXPLORE_NAME}.json" -o "./data/$RUN_ID/schema_${EXPLORE_NAME}.json"
   lkr schema validate --schema-file "./data/$RUN_ID/schema_${EXPLORE_NAME}.json" --query "$SINGLE_INLINE_QUERY_JSON"
   ```
@@ -152,15 +152,15 @@ All workflow helper scripts live in `.agents/skills/agentic-lookml-workflow/scri
      JSON_OUT=$(echo "$RAW_OUT" | sed -n '/^{/,$p')
      echo "$JSON_OUT" | jq -e . >/dev/null && echo "$JSON_OUT" > "./data/$RUN_ID/data.json"
      ```
-- Model Silver explores, cross-view `*_fields`, and author LookML data tests (`tests/bronze/` and `tests/silver/`) in `./data/$RUN_ID/lookml` following [agentic-lookml](../agentic-lookml/SKILL.md) (using the Explore JSON Schema from `lkr schema generate` to verify valid `view.field` references and filter expressions for `explore_source:`, and the verified immutable baseline values from the parity gate), log the authored LookML and tests in `./data/$RUN_ID/summary.md`, re-run compare, and evaluate LookML snapshots with `--allow-additions` so pure additions pass automatically while any modified or removed test assert, test field, connection name, measure label, access grant, or manifest setting is flagged in `snapshot_check.json`:
+- Model Silver explores, cross-view `*_fields`, and author LookML data tests (`tests/bronze/` and `tests/silver/`) in `./data/$RUN_ID/lookml` following [agentic-lookml](../agentic-lookml/SKILL.md) (never creating a duplicate field with identical logic on the same view, such as a second `type: count` measure when `measure: count { type: count }` already exists; refine `measure: count` instead, and use the Explore JSON Schema from `lkr schema generate` to verify valid `view.field` references and filter expressions for `explore_source:`), log the authored LookML and tests in `./data/$RUN_ID/summary.md`, re-run compare, and evaluate LookML snapshots with `--allow-additions` so pure additions pass automatically while any modified or removed test assert, test field, connection name, measure label, access grant, or manifest setting is flagged in `snapshot_check.json`:
   ```bash
-  lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" -m "$MODEL_NAME" -e "$EXPLORE_NAME" -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json"
+  lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" -m "$MODEL_NAME" -e "$EXPLORE_NAME" --validate -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json"
   lkr schema generate -m "$MODEL_NAME" -e "$EXPLORE_NAME" --explore-file "./data/$RUN_ID/explore_${EXPLORE_NAME}.json" -o "./data/$RUN_ID/schema_${EXPLORE_NAME}.json"
   lkr parse sql-lookml-compare --sql-file "./data/$RUN_ID/input.sql" --path "./data/$RUN_ID/lookml" --output "./data/$RUN_ID/compare_post_refactor.json"
   lkr parse lookml snapshot --path "./data/$RUN_ID/lookml" --allow-additions --format json --output "./data/$RUN_ID/snapshot_check.json" || true
   lkr parse lookml snapshot --path "./data/$RUN_ID/lookml" -u
   ```
-- Push final LookML edits to the active developer branch with `--no-reset` (`lkr tools lookml push` automatically skips `__snapshots__/*.snap.json` because Looker's project files API only accepts `.strings.json`, `.topojson`, and `.geojson`):
+- Push final LookML edits (including `__snapshots__/*.snap.strings.json`) to the active developer branch with `--no-reset`:
   ```bash
   lkr --base-url="$BASE_URL" --dev tools lookml push "./data/$RUN_ID/lookml" --project-id="$PROJECT_ID" --no-reset
   ```

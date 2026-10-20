@@ -192,5 +192,30 @@ def test_no_monty_globals_in_skill_scripts():
         assert "locals().get(" not in text, f"{py_file} uses locals().get()"
 
 
+def test_record_query_parity_compare_row_sets_matches_aliased_count():
+    script_path = SCRIPTS_DIR / "record_query_parity.py"
+    source = script_path.read_text()
+    # Extract everything up to the main execution loop
+    helper_src = source.split("data = json.loads(data_json)")[0]
+    ns: dict = {}
+    exec(compile(helper_src, str(script_path), "exec"), ns)  # noqa: S102
+    compare_row_sets = ns["compare_row_sets"]
+
+    ok, diffs = compare_row_sets(
+        [{"total_line_items_sold": 181978}],
+        [{"order_items.count": 181978}],
+    )
+    assert ok is True
+    assert diffs == []
+
+    ok2, diffs2 = compare_row_sets(
+        [{"status": "Complete", "total_line_items_sold": 500}],
+        [{"order_items.status": "Complete", "order_items.count": 500}],
+    )
+    assert ok2 is True
+    assert diffs2 == []
+
+
+
 
 

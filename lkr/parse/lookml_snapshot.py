@@ -814,7 +814,13 @@ def run_lookml_snapshot(
     snapshots_out: dict[str, Any] = {}
 
     for obj_name in target_objects:
-        snap_file = snapshot_dir / f"{proj_name}.{obj_name}.snap.json"
+        snap_file = snapshot_dir / f"{proj_name}.{obj_name}.snap.strings.json"
+        legacy_snap_file = snapshot_dir / f"{proj_name}.{obj_name}.snap.json"
+        read_snap_file = (
+            snap_file
+            if snap_file.exists() or not legacy_snap_file.exists()
+            else legacy_snap_file
+        )
         current_data = extract_snapshot_for_object(
             obj_name, project, model_filter=model
         )
@@ -827,7 +833,13 @@ def run_lookml_snapshot(
             )
         elif resolved_base_path is not None:
             candidate_snaps = [
-                resolved_base_path / "__snapshots__" / f"{proj_name}.{obj_name}.snap.json",
+                resolved_base_path
+                / "__snapshots__"
+                / f"{proj_name}.{obj_name}.snap.strings.json",
+                resolved_base_path / f"{proj_name}.{obj_name}.snap.strings.json",
+                resolved_base_path
+                / "__snapshots__"
+                / f"{proj_name}.{obj_name}.snap.json",
                 resolved_base_path / f"{proj_name}.{obj_name}.snap.json",
             ]
             base_snap = next((p for p in candidate_snaps if p.exists()), None)
@@ -845,9 +857,9 @@ def run_lookml_snapshot(
 
         if model:
             existing = saved_data
-            if existing is None and snap_file.exists():
+            if existing is None and read_snap_file.exists():
                 try:
-                    existing = json.loads(snap_file.read_text(encoding="utf-8"))
+                    existing = json.loads(read_snap_file.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, OSError) as e:
                     logger.debug(f"Could not merge snapshot for model {model}: {e}")
             if isinstance(existing, dict):
@@ -870,7 +882,7 @@ def run_lookml_snapshot(
                         merged[k] = v
                 current_data = merged
 
-        if saved_data is None and not snap_file.exists():
+        if saved_data is None and not read_snap_file.exists():
             if ci_mode:
                 failed_count += 1
                 diff_reports.append(
@@ -885,11 +897,11 @@ def run_lookml_snapshot(
         else:
             if saved_data is None:
                 try:
-                    saved_data = json.loads(snap_file.read_text(encoding="utf-8"))
+                    saved_data = json.loads(read_snap_file.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, OSError) as e:
                     failed_count += 1
                     diff_reports.append(
-                        f"FAIL {obj_name} ({snap_file})\n  Could not read snapshot file: {e}"
+                        f"FAIL {obj_name} ({read_snap_file})\n  Could not read snapshot file: {e}"
                     )
                     continue
 
@@ -897,7 +909,7 @@ def run_lookml_snapshot(
                 obj_name, saved_data, current_data, files_out=material_change_files
             )
             if obj_material:
-                snap_rel = f"__snapshots__/{proj_name}.{obj_name}.snap.json"
+                snap_rel = f"__snapshots__/{proj_name}.{obj_name}.snap.strings.json"
                 if snap_rel not in material_change_files:
                     material_change_files.append(snap_rel)
             material_changes.extend(obj_material)
