@@ -842,7 +842,7 @@ function extractDepOverrides(obj) {{
 function interpolateString(str, constMap, fallbackMap = {{}}) {{
   if (typeof str !== "string" || !str.includes("@{{")) return str;
   return str.replace(AT_ENC_RE, (m, ref) =>
-    Object.hasOwn(constMap, ref) ? constMap[ref] : (Object.hasOwn(fallbackMap, ref) ? fallbackMap[ref] : m)
+    Object.prototype.hasOwnProperty.call(constMap, ref) ? constMap[ref] : (Object.prototype.hasOwnProperty.call(fallbackMap, ref) ? fallbackMap[ref] : m)
   );
 }}
 
@@ -951,7 +951,7 @@ xf.assembleModels = function(project, assembleOpts) {{
         constant: {{}}
       }};
       for (const k of ["project_name", "timezone", "constant", "local_dependency", "remote_dependency", "localization_settings"]) {{
-        if (inlineMan?.[k]) project.manifest[k] = structuredClone(inlineMan[k]);
+        if (inlineMan?.[k]) project.manifest[k] = JSON.parse(JSON.stringify(inlineMan[k]));
       }}
     }}
   }}
