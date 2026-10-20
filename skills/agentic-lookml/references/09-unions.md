@@ -52,13 +52,15 @@ Because LookML `explore_source:` (NDT) cannot express `UNION ALL`, a SQL Derived
 2. Long Metrics and metric unpivoting (stacking `Orders`, `Revenue`, and `AOV` as rows under `metric_name` and `metric_value`) belong in `gold/:name.view.lkml`, exposed in `gold/explores/:name.explore.lkml` (`tags: ["gold"]`).
 3. Same-table mutually exclusive `WHERE` branches should not use `UNION ALL` at all; collapse them into a single Bronze or Silver query with `IN (...)` or filtered measures.
 
-### Extend the Bronze view (`extends: [base_view]`) and define a compound PK
+### Extend the Bronze view (`extends: [base_view]`), alias `AS {{ _table }}` with `{{ field._sql }}`, and define a compound PK
 
-For SDTs that union or window tables with overlapping schemas, extend the base Bronze view (`extends: [base_view]`) so the derived view automatically inherits all existing dimensions, dimension groups, types, and labels from Bronze. In SQL, select the aligned columns using `${view.field}` (or `${EXTENDED}.*` when extending a single base table).
+For SDTs that union or window tables with overlapping schemas, extend the base Bronze view (`extends: [base_view]`, or `extends: [secondary_view, primary_view]` for multi-source unions where columns do not collide) so the derived view automatically inherits all existing dimensions, dimension groups, types, and labels from Bronze.
+
+Alias each `UNION ALL` branch's `FROM` clause with `AS {{ _table }}` (`FROM ${web_events.SQL_TABLE_NAME} AS {{ _table }}`) and reference inherited fields via `{{ field_name._sql }}` (see [lookml-advanced-liquid](../../lookml/sub-skills/lookml-advanced-liquid/SKILL.md)). Unlike `${web_events.event_id}`, which requires `web_events` to be joined into the outer Explore and fails with `FIELD_REF_IN_BAD_CONTEXT` when materialized as a PDT (`forTableName = true`), `{{ field_name._sql }}` paired with `AS {{ _table }}` evaluates in the derived view's own context, requires zero bare joins on the Explore, and is 100% PDT-safe. Because each `SELECT` branch in a `UNION ALL` has its own independent `FROM` scope, every branch can safely use `AS {{ _table }}`.
 
 Override the inherited single-column PK (`primary_key: no`) and define a mandatory composite primary key (`compound_pk` with `primary_key: yes`, such as `sql: CONCAT(${platform}, '_', CAST(${event_id} AS STRING)) ;;`). This guarantees the unioned view can safely participate in secondary foreign key joins in Silver and Gold Explores without fanout or missing PK errors. In the Silver Explore or join, use LookML's `fields: [ALL_FIELDS*, -view.field_not_needed]` to exclude any parent dimensions that are not present in the unioned projection.
 
-## LookML template (Silver `UNION ALL` with `extends:` and `${}` on everything)
+## LookML template (Silver `UNION ALL` with `extends:`, `AS {{ _table }}`, and `{{ field._sql }}`)
 
 ```lookml
 # File: silver/unified_events.view.lkml
@@ -68,23 +70,24 @@ include: "/bronze/mobile_events.view.lkml"
 include: "/bronze/mobile_events.refinement.lkml"
 
 view: unified_events {
-  extends: [web_events]
+  # Multiple inheritance: web_events is last so its definitions win on any shared field names
+  extends: [mobile_events, web_events]
 
   derived_table: {
     sql:
       SELECT
-        ${web_events.event_id} AS event_id,
-        ${web_events.user_id} AS user_id,
-        ${web_events.created_raw} AS created_at,
+        {{ event_id._sql }} AS event_id,
+        {{ user_id._sql }} AS user_id,
+        {{ created_raw._sql }} AS created_at,
         'web' AS platform
-      FROM ${web_events.SQL_TABLE_NAME} AS web_events
+      FROM ${web_events.SQL_TABLE_NAME} AS {{ _table }}
       UNION ALL
       SELECT
-        ${mobile_events.event_id} AS event_id,
-        ${mobile_events.user_id} AS user_id,
-        ${mobile_events.created_raw} AS created_at,
+        {{ event_id._sql }} AS event_id,
+        {{ user_id._sql }} AS user_id,
+        {{ created_raw._sql }} AS created_at,
         'mobile' AS platform
-      FROM ${mobile_events.SQL_TABLE_NAME} AS mobile_events ;;
+      FROM ${mobile_events.SQL_TABLE_NAME} AS {{ _table }} ;;
   }
 
   dimension: compound_pk {

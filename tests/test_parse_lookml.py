@@ -2517,4 +2517,91 @@ def test_parse_lookml_separate_test_file(tmp_path: Path):
     assert "orders_pk_is_unique" in test_names
 
 
+def test_parse_sql_to_lookml_liquid_table_and_field_sql():
+    from lkr.parse.sql_to_lookml import parse_sql_to_lookml
+
+    lkml = """
+explore: share_of_net_return {}
+
+view: order_items {
+  sql_table_name: `db.ecomm.order_items` ;;
+  dimension_group: created {
+    type: time
+    timeframes: [raw, date, month]
+    sql: ${TABLE}.created_at ;;
+  }
+  dimension_group: returned {
+    type: time
+    timeframes: [raw, date]
+    sql: ${TABLE}.returned_at ;;
+  }
+  dimension: sale_price {
+    type: number
+    sql: ${TABLE}.sale_price ;;
+  }
+  dimension: status {
+    type: string
+    sql: ${TABLE}.status ;;
+  }
+}
+
+view: share_of_net_return {
+  extends: [order_items]
+  derived_table: {
+    sql:
+      SELECT
+        'orders' as tbl,
+        {{ returned_raw._sql }} dt,
+        {{ sale_price._sql }} as amount
+      FROM ${order_items.SQL_TABLE_NAME} as {{ _table }}
+      UNION ALL
+      SELECT
+        'reversals' as tbl,
+        {{ created_date._sql }} dt,
+        {{ sale_price._sql }}*-1 as amount
+      FROM ${order_items.SQL_TABLE_NAME} as {{ _table }}
+      WHERE {{ status._sql }} IN ('Returned', 'Cancelled')
+    ;;
+  }
+  dimension_group: dt {
+    type: time
+    timeframes: [raw, date]
+    sql: ${TABLE}.dt ;;
+  }
+  dimension: tbl { hidden: yes }
+  dimension: amount {
+    type: number
+    sql: ${TABLE}.amount ;;
+  }
+  measure: daily_net_return {
+    type: sum
+    sql: ${amount} ;;
+  }
+  measure: daily_revenue {
+    type: sum
+    sql: ${amount} ;;
+    filters: [tbl: "orders"]
+  }
+  measure: daily_net_return_rate {
+    type: number
+    sql: ${daily_net_return} / NULLIF(${daily_revenue}, 0) ;;
+  }
+}
+"""
+    res = parse_sql_to_lookml(
+        sql="SELECT returned_at, created_at, sale_price, status FROM `db.ecomm.order_items`",
+        lookml=lkml,
+        dialect="bigquery",
+    )
+    q = res.queries[0]
+    snr_vm = next(v for v in q.views if v.view_name == "share_of_net_return")
+    f_by_name = {f.field_name: f for f in snr_vm.fields}
+    assert "amount" in f_by_name
+    assert f_by_name["amount"].via == ["order_items.sale_price"]
+    assert "dt" in f_by_name
+    assert "daily_net_return_rate" in f_by_name
+    assert "share_of_net_return.amount" in f_by_name["daily_net_return_rate"].via
+
+
+
 

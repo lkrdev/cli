@@ -30,11 +30,12 @@ def compare_row_sets(sql_rows, looker_rows):
         if len(sn) != len(ln):
             mismatches.append(f"Row {idx} column count mismatch: SQL={len(sn)}, Looker={len(ln)}")
             continue
-        pairs = (
-            [(k, sn.get(k), ln.get(k)) for k in sn]
-            if set(sn) == set(ln)
-            else [(f"col_{i}", sv, lv) for i, (sv, lv) in enumerate(zip(sn.values(), ln.values(), strict=False))]
-        )
+        if set(sn) != set(ln):
+            mismatches.append(
+                f"Row {idx} column name mismatch: SQL={sorted(sn.keys())}, Looker={sorted(ln.keys())}"
+            )
+            continue
+        pairs = [(k, sn.get(k), ln.get(k)) for k in sn]
         for col, sv, lv in pairs:
             if sv != lv:
                 mismatches.append(f"Row {idx} ({col}): SQL={sv}, Looker={lv}")

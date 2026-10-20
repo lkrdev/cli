@@ -1,0 +1,148 @@
+name: LookML PR Checks
+
+on:
+  pull_request:
+    paths:
+      - "**/*.lkml"
+      - "**/*.lookml"
+      - "**/*.snap"
+      - "**/data.json"
+      - "**/input.sql"
+  pull_request_review:
+    types: [submitted]
+  workflow_dispatch:
+
+jobs:
+  lookml-checks:
+    name: LookML Snapshots, Validator, Data Tests & Query Parity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: latest
+
+      - name: Install lkr-dev-cli
+        run: |
+          uv tool install "lkr-dev-cli[tools,code-mode,parse]"
+
+      - name: Check LookML Snapshots (Additive vs Material Changes)
+        id: snapshots
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          LOOKML_REVIEWERS: ${{ vars.LOOKML_REVIEWERS }}
+        run: |
+          LOOKML_DIR=$(find ./data -mindepth 2 -maxdepth 2 -type d -name "lookml" 2>/dev/null | head -n 1 || true)
+          if [[ -z "$LOOKML_DIR" ]]; then
+            LOOKML_DIR="."
+          fi
+          if ! find "$LOOKML_DIR" -name "*.lkml" 2>/dev/null | grep -q .; then
+            echo "No LookML (.lkml) files found in $LOOKML_DIR, skipping snapshot check."
+            echo "has_lookml=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "has_lookml=true" >> "$GITHUB_OUTPUT"
+
+          BASE_ARGS=()
+          if [[ -n "$BASE_REF" ]] && git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1; then
+            rm -rf /tmp/base-branch
+            git worktree add --detach /tmp/base-branch "origin/$BASE_REF"
+            if [[ -d "/tmp/base-branch/${LOOKML_DIR#./}" ]] && find "/tmp/base-branch/${LOOKML_DIR#./}" \( -name "*.lkml" -o -name "*.snap" \) 2>/dev/null | grep -q .; then
+              BASE_ARGS=(--base-path "/tmp/base-branch/${LOOKML_DIR#./}")
+            elif find "/tmp/base-branch" \( -name "*.lkml" -o -name "*.snap" \) 2>/dev/null | grep -q .; then
+              BASE_ARGS=(--base-path "/tmp/base-branch")
+            fi
+          fi
+
+          lkr parse lookml snapshot --path "$LOOKML_DIR" "${BASE_ARGS[@]}" --allow-additions --format json --output /tmp/snapshot_check.json || true
+          cat /tmp/snapshot_check.json
+
+          if jq -e '.requires_review == false and .success == true' /tmp/snapshot_check.json >/dev/null; then
+            echo "Snapshot check passed: changes are purely additive (no material changes requiring review)."
+            exit 0
+          fi
+
+          CODEOWNERS_REQ=$(jq -r '.required_reviewers // [] | join(",")' /tmp/snapshot_check.json)
+          ALL_REVIEWERS=$(jq -r '[.required_reviewers[]?, (env.LOOKML_REVIEWERS // "" | split(",")[] | select(length > 0))] | unique | join(",")' /tmp/snapshot_check.json)
+          {
+            echo "### Material LookML Snapshot Changes (Human Review Required)"
+            echo ""
+            jq -r '.material_changes[]? | "- `" + . + "`"' /tmp/snapshot_check.json
+            if [[ -n "$CODEOWNERS_REQ" ]]; then
+              echo ""
+              echo "Required CODEOWNERS: \`$CODEOWNERS_REQ\`"
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          if [[ -n "$PR_NUMBER" ]]; then
+            [[ -n "$ALL_REVIEWERS" ]] && gh pr edit "$PR_NUMBER" --add-reviewer "$ALL_REVIEWERS" >/dev/null 2>&1 || true
+            PR_REVIEWS=$(gh pr view "$PR_NUMBER" --json reviewDecision,latestReviews 2>/dev/null || echo "{}")
+            REQ_JSON=$(jq -c '.required_reviewers // []' /tmp/snapshot_check.json)
+            if echo "$PR_REVIEWS" | jq -e --argjson req "$REQ_JSON" '
+              ([.latestReviews[]? | select(.state == "APPROVED") | .author.login | ascii_downcase]) as $approved
+              | ($req | map(ascii_downcase)) as $required
+              | ($required | map(select((contains("/") or contains("@")) | not))) as $req_users
+              | (.reviewDecision != "CHANGES_REQUESTED") and (
+                  if ($req_users | length) > 0 then
+                    ($req_users | all(. as $u | ($approved | index($u)) != null)) and (
+                      (($required | length) == ($req_users | length)) or (.reviewDecision == "APPROVED")
+                    )
+                  else
+                    .reviewDecision == "APPROVED" or (($approved | length) > 0 and ($required | length) == 0)
+                  end
+                )
+            ' >/dev/null 2>&1; then
+              echo "Material LookML changes detected and approved by required CODEOWNERS / human reviewer."
+              exit 0
+            fi
+          fi
+
+          echo "::error::Material LookML snapshot changes detected (modified or removed assert, test field, connection, measure label, access control, or manifest). Approval from required CODEOWNERS (${CODEOWNERS_REQ:-human reviewer}) is required."
+          exit 1
+
+      - name: Authenticate Looker API
+        if: steps.snapshots.outputs.has_lookml == 'true'
+        env:
+          LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
+          LOOKERSDK_CLIENT_ID: ${{ secrets.LOOKERSDK_CLIENT_ID }}
+          LOOKERSDK_CLIENT_SECRET: ${{ secrets.LOOKERSDK_CLIENT_SECRET }}
+        run: |
+          lkr --base-url="$LOOKERSDK_BASE_URL" --client-id="$LOOKERSDK_CLIENT_ID" --client-secret="$LOOKERSDK_CLIENT_SECRET" --dev auth add-access-token
+
+      - name: Run LookML Validator & Data Tests
+        if: steps.snapshots.outputs.has_lookml == 'true'
+        env:
+          LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
+          PROJECT_ID: ${{ secrets.LOOKER_PROJECT_NAME || vars.LOOKER_PROJECT_NAME }}
+        run: |
+          OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode \
+            --file=skills/agentic-lookml-workflow/scripts/validate_and_commit_branch.py \
+            --var project_id="$PROJECT_ID")
+          echo "$OUT"
+          echo "$OUT" | jq -e '.passed == true' >/dev/null
+
+      - name: Verify Query Parity (SQL Runner vs Looker Inline Query)
+        if: steps.snapshots.outputs.has_lookml == 'true'
+        env:
+          LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
+        run: |
+          DATA_FILE=$(find ./data -name "data.json" 2>/dev/null | head -n 1 || true)
+          if [[ -z "$DATA_FILE" || ! -f "$DATA_FILE" ]]; then
+            echo "No data.json session file found, skipping query parity check."
+            exit 0
+          fi
+          OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode \
+            --file=skills/agentic-lookml-workflow/scripts/record_query_parity.py \
+            --var data_json="$(cat "$DATA_FILE")")
+          echo "$OUT"
+          echo "$OUT" | jq -e '.passed == true' >/dev/null

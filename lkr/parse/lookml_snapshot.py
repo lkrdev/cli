@@ -1,6 +1,7 @@
 """Jest-style LookML snapshot testing to guard tests, access controls, connections, and manifest."""
 
 import difflib
+import fnmatch
 import json
 import os
 import re
@@ -33,6 +34,10 @@ class LookmlSnapshotResult(BaseModel):
     passed: int = 0
     failed: int = 0
     total: int = 0
+    requires_review: bool = False
+    material_changes: list[str] = Field(default_factory=list)
+    material_change_files: list[str] = Field(default_factory=list)
+    required_reviewers: list[str] = Field(default_factory=list)
     diffs: list[str] = Field(default_factory=list)
     snapshots: dict[str, Any] = Field(default_factory=dict)
     message: str | None = None
@@ -45,16 +50,14 @@ def normalize_sql(sql: str | None) -> str | None:
     return re.sub(r"\s+", " ", sql).strip()
 
 
-def strip_positions(val: Any) -> Any:
+def strip_positions(
+    val: Any, keys: tuple[str, ...] = ("line", "position", "$p")
+) -> Any:
     """Recursively strip line and position fields for semantic equality comparisons."""
     if isinstance(val, dict):
-        return {
-            k: strip_positions(v)
-            for k, v in val.items()
-            if k not in ("line", "position", "$p")
-        }
+        return {k: strip_positions(v, keys) for k, v in val.items() if k not in keys}
     if isinstance(val, list):
-        return [strip_positions(x) for x in val]
+        return [strip_positions(x, keys) for x in val]
     return val
 
 
@@ -106,101 +109,141 @@ def _find_position(
     return (matched_file, matched_line)
 
 
+def _extract_explore_source_filters(raw_filters: Any) -> dict[str, str]:
+    out: dict[str, str] = {}
+    items = (
+        raw_filters
+        if isinstance(raw_filters, list)
+        else ([raw_filters] if raw_filters else [])
+    )
+    for item in items:
+        d = (
+            item.model_dump(exclude_none=True)
+            if isinstance(item, BaseModel)
+            else (item if isinstance(item, dict) else {})
+        )
+        if isinstance(d.get("field"), str) and d["field"]:
+            out[d["field"]] = str(d.get("value", "") or "")
+        for k, v in d.items():
+            if not k.startswith("$") and k not in ("type", "field", "value"):
+                out[k] = str(v)
+    return dict(sorted(out.items()))
+
+
+def _build_test_entry(
+    test_name: str,
+    t: LookmlTest,
+    model_name: str,
+    file_hint: str,
+    positions: Any,
+) -> dict[str, Any]:
+    exp_sources: dict[str, Any] = {}
+    explore_source_val = t.explore_source
+    if isinstance(explore_source_val, dict):
+        explore_source_dict = explore_source_val
+    elif explore_source_val is not None:
+        name = getattr(explore_source_val, "name_", None) or "explore_source"
+        explore_source_dict = {name: explore_source_val}
+    else:
+        explore_source_dict = {}
+
+    for exp_name, exp_src in sorted(explore_source_dict.items()):
+        col_dict: dict[str, Any] = {}
+        if getattr(exp_src, "column", None) and exp_src.column:
+            for c_name, c_obj in sorted(exp_src.column.items()):
+                col_dict[c_name] = {"field": getattr(c_obj, "field", None)}
+
+        derived_col_dict: dict[str, Any] = {}
+        if getattr(exp_src, "derived_column", None) and exp_src.derived_column:
+            for dc_name, dc_obj in sorted(exp_src.derived_column.items()):
+                derived_col_dict[dc_name] = {
+                    "sql": normalize_sql(getattr(dc_obj, "sql", None))
+                }
+
+        exp_entry: dict[str, Any] = {
+            "explore": exp_name,
+            "column": col_dict,
+            "derived_column": derived_col_dict if derived_col_dict else None,
+            "expression_custom_filter": normalize_sql(
+                getattr(exp_src, "expression_custom_filter", None)
+            ),
+            "limit": getattr(exp_src, "limit", None),
+            "timezone": getattr(exp_src, "timezone", None),
+        }
+        if filters_dict := _extract_explore_source_filters(
+            getattr(exp_src, "filters", None)
+        ):
+            exp_entry["filters"] = filters_dict
+        exp_sources[exp_name] = exp_entry
+
+    assert_dict: dict[str, Any] = {}
+    if isinstance(t.assert_, dict):
+        for a_name, a_obj in sorted(t.assert_.items()):
+            assert_dict[a_name] = {
+                "expression": normalize_sql(getattr(a_obj, "expression", None))
+            }
+    elif isinstance(t.assert_, list):
+        for a_idx, a_obj in enumerate(t.assert_):
+            a_name = getattr(a_obj, "name_", f"assert_{a_idx}") or f"assert_{a_idx}"
+            assert_dict[a_name] = {
+                "expression": normalize_sql(getattr(a_obj, "expression", None))
+            }
+
+    f_path, line_no = _find_position(positions, file_hint, ["test", test_name])
+    return {
+        "name": test_name,
+        "model": model_name,
+        "file": f_path,
+        "line": line_no,
+        "explore_source": exp_sources,
+        "assert": assert_dict,
+    }
+
+
 def extract_tests_snapshot(
     project: LookmlProject,
     model_filter: str | None = None,
 ) -> dict[str, Any]:
     """Extract and normalize all LookML data tests."""
     tests_out: dict[str, Any] = {}
-    if not project.model:
-        return tests_out
-
     positions = project.positions
+    seen_tests: set[str] = set()
 
-    for model_name, model_obj in sorted(project.model.items()):
-        if model_filter and model_name != model_filter:
-            continue
-        if not model_obj.test:
-            continue
-
-        for test_name, test_val in sorted(model_obj.test.items()):
+    def _add_tests(
+        raw_tests: dict[str, Any] | None, model_name: str, file_hint: str
+    ) -> None:
+        for test_name, test_val in sorted((raw_tests or {}).items()):
             tests_list = test_val if isinstance(test_val, list) else [test_val]
             for idx, t in enumerate(tests_list):
-                if not isinstance(t, LookmlTest):
-                    continue
-
-                snap_key = f"{model_name}.{test_name}" if len(tests_list) == 1 else f"{model_name}.{test_name}_{idx}"
-
-                # Extract explore_source
-                exp_sources: dict[str, Any] = {}
-                explore_source_val = t.explore_source
-                if isinstance(explore_source_val, dict):
-                    explore_source_dict = explore_source_val
-                elif explore_source_val is not None:
-                    name = (
-                        getattr(explore_source_val, "name_", None) or "explore_source"
+                if isinstance(t, LookmlTest):
+                    key = (
+                        f"{model_name}.{test_name}"
+                        if len(tests_list) == 1
+                        else f"{model_name}.{test_name}_{idx}"
                     )
-                    explore_source_dict = {name: explore_source_val}
-                else:
-                    explore_source_dict = {}
+                    if key in tests_out:
+                        continue
+                    tests_out[key] = _build_test_entry(
+                        test_name, t, model_name, file_hint, positions
+                    )
+                    seen_tests.add(test_name)
 
-                for exp_name, exp_src in sorted(explore_source_dict.items()):
-                    col_dict: dict[str, Any] = {}
-                    if getattr(exp_src, "column", None) and exp_src.column:
-                        for c_name, c_obj in sorted(exp_src.column.items()):
-                            col_dict[c_name] = {"field": getattr(c_obj, "field", None)}
+    for model_name, model_obj in sorted((project.model or {}).items()):
+        if not model_filter or model_name == model_filter:
+            _add_tests(model_obj.test, model_name, f"{model_name}.model")
 
-                    derived_col_dict: dict[str, Any] = {}
-                    if (
-                        getattr(exp_src, "derived_column", None)
-                        and exp_src.derived_column
-                    ):
-                        for dc_name, dc_obj in sorted(
-                            exp_src.derived_column.items()
-                        ):
-                            derived_col_dict[dc_name] = {
-                                "sql": normalize_sql(getattr(dc_obj, "sql", None))
-                            }
-
-                    exp_sources[exp_name] = {
-                        "explore": exp_name,
-                        "column": col_dict,
-                        "derived_column": derived_col_dict
-                        if derived_col_dict
-                        else None,
-                        "expression_custom_filter": normalize_sql(
-                            getattr(exp_src, "expression_custom_filter", None)
-                        ),
-                        "limit": getattr(exp_src, "limit", None),
-                        "timezone": getattr(exp_src, "timezone", None),
-                    }
-
-                # Extract assertions
-                assert_dict: dict[str, Any] = {}
-                if isinstance(t.assert_, dict):
-                    for a_name, a_obj in sorted(t.assert_.items()):
-                        assert_dict[a_name] = {
-                            "expression": normalize_sql(getattr(a_obj, "expression", None))
-                        }
-                elif isinstance(t.assert_, list):
-                    for a_idx, a_obj in enumerate(t.assert_):
-                        a_name = getattr(a_obj, "name_", f"assert_{a_idx}") or f"assert_{a_idx}"
-                        assert_dict[a_name] = {
-                            "expression": normalize_sql(getattr(a_obj, "expression", None))
-                        }
-
-                # Position lookup
-                file_hint = f"{model_name}.model"
-                f_path, line_no = _find_position(positions, file_hint, ["test", test_name])
-
-                tests_out[snap_key] = {
-                    "name": test_name,
-                    "model": model_name,
-                    "file": f_path,
-                    "line": line_no,
-                    "explore_source": exp_sources,
-                    "assert": assert_dict,
-                }
+    if not model_filter and isinstance(project.file, BaseModel):
+        default_model = next(iter(sorted(project.model or {})), "standalone")
+        for rel_key, file_entry in sorted(
+            (getattr(project.file, "test", None) or {}).items()
+        ):
+            raw = getattr(file_entry, "test", None)
+            if isinstance(raw, dict):
+                _add_tests(
+                    {k: v for k, v in raw.items() if k not in seen_tests},
+                    default_model,
+                    f"{rel_key}.test",
+                )
 
     return tests_out
 
@@ -347,20 +390,36 @@ def extract_access_snapshot(
                                     fld_allowed_vals = [str(k) for k in raw_av]
                                 fld_allowed_vals.sort()
 
-                            if fld_req_grants or fld_allowed_vals:
+                            fld_label = (
+                                fld_obj.label if field_type == "measure" else None
+                            )
+                            if (
+                                fld_req_grants
+                                or fld_allowed_vals
+                                or fld_label is not None
+                            ):
                                 f_path, line_no = _find_position(
-                                    positions, view_file_hint, ["view", v_name, field_type, fld_name]
+                                    positions,
+                                    view_file_hint,
+                                    ["view", v_name, field_type, fld_name],
                                 )
-                                fields_out[f"{model_name}.{v_name}.{fld_name}"] = {
+                                field_entry: dict[str, Any] = {
                                     "model": model_name,
                                     "view": v_name,
                                     "field": fld_name,
                                     "field_type": field_type,
                                     "required_access_grants": fld_req_grants,
-                                    "allowed_values": fld_allowed_vals if fld_allowed_vals else None,
+                                    "allowed_values": fld_allowed_vals
+                                    if fld_allowed_vals
+                                    else None,
                                     "file": f_path,
                                     "line": line_no,
                                 }
+                                if fld_label is not None:
+                                    field_entry["label"] = fld_label
+                                fields_out[f"{model_name}.{v_name}.{fld_name}"] = (
+                                    field_entry
+                                )
 
     return {
         "access_grants": grants_out,
@@ -506,6 +565,183 @@ def format_jest_diff(
     return f"{header}\n- Snapshot\n+ Received\n\n{diff_body}"
 
 
+_META_KEYS = ("file", "line", "position", "$p")
+
+
+def _match_codeowner_pattern(pattern: str, rel_path: str) -> bool:
+    rel = rel_path.strip("/")
+    pat = pattern.strip()
+    if not pat:
+        return False
+    if pat == "*":
+        return True
+    if pat.endswith("/"):
+        prefix = pat.strip("/")
+        if pat.startswith("/"):
+            return rel == prefix or rel.startswith(f"{prefix}/")
+        return (
+            rel == prefix
+            or rel.startswith(f"{prefix}/")
+            or f"/{prefix}/" in f"/{rel}"
+        )
+    anchored = pat.startswith("/")
+    clean = pat.lstrip("/")
+    if (
+        "/" not in clean
+        and not anchored
+        and fnmatch.fnmatchcase(Path(rel).name, clean)
+    ):
+        return True
+    if "**" in clean:
+        regex = (
+            ("^" if anchored else "^(?:.*/)?")
+            + re.escape(clean)
+            .replace(r"\*\*/", "(?:.+/)?")
+            .replace(r"\*\*", ".*")
+            .replace(r"\*", "[^/]*")
+            .replace(r"\?", "[^/]")
+            + "$"
+        )
+        return bool(re.match(regex, rel))
+    return fnmatch.fnmatchcase(rel, clean) or (
+        not anchored and fnmatch.fnmatchcase(rel, f"*/{clean}")
+    )
+
+
+def resolve_codeowners(root_path: Path, files: list[str]) -> list[str]:
+    """Resolve GitHub CODEOWNERS (last matching pattern wins) for relative file paths."""
+    if not files:
+        return []
+    codeowners_file: Path | None = None
+    owner_root = root_path.resolve()
+    for base in [owner_root, *owner_root.parents]:
+        for rel_candidate in (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"):
+            cand = base / rel_candidate
+            if cand.is_file():
+                codeowners_file = cand
+                owner_root = base
+                break
+        if codeowners_file is not None or (base / ".git").exists():
+            break
+    if codeowners_file is None:
+        return []
+
+    rel_prefix = (
+        root_path.resolve().relative_to(owner_root).as_posix()
+        if owner_root != root_path.resolve()
+        else ""
+    )
+    rules: list[tuple[str, list[str]]] = []
+    for raw_line in codeowners_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if line:
+            parts = line.split()
+            rules.append(
+                (parts[0], [p.lstrip("@") for p in parts[1:] if p.lstrip("@")])
+            )
+
+    owners: list[str] = []
+    for f in files:
+        matched: list[str] = []
+        for pat, pat_owners in rules:
+            if _match_codeowner_pattern(pat, f) or (
+                rel_prefix and _match_codeowner_pattern(pat, f"{rel_prefix}/{f}")
+            ):
+                matched = pat_owners
+        for o in matched:
+            if o not in owners:
+                owners.append(o)
+    return owners
+
+
+def find_material_changes(
+    obj_name: str,
+    saved_data: Any,
+    current_data: Any,
+    files_out: list[str] | None = None,
+) -> list[str]:
+    """Return human-readable descriptions of material (non-additive) changes between saved and current snapshot data."""
+    saved = strip_positions(saved_data)
+    current = strip_positions(current_data)
+    changes: list[str] = []
+
+    def _record_file(f: str | None) -> None:
+        if f and files_out is not None and f not in files_out:
+            files_out.append(f)
+
+    if (
+        obj_name == "connections"
+        and isinstance(saved, dict)
+        and isinstance(current, dict)
+    ):
+        for k in sorted(set(saved) | set(current)):
+            f_ref = (saved.get(k) or current.get(k) or {}).get("file")
+            if k not in current:
+                changes.append(
+                    f"connections.{k}: removed (was {saved[k].get('connection')!r})"
+                )
+                _record_file(f_ref)
+            elif k not in saved:
+                changes.append(
+                    f"connections.{k}: added ({current[k].get('connection')!r})"
+                )
+                _record_file(f_ref)
+            elif strip_positions(saved[k], _META_KEYS) != strip_positions(
+                current[k], _META_KEYS
+            ):
+                changes.append(
+                    f"connections.{k}.connection: changed from {saved[k].get('connection')!r} to {current[k].get('connection')!r}"
+                )
+                _record_file(f_ref)
+        return changes
+
+    def _walk(
+        s: Any, c: Any, path: str, cur_file: str | None = None
+    ) -> None:
+        if strip_positions(s, _META_KEYS) == strip_positions(c, _META_KEYS) or (
+            s is None and isinstance(c, (dict, list))
+        ):
+            return
+        f_here = (
+            (s.get("file") if isinstance(s, dict) else None)
+            or (c.get("file") if isinstance(c, dict) else None)
+            or cur_file
+        )
+        if isinstance(s, dict):
+            if not isinstance(c, dict):
+                changes.append(
+                    f"{path}: removed (was {strip_positions(s, _META_KEYS)!r})"
+                )
+                _record_file(f_here)
+                return
+            for k, sv in sorted(s.items()):
+                if k == "file":
+                    continue
+                sub = f"{path}.{k}"
+                if k not in c:
+                    f_sub = (
+                        sv.get("file") if isinstance(sv, dict) else None
+                    ) or f_here
+                    changes.append(
+                        f"{sub}: removed (was {strip_positions(sv, _META_KEYS)!r})"
+                    )
+                    _record_file(f_sub)
+                else:
+                    _walk(sv, c[k], sub, f_here)
+            return
+        if isinstance(s, list) and isinstance(c, list) and path == "manifest.includes":
+            for item in s:
+                if item not in c:
+                    changes.append(f"{path}: removed {item!r}")
+                    _record_file(f_here)
+            return
+        changes.append(f"{path}: changed from {s!r} to {c!r}")
+        _record_file(f_here)
+
+    _walk(saved, current, obj_name)
+    return changes
+
+
 def run_lookml_snapshot(
     path: Path,
     update: bool = False,
@@ -513,142 +749,222 @@ def run_lookml_snapshot(
     only: str | None = None,
     model: str | None = None,
     format_: Literal["console", "json"] = "console",
+    allow_additions: bool = False,
+    base_path: Path | None = None,
 ) -> tuple[LookmlSnapshotResult, str]:
     """Execute LookML snapshot comparison and return (result, console_output)."""
     resolved_path = path.resolve()
-    if not resolved_path.exists() or not resolved_path.is_dir():
-        msg = f"LookML directory not found: {resolved_path}"
+
+    def _fail(msg: str) -> tuple[LookmlSnapshotResult, str]:
         logger.error(msg)
         return (
             LookmlSnapshotResult(
-                success=False,
-                project=resolved_path.name,
-                failed=1,
-                message=msg,
+                success=False, project=resolved_path.name, failed=1, message=msg
             ),
             msg,
         )
 
-    # Determine CI mode from argument or environment variable
+    if not resolved_path.exists() or not resolved_path.is_dir():
+        return _fail(f"LookML directory not found: {resolved_path}")
+
+    resolved_base_path: Path | None = None
+    base_project: LookmlProject | None = None
+    if base_path is not None:
+        resolved_base_path = base_path.resolve()
+        if not resolved_base_path.exists() or not resolved_base_path.is_dir():
+            return _fail(f"Base LookML directory not found: {resolved_base_path}")
+        if any(resolved_base_path.rglob("*.lkml")):
+            base_project = parse_lookml(path=resolved_base_path)
+
     ci_mode = ci or os.getenv("CI", "").strip().lower() in ("true", "1")
 
-    # Determine objects to process
     if only:
-        requested = [x.strip() for x in only.split(",") if x.strip()]
-        for req in requested:
+        target_objects = [x.strip() for x in only.split(",") if x.strip()]
+        for req in target_objects:
             if req not in VALID_SNAPSHOT_OBJECTS:
-                msg = f"Invalid snapshot object '{req}'. Allowed objects: {', '.join(VALID_SNAPSHOT_OBJECTS)}"
-                logger.error(msg)
-                return (
-                    LookmlSnapshotResult(
-                        success=False,
-                        project=resolved_path.name,
-                        failed=1,
-                        message=msg,
-                    ),
-                    msg,
+                return _fail(
+                    f"Invalid snapshot object '{req}'. Allowed objects: {', '.join(VALID_SNAPSHOT_OBJECTS)}"
                 )
-        target_objects = requested
     else:
         target_objects = list(VALID_SNAPSHOT_OBJECTS)
 
-    # Parse LookML project
     project = parse_lookml(path=resolved_path)
     proj_name = _resolve_project_name(project, resolved_path)
-
     snapshot_dir = resolved_path / "__snapshots__"
+
+    def _write_snap(target: Path, data: Any) -> None:
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
 
     written_count = 0
     updated_count = 0
     passed_count = 0
     failed_count = 0
     diff_reports: list[str] = []
+    material_changes: list[str] = []
+    material_change_files: list[str] = []
     snapshots_out: dict[str, Any] = {}
 
     for obj_name in target_objects:
         snap_file = snapshot_dir / f"{proj_name}.{obj_name}.snap"
-        current_data = extract_snapshot_for_object(obj_name, project, model_filter=model)
+        current_data = extract_snapshot_for_object(
+            obj_name, project, model_filter=model
+        )
         snapshots_out[obj_name] = current_data
 
-        if not snap_file.exists():
+        saved_data: dict[str, Any] | None = None
+        if base_project is not None:
+            saved_data = extract_snapshot_for_object(
+                obj_name, base_project, model_filter=model
+            )
+        elif resolved_base_path is not None:
+            candidate_snaps = [
+                resolved_base_path / "__snapshots__" / f"{proj_name}.{obj_name}.snap",
+                resolved_base_path / f"{proj_name}.{obj_name}.snap",
+            ]
+            base_snap = next((p for p in candidate_snaps if p.exists()), None)
+            if base_snap is not None:
+                try:
+                    saved_data = json.loads(base_snap.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError) as e:
+                    failed_count += 1
+                    diff_reports.append(
+                        f"FAIL {obj_name} ({base_snap})\n  Could not read snapshot file: {e}"
+                    )
+                    continue
+            else:
+                saved_data = {}
+
+        if model:
+            existing = saved_data
+            if existing is None and snap_file.exists():
+                try:
+                    existing = json.loads(snap_file.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError) as e:
+                    logger.debug(f"Could not merge snapshot for model {model}: {e}")
+            if isinstance(existing, dict):
+                merged = {
+                    k: v
+                    for k, v in existing.items()
+                    if k != model and not k.startswith(f"{model}.")
+                }
+                for k, v in current_data.items():
+                    if isinstance(v, dict) and isinstance(existing.get(k), dict):
+                        merged[k] = {
+                            **{
+                                sk: sv
+                                for sk, sv in existing[k].items()
+                                if not sk.startswith(f"{model}.")
+                            },
+                            **v,
+                        }
+                    else:
+                        merged[k] = v
+                current_data = merged
+
+        if saved_data is None and not snap_file.exists():
             if ci_mode:
                 failed_count += 1
                 diff_reports.append(
                     f"FAIL {obj_name} ({snap_file})\n  Snapshot file missing in CI mode: {snap_file.name}"
                 )
             else:
-                # First run locally: write snapshot
-                snapshot_dir.mkdir(parents=True, exist_ok=True)
-                snap_file.write_text(
-                    json.dumps(current_data, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
+                _write_snap(snap_file, current_data)
                 written_count += 1
-        elif update:
-            # Update existing snapshot in place
-            if model and snap_file.exists():
-                try:
-                    existing_data = json.loads(snap_file.read_text(encoding="utf-8"))
-                    if isinstance(existing_data, dict):
-                        # Merge model-scoped entries (supporting nested structures like access snapshots)
-                        merged = dict(existing_data)
-                        for k, v in current_data.items():
-                            if isinstance(v, dict) and isinstance(merged.get(k), dict):
-                                merged_sub = dict(merged[k])
-                                for sub_k, sub_v in v.items():
-                                    merged_sub[sub_k] = sub_v
-                                merged[k] = merged_sub
-                            else:
-                                merged[k] = v
-                        current_data = merged
-                except (json.JSONDecodeError, OSError) as e:
-                    logger.debug(f"Could not merge snapshot for model {model}: {e}")
-
-            snapshot_dir.mkdir(parents=True, exist_ok=True)
-            snap_file.write_text(
-                json.dumps(current_data, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
+        elif update and not allow_additions:
+            _write_snap(snap_file, current_data)
             updated_count += 1
         else:
-            # Verify against existing snapshot
-            try:
-                saved_data = json.loads(snap_file.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError) as e:
-                failed_count += 1
-                diff_reports.append(
-                    f"FAIL {obj_name} ({snap_file})\n  Could not read snapshot file: {e}"
-                )
-                continue
+            if saved_data is None:
+                try:
+                    saved_data = json.loads(snap_file.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError) as e:
+                    failed_count += 1
+                    diff_reports.append(
+                        f"FAIL {obj_name} ({snap_file})\n  Could not read snapshot file: {e}"
+                    )
+                    continue
 
-            # Semantic equality check (excluding line numbers)
-            if strip_positions(saved_data) == strip_positions(current_data):
+            obj_material = find_material_changes(
+                obj_name, saved_data, current_data, files_out=material_change_files
+            )
+            if obj_material:
+                snap_rel = f"__snapshots__/{proj_name}.{obj_name}.snap"
+                if snap_rel not in material_change_files:
+                    material_change_files.append(snap_rel)
+            material_changes.extend(obj_material)
+
+            if allow_additions:
+                if not obj_material:
+                    if update:
+                        _write_snap(snap_file, current_data)
+                        updated_count += 1
+                    else:
+                        passed_count += 1
+                else:
+                    failed_count += 1
+                    diff_str = format_jest_diff(
+                        obj_name, snap_file, saved_data, current_data
+                    )
+                    mat_str = "Material changes requiring review:\n" + "\n".join(
+                        f"  - {c}" for c in obj_material
+                    )
+                    diff_reports.append(
+                        f"FAIL {obj_name} ({snap_file})\n{mat_str}\n{diff_str}"
+                    )
+            elif strip_positions(saved_data) == strip_positions(current_data):
                 passed_count += 1
             else:
                 failed_count += 1
-                diff_str = format_jest_diff(obj_name, snap_file, saved_data, current_data)
+                diff_str = format_jest_diff(
+                    obj_name, snap_file, saved_data, current_data
+                )
                 diff_reports.append(f"FAIL {obj_name} ({snap_file})\n{diff_str}")
 
     success = failed_count == 0
+    requires_review = bool(material_changes)
+    required_reviewers = (
+        resolve_codeowners(resolved_path, material_change_files)
+        if requires_review
+        else []
+    )
     total = len(target_objects)
 
     # Build console output message
     console_lines: list[str] = []
     if diff_reports:
         console_lines.extend(diff_reports)
+        if required_reviewers:
+            console_lines.append(
+                f"Required CODEOWNERS: {', '.join(required_reviewers)}"
+            )
         console_lines.append("")
 
     summary_parts: list[str] = []
     if written_count > 0:
-        summary_parts.append(f"{written_count} snapshot{'s' if written_count != 1 else ''} written")
+        summary_parts.append(
+            f"{written_count} snapshot{'s' if written_count != 1 else ''} written"
+        )
     if updated_count > 0:
-        summary_parts.append(f"{updated_count} snapshot{'s' if updated_count != 1 else ''} updated")
+        summary_parts.append(
+            f"{updated_count} snapshot{'s' if updated_count != 1 else ''} updated"
+        )
     if passed_count > 0:
-        summary_parts.append(f"{passed_count} snapshot{'s' if passed_count != 1 else ''} passed")
+        summary_parts.append(
+            f"{passed_count} snapshot{'s' if passed_count != 1 else ''} passed"
+        )
     if failed_count > 0:
-        summary_parts.append(f"{failed_count} snapshot{'s' if failed_count != 1 else ''} failed")
+        summary_parts.append(
+            f"{failed_count} snapshot{'s' if failed_count != 1 else ''} failed"
+        )
 
-    summary_msg = f"Snapshots: {', '.join(summary_parts)} ({total} total)" if summary_parts else "No snapshots evaluated"
+    summary_msg = (
+        f"Snapshots: {', '.join(summary_parts)} ({total} total)"
+        if summary_parts
+        else "No snapshots evaluated"
+    )
     console_lines.append(summary_msg)
     console_output = "\n".join(console_lines)
 
@@ -660,6 +976,10 @@ def run_lookml_snapshot(
         passed=passed_count,
         failed=failed_count,
         total=total,
+        requires_review=requires_review,
+        material_changes=material_changes,
+        material_change_files=material_change_files,
+        required_reviewers=required_reviewers,
         diffs=diff_reports,
         snapshots=snapshots_out,
         message=summary_msg,

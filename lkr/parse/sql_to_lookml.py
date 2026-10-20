@@ -13,6 +13,7 @@ from sqlglot import exp
 from lkr.logger import logger
 from lkr.parse.constants import SQL_TO_LOOKML_DOC
 from lkr.parse.dag import (
+    _LOOKML_REF_RE,
     LookmlExploreJoinGraph,
     LookmlExploreJoinNode,
     _as_list,
@@ -66,9 +67,6 @@ from lkr.parse.types import (
     SqlToLookmlResult,
 )
 
-_SQL_TABLE_NAME_RE = re.compile(
-    r"\$\{\s*([a-zA-Z0-9_]+)\.SQL_TABLE_NAME\s*\}", re.IGNORECASE
-)
 _TABLE_COL_RE = re.compile(
     r"\$\{TABLE\}\s*\.\s*(?:[`\"'\[]([^`\"'\]]+)[`\"'\]]|([a-zA-Z0-9_]+))",
     re.IGNORECASE,
@@ -1090,6 +1088,96 @@ def _chain_sub_loc(
     )
 
 
+def _preprocess_dt_sql(
+    raw_sql: str,
+    vname: str,
+    vobj: LookmlView,
+    model_views: dict[str, LookmlView],
+    alias_to_view: dict[str, str],
+) -> str:
+    # ponytail: lightweight regex expansion of {{ _table }}, {{ field._sql }}, ${EXTENDED}, and ${field} for SQLGlot lineage extraction
+    def _resolve_field_sql(t_view: str, qual: str, fname: str, depth: int = 0) -> str:
+        tv = (
+            model_views.get(t_view)
+            or model_views.get(alias_to_view.get(t_view.lower(), ""))
+            if depth <= 6
+            else None
+        )
+        fl = fname.lower()
+        fobj = next(
+            (
+                fo
+                for _, fn, fo in (_iter_view_fields(tv) if tv else ())
+                if fn.lower() == fl
+                or (
+                    isinstance(fo, LookmlDimensionGroup)
+                    and any(
+                        c.lower() == fl
+                        for c in (
+                            *(f"{fn}_{tf}" for tf in (fo.timeframes or ())),
+                            *(f"{iv}s_{fn}" for iv in (fo.intervals or ())),
+                        )
+                    )
+                )
+            ),
+            None,
+        )
+        if fobj is None:
+            return f"{qual}.{fname}"
+        whens = [
+            f"WHEN {w.sql} THEN 1"
+            for w in _as_list(getattr(getattr(fobj, "case", None), "when", None))
+            if getattr(w, "sql", None)
+        ]
+        expr = (
+            getattr(fobj, "sql", None)
+            or (f"CASE {' '.join(whens)} END" if whens else None)
+            or (
+                f"COALESCE({getattr(fobj, 'sql_start', None) or '1'}, {getattr(fobj, 'sql_end', None) or '1'})"
+                if getattr(fobj, "sql_start", None) or getattr(fobj, "sql_end", None)
+                else None
+            )
+        )
+        if not expr:
+            return "COUNT(*)" if getattr(fobj, "type", None) == "count" else f"{qual}.{fname}"
+        s = _LOOKML_REF_RE.sub(
+            lambda m: _expand_tok(m.group(1) or m.group(2), t_view, qual, depth + 1),
+            str(expr).strip(),
+        )
+        return f"({s})"
+
+    def _expand_tok(ref: str, cur_view: str, cur_qual: str, depth: int = 0) -> str:
+        ru = ref.upper()
+        if ru == "TABLE":
+            return cur_qual
+        if ru.endswith(".SQL_TABLE_NAME"):
+            return f"__lkml_tbl_{ref.split('.', 1)[0]}"
+        if "." in ref:
+            pfx, fld = ref.split(".", 1)
+            if pfx in ("_view", "_field", "_model", "_explore"):
+                return _resolve_field_sql(cur_view, cur_qual, fld, depth)
+            return _resolve_field_sql(alias_to_view.get(pfx.lower(), pfx), pfx, fld, depth)
+        return _resolve_field_sql(cur_view, cur_qual, ref, depth)
+
+    s = raw_sql.strip().rstrip(";").strip()
+    if exts := [e for e in _as_list(vobj.extends) if isinstance(e, str)]:
+        s = re.sub(r"\$\{\s*EXTENDED\s*\}\s*\.\s*\*", "*", s, flags=re.IGNORECASE)
+        s = re.sub(
+            r"\(?\s*\$\{\s*EXTENDED\s*\}\s*\)?",
+            f"__lkml_tbl_{exts[-1]}",
+            s,
+            flags=re.IGNORECASE,
+        )
+    s = re.sub(r"\{\{\s*(?:_table|_view\._name)\s*\}\}", vname, s)
+    s = re.sub(r"\{\{\s*([a-zA-Z0-9_]+)\._name\s*\}\}", r"\1", s)
+    s = _LOOKML_REF_RE.sub(
+        lambda m: _expand_tok(m.group(1) or m.group(2), vname, vname), s
+    )
+    s = re.sub(r"\{%\s*parameter\s+[^%]+%\}", "1", s, flags=re.IGNORECASE)
+    s = re.sub(r"\{%.*?%\}", " ", s, flags=re.DOTALL)
+    return re.sub(r"\{\{.*?\}\}", "1", s, flags=re.DOTALL)
+
+
 def _match_model_views(
     pq: ParsedQuery,
     model_name: str,
@@ -1130,6 +1218,22 @@ def _match_model_views(
         vname: _build_chain(vname, view_base_decls, view_ref_decls)
         for vname in model_views
     }
+    for vname, chain in view_chains.items():
+        vobj = model_views[vname]
+        if (
+            vobj.derived_table
+            and vobj.sql_table_name
+            and next(
+                (
+                    bool(getattr(v, "derived_table", None))
+                    for _, v, _ in reversed(chain)
+                    if getattr(v, "derived_table", None)
+                    or getattr(v, "sql_table_name", None)
+                ),
+                False,
+            )
+        ):
+            model_views[vname] = vobj.model_copy(update={"sql_table_name": None})
     self_names_by_view = {
         vname: {v.name_.lower() for _, v, _ in chain if v.name_} | {vname.lower()}
         for vname, chain in view_chains.items()
@@ -1138,6 +1242,7 @@ def _match_model_views(
     aliases_for_view: dict[str, set[str]] = {
         vname: {vname.lower()} for vname in model_views
     }
+    alias_to_view: dict[str, str] = {vname.lower(): vname for vname in model_views}
     for exp_name, exp_obj in (model_obj.explore or {}).items():
         if not isinstance(exp_obj, LookmlExplore):
             continue
@@ -1146,9 +1251,11 @@ def _match_model_views(
             exp_name, exp_obj, exp_chain, model_views
         )
         aliases_for_view.setdefault(b_view, {b_view.lower()}).add(b_alias.lower())
+        alias_to_view.setdefault(b_alias.lower(), b_view)
         for j_name, j_obj in (exp_obj.join or {}).items():
             jv_name = j_obj.from_ or j_obj.view_name or j_name
             aliases_for_view.setdefault(jv_name, {jv_name.lower()}).add(j_name.lower())
+            alias_to_view.setdefault(j_name.lower(), jv_name)
 
     test_infos = _collect_model_test_infos(
         model_name=model_name,
@@ -1234,8 +1341,8 @@ def _match_model_views(
                     f"__lkml_tbl_{vname.lower()}", {}
                 ).setdefault(c_low, "UNKNOWN")
         if dt.sql:
-            clean_dt_sql = _SQL_TABLE_NAME_RE.sub(
-                r"__lkml_tbl_\1", dt.sql.strip().rstrip(";").strip()
+            clean_dt_sql = _preprocess_dt_sql(
+                dt.sql, vname, vobj, model_views, alias_to_view
             )
             dt_dialect = "bigquery" if "`" in clean_dt_sql else None
             try:
@@ -1274,6 +1381,9 @@ def _match_model_views(
                         default_schema=eff_schema,
                     )
                     for out_col, origins in _extract_dt_lineage(opt_dt).items():
+                        dt_schema[""][""].setdefault(
+                            f"__lkml_tbl_{vname.lower()}", {}
+                        ).setdefault(out_col, "UNKNOWN")
                         for src_origin, base_col in origins:
                             if isinstance(src_origin, TableRef):
                                 dt_raw_cols_by_view.setdefault(vname, []).append(

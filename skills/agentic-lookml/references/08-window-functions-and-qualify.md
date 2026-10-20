@@ -45,7 +45,10 @@ FROM `project.dataset.orders`;
 
 In LookML Native Derived Tables (`explore_source:`), `derived_column:` runs after the query's `GROUP BY` clause. Use `derived_column:` when the window function operates on aggregated measures, such as ranking entities by total spend or computing percent of total across aggregated groups.
 
-When a window function must execute on un-aggregated, row-level records before any grouping occurs (such as calculating the delta between consecutive raw event timestamps, event sessionization, or row-by-row sequencing while retaining all 50+ base columns), an NDT grouping by columns can alter the grain or require enumerating every column. Instead, create a derived view using `extends: [base_view]` with a SQL derived table referencing `${EXTENDED}` (`SELECT ${EXTENDED}.*, ... FROM ${EXTENDED}`) to compute the row-level window expression over raw rows while inheriting all base dimensions and measures. Never alias `FROM ${EXTENDED} AS base_view` when selecting `${EXTENDED}.*`, because aliasing the subquery invalidates the `${EXTENDED}.*` qualifier in BigQuery.
+When a window function must execute on un-aggregated, row-level records before any grouping occurs (such as calculating the delta between consecutive raw event timestamps, event sessionization, or row-by-row sequencing), you have two options:
+
+1. If you only need a subset of columns in an NDT (`explore_source:`) and want `derived_column:` to run over raw un-grouped rows without pulling a primary key into the projection, bare-join `bronze/common_helpers.view.lkml` (`join: common_helpers { sql: ;; relationship: one_to_one }`) into the Explore with `cancel_grouping_fields: [common_helpers.no_group]` and include `column: _no_group { field: common_helpers.no_group }` in the NDT. Looker omits the inner `GROUP BY` clause completely while projecting only `1 AS _no_group`.
+2. If you want to retain all 50+ base columns and inherited dimensions/measures from a Bronze view, create a derived view using `extends: [base_view]` with a SQL derived table referencing `FROM (${EXTENDED}) AS {{ _table }}` (or `FROM ${base_view.SQL_TABLE_NAME} AS {{ _table }}`) and `SELECT {{ _table }}.*, ...` with `{{ field._sql }}`. Never alias `FROM ${EXTENDED} AS base_view` when selecting `${EXTENDED}.*`, because aliasing the subquery invalidates the `${EXTENDED}.*` qualifier in BigQuery.
 
 When running totals, percent of total, or period-over-period differences belong at the query layer (Table Calculations), pre-populate the underlying modeled dimensions, measures, filters, and sorts in a named `query:` Quick Start block on the Silver Explore (`silver/explores/:name.explore.lkml`), and define the Table Calculations (`running_total()`, `offset()`) in the Query or Dashboard Layer (`dynamic_fields` on the Looker `WriteQuery` / `run_inline_query` payload, Saved Look, or `.dashboard.lookml` tile). Never place `table_calculations`, `custom_fields`, or `dynamic_fields` inside an `explore: { query: {} }` LookML block, because Looker's `explore: { query: {} }` syntax only accepts modeled `dimensions`, `measures`, `filters`, `pivots`, `subtotals`, `limit`, `sorts`, `timezone`, and `description`.
 
@@ -55,9 +58,9 @@ When running totals, percent of total, or period-over-period differences belong 
 | :--- | :--- | :--- |
 | Display window / running total (`SUM(x) / SUM(SUM(x)) OVER ()`, running totals, `LAG(SUM(x))`) | Post-aggregation display | Query Layer (Table Calculation in `WriteQuery` / dashboard) + Quick Start `query:` for base fields on the Explore (`silver/explores/:name.explore.lkml`). Zero derived tables. |
 | Aggregated entity ranking (`RANK() OVER (ORDER BY SUM(sale_price) DESC)`) | Post-`GROUP BY` | Silver NDT (`explore_source:`): `derived_column:` executes after `GROUP BY`. Join back on `PK = FK`. |
-| Raw event sequencing / timestamp deltas (`LAG(event_time) OVER (PARTITION BY user_id ORDER BY event_time)`) | Pre-`GROUP BY` (raw row grain) | Silver Derived View (`extends: [base_view]`): SDT using `SELECT ${EXTENDED}.*, LAG(${base_view.event_raw}) OVER (...) FROM ${EXTENDED}` keeping raw grain and all inherited fields. |
+| Raw event sequencing / timestamp deltas (`LAG(event_time) OVER (PARTITION BY user_id ORDER BY event_time)`) | Pre-`GROUP BY` (raw row grain) | Silver Derived View (`extends: [base_view]`): PDT-safe SDT using `SELECT {{ _table }}.*, LAG({{ event_raw._sql }}) OVER (...) FROM (${EXTENDED}) AS {{ _table }}` (or `FROM ${base_view.SQL_TABLE_NAME} AS {{ _table }}`) keeping raw grain and all inherited fields. |
 | Dynamic filter-dependent ranking ("Top 10 within selected dashboard date/region filters") | Runtime filter-dependent | Gold NDT (`gold/:name.view.lkml`): `explore_source:` + `derived_column:` + `bind_all_filters: yes`, exposed in Gold Explore (`extends: [silver]`, `view_name: :base`, `tags: ["gold"]`, `always_filter:`). |
-| CDC ingestion deduplication (`QUALIFY ROW_NUMBER() ... = 1`) | Ingestion row level | Silver SDT (`extends: [bronze_view]`): `SELECT * FROM ${bronze_view.SQL_TABLE_NAME} AS bronze_view QUALIFY ROW_NUMBER() OVER (PARTITION BY ${bronze_view.pk} ORDER BY ${bronze_view.updated_raw} DESC) = 1`. (Multi-table `AS OF` inequality `QUALIFY` belongs in Gold per Category 04.) |
+| CDC ingestion deduplication (`QUALIFY ROW_NUMBER() ... = 1`) | Ingestion row level | Silver SDT (`extends: [bronze_view]`): `SELECT * FROM ${bronze_view.SQL_TABLE_NAME} AS {{ _table }} QUALIFY ROW_NUMBER() OVER (PARTITION BY {{ pk._sql }} ORDER BY {{ updated_raw._sql }} DESC) = 1`. (Multi-table `AS OF` inequality `QUALIFY` belongs in Gold per Category 04.) |
 
 ## LookML templates
 
@@ -109,7 +112,9 @@ view: user_spending_rank {
 }
 ```
 
-### Pre-`GROUP BY` row window via `${EXTENDED}`
+### Pre-`GROUP BY` row window via `(${EXTENDED}) AS {{ _table }}` and `{{ field._sql }}`
+
+Using `FROM (${EXTENDED}) AS {{ _table }}` (or `FROM ${order_items.SQL_TABLE_NAME} AS {{ _table }}`) paired with `{{ field._sql }}` works both when extending a physical table and when extending another derived table, and is 100% PDT-safe (`forTableName = true`) without requiring a bare join on the outer Explore (see [lookml-advanced-liquid](../../lookml/sub-skills/lookml-advanced-liquid/SKILL.md)):
 
 ```lookml
 # File: silver/order_items_sequenced.view.lkml
@@ -122,12 +127,12 @@ view: order_items_sequenced {
   derived_table: {
     sql:
       SELECT
-        ${EXTENDED}.*,
-        LAG(${order_items.created_raw}) OVER (
-          PARTITION BY ${order_items.user_id}
-          ORDER BY ${order_items.created_raw} ASC
+        {{ _table }}.*,
+        LAG({{ created_raw._sql }}) OVER (
+          PARTITION BY {{ user_id._sql }}
+          ORDER BY {{ created_raw._sql }} ASC
         ) AS prior_order_timestamp
-      FROM ${EXTENDED} ;;
+      FROM (${EXTENDED}) AS {{ _table }} ;;
   }
 
   dimension_group: prior_order {
