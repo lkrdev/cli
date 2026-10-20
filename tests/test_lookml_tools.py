@@ -481,7 +481,7 @@ def test_push_and_pull_include_snap_strings_json_and_skip_generic_json(tmp_path,
     (project_dir / "ignored.json").write_text("{}")
     snap_dir = project_dir / "__snapshots__"
     snap_dir.mkdir()
-    snap_file = snap_dir / "lookml.manifest.snap.strings.json"
+    snap_file = snap_dir / "manifest.snap.strings.json"
     snap_file.write_text("{}")
     legacy_snap = snap_dir / "legacy.snap.json"
     legacy_snap.write_text("{}")
@@ -501,7 +501,7 @@ def test_push_and_pull_include_snap_strings_json_and_skip_generic_json(tmp_path,
         assert pushed_paths == {
             "orders.view.lkml",
             "en.strings.json",
-            "__snapshots__/lookml.manifest.snap.strings.json",
+            "__snapshots__/manifest.snap.strings.json",
         }
 
 
