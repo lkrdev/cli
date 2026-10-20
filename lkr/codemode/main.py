@@ -100,7 +100,9 @@ def run_python_code(
         sdk = get_mcp_sdk(ctx)
         
         external_funcs = {}
-        for name, method in inspect.getmembers(sdk, predicate=inspect.ismethod):
+        for name, method in inspect.getmembers(
+            sdk, predicate=lambda m: inspect.ismethod(m) or inspect.isfunction(m)
+        ):
             if not name.startswith('_'):
                 # Wrap in a lambda to recursively convert output to primitives
                 def make_wrapper(m):

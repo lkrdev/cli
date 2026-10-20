@@ -16,7 +16,8 @@ Usage:
 
 def _g(fn, default=""):
     try:
-        return str(fn()) or default
+        val = fn()
+        return (str(val).strip() or default) if val is not None else default
     except NameError:
         return default
 

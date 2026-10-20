@@ -50,7 +50,11 @@ def main():
 
     commit(project_id=p_id, body={"message": c_msg})  # ty: ignore[unresolved-reference]
     try:
-        post(path=f"/projects/{encode_path_param(p_id)}/push_branch", structure=str)  # ty: ignore[unresolved-reference]
+        encoded_pid = encode_path_param(p_id)  # ty: ignore[unresolved-reference]
+    except NameError:
+        encoded_pid = p_id.replace("%", "%25").replace("/", "%2F").replace(" ", "%20")
+    try:
+        post(path=f"/projects/{encoded_pid}/push_branch", structure=str)  # ty: ignore[unresolved-reference]
     except NameError:
         pass
     branch = git_branch(project_id=p_id) or {}  # ty: ignore[unresolved-reference]

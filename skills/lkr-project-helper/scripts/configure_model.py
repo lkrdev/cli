@@ -10,15 +10,15 @@ Usage:
 
 def main():
     try:
-        proj = str(project_name) or "my_new_project"  # ty: ignore[unresolved-reference]
+        proj = (str(project_name).strip() if project_name is not None else "") or "my_new_project"  # ty: ignore[unresolved-reference]
     except NameError:
         proj = "my_new_project"
     try:
-        model = str(model_name) or proj  # ty: ignore[unresolved-reference]
+        model = (str(model_name).strip() if model_name is not None else "") or proj  # ty: ignore[unresolved-reference]
     except NameError:
         model = proj
     try:
-        conn = str(connection_name)  # ty: ignore[unresolved-reference]
+        conn = str(connection_name).strip() if connection_name is not None else ""  # ty: ignore[unresolved-reference]
     except NameError:
         conn = ""
 

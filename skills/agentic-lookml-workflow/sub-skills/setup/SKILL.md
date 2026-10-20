@@ -75,7 +75,7 @@ flowchart TD
      --var project_id="$PROJECT_ID" \
      -c 'deploy_to_production(project_id=project_id)'
    ```
-7. Verify that the GitHub repository has the required Actions secrets and variables configured for `.github/workflows/lookml-pr-checks.yml` (`LOOKERSDK_BASE_URL`, `LOOKERSDK_CLIENT_ID`, `LOOKERSDK_CLIENT_SECRET`, and `LOOKER_PROJECT_NAME`, plus optional `LOOKML_REVIEWERS`):
+7. Verify that the GitHub repository has the required Actions secrets and variables configured for `.github/workflows/lookml-pr-checks.yml` (`LOOKERSDK_BASE_URL`, `LOOKERSDK_CLIENT_ID`, `LOOKERSDK_CLIENT_SECRET`, and `LOOKER_PROJECT_NAME`, plus optional `LOOKML_REVIEWERS` — `setup_repo.sh` and `create_github_pr.sh` automatically sync missing `LOOKERSDK_*` and `LOOKER_PROJECT_NAME` secrets from the active environment or `.env` via `gh secret set`):
    ```bash
    gh secret list
    gh variable list

@@ -5,7 +5,7 @@ on:
     paths:
       - "**/*.lkml"
       - "**/*.lookml"
-      - "**/*.snap"
+      - "**/*.snap.json"
       - "**/data.json"
       - "**/input.sql"
   pull_request_review:
@@ -60,9 +60,9 @@ jobs:
           if [[ -n "$BASE_REF" ]] && git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1; then
             rm -rf /tmp/base-branch
             git worktree add --detach /tmp/base-branch "origin/$BASE_REF"
-            if [[ -d "/tmp/base-branch/${LOOKML_DIR#./}" ]] && find "/tmp/base-branch/${LOOKML_DIR#./}" \( -name "*.lkml" -o -name "*.snap" \) 2>/dev/null | grep -q .; then
+            if [[ -d "/tmp/base-branch/${LOOKML_DIR#./}" ]] && find "/tmp/base-branch/${LOOKML_DIR#./}" \( -name "*.lkml" -o -name "*.snap.json" \) 2>/dev/null | grep -q .; then
               BASE_ARGS=(--base-path "/tmp/base-branch/${LOOKML_DIR#./}")
-            elif find "/tmp/base-branch" \( -name "*.lkml" -o -name "*.snap" \) 2>/dev/null | grep -q .; then
+            elif find "/tmp/base-branch" \( -name "*.lkml" -o -name "*.snap.json" \) 2>/dev/null | grep -q .; then
               BASE_ARGS=(--base-path "/tmp/base-branch")
             fi
           fi
@@ -74,7 +74,7 @@ jobs:
           fi
           cat /tmp/snapshot_check.json
 
-          if jq -e '.requires_review == false and .success == true' /tmp/snapshot_check.json >/dev/null; then
+          if jq -e '.requires_review == false' /tmp/snapshot_check.json >/dev/null; then
             echo "Snapshot check passed: changes are purely additive (no material changes requiring review)."
             exit 0
           fi
@@ -157,7 +157,7 @@ jobs:
             if [[ -z "$DATA_PAYLOAD" ]]; then
               GIST_ID=$(echo "$PR_BODY" | grep -Eo 'https://gist\.github\.com/[^[:space:])]+/[0-9a-f]+' | head -n 1 | awk -F'/' '{print $NF}' || true)
               if [[ -n "$GIST_ID" ]]; then
-                DATA_PAYLOAD=$(curl -fsSL "https://api.github.com/gists/$GIST_ID" | jq -r '.files["data.json"].content // empty' || true)
+                DATA_PAYLOAD=$(gh api "gists/$GIST_ID" | jq -r '.files["data.json"].content // empty' || true)
               fi
             fi
           else

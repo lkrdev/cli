@@ -4,12 +4,15 @@
 
 def main():
     try:
-        p_id = str(project_id).strip()  # ty: ignore[unresolved-reference]
-        c_name = str(connection_name).strip()  # ty: ignore[unresolved-reference]
+        p_id = str(project_id).strip() if project_id is not None else ""  # ty: ignore[unresolved-reference]
+        c_name = str(connection_name).strip() if connection_name is not None else ""  # ty: ignore[unresolved-reference]
     except NameError:
         return None
+    if not p_id:
+        return None
     try:
-        m_name = (str(model_name).strip() or p_id).replace("-", "_")  # ty: ignore[unresolved-reference]
+        raw_m = str(model_name).strip() if model_name is not None else ""  # ty: ignore[unresolved-reference]
+        m_name = (raw_m or p_id).replace("-", "_")
     except NameError:
         m_name = p_id.replace("-", "_")
 

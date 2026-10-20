@@ -8,7 +8,8 @@ import re
 def split_sql_statements(raw_sql: str) -> list[str]:
     out = []
     last = 0
-    for m in re.finditer(r"""('[^']*'|"[^"]*"|`[^`]*`)|(?:--[^\n]*|/\*[\s\S]*?\*/)|;""", raw_sql):
+    pattern = r"""('[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*"|`[^`\\]*(?:\\.[^`\\]*)*`)|(?:--[^\n]*|/\*[\s\S]*?\*/)|;"""
+    for m in re.finditer(pattern, raw_sql):
         if m.group(1) is not None:
             out.append(raw_sql[last : m.end()])
         elif m.group(0) == ";":
