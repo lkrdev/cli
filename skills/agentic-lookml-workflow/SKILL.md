@@ -14,7 +14,7 @@ description: >
   `summary.md`, interactive query links, and attachments referenced in `data.json`.
 ---
 
-# Agentic End-to-End SQL-to-LookML Workflow (`agentic-lookml-workflow`)
+# Agentic end-to-end SQL-to-LookML workflow (`agentic-lookml-workflow`)
 
 ```mermaid
 flowchart TD
@@ -71,13 +71,13 @@ All workflow helper scripts live in `skills/agentic-lookml-workflow/scripts/`:
   echo "$BRANCH_JSON" > "./data/$RUN_ID/data.json"
   cp "$SQL_FILE" "./data/$RUN_ID/input.sql"
   cp "$METRICS_FILE" "./data/$RUN_ID/metrics.md"
-  echo "# Agentic LookML Operations Summary (\`$RUN_ID\`)" > "./data/$RUN_ID/summary.md"
+  echo "# Agentic LookML operations summary (\`$RUN_ID\`)" > "./data/$RUN_ID/summary.md"
   ```
-- **Track high-level operations in `./data/$RUN_ID/summary.md`**: Throughout the session, append high-level operation milestones to `./data/$RUN_ID/summary.md` as defined in [agentic-lookml](../agentic-lookml/SKILL.md):
+- Throughout the session, append high-level operation milestones to `./data/$RUN_ID/summary.md` as defined in [agentic-lookml](../agentic-lookml/SKILL.md):
   1. Generating base views (`bronze/:table.view.lkml`)
   2. Deconstructing query to canonical form
-  3. Query patterns from original query (e.g., single-table with union: `simple_single_table`, `unions`)
-  4. Writing LookML (Bronze refinements, hidden base explores, Silver/Gold views and explores)
+  3. Query patterns from original query (for example, single-table with union: `simple_single_table`, `unions`)
+  4. Writing LookML (Bronze refinements, hidden base explores, Silver and Gold views and explores)
   5. Validation failures (`Validation failed: ...`) and self-healing updates (`Updating LookML: ...`)
   6. Writing and targeting LookML tests (`tests/bronze/` and `tests/silver/`)
 - Run [generate-view-from-table](../generate-view-from-table/SKILL.md) ([generate_bronze_view.py](../generate-view-from-table/scripts/generate_bronze_view.py)) for all physical tables in the SQL query every time so every `bronze/:table.view.lkml` is up to date on the branch, pull all LookML into `./data/$RUN_ID/lookml`, and log the base view generation in `./data/$RUN_ID/summary.md`:
@@ -96,7 +96,7 @@ All workflow helper scripts live in `skills/agentic-lookml-workflow/scripts/`:
   ```bash
   lkr --base-url="$BASE_URL" --dev tools lookml push "./data/$RUN_ID/lookml" --project-id="$PROJECT_ID" --no-reset
   ```
-- **Pre-Modeling & Pre-Test Verification Gate** (execute immediately after Bronze generation and *before* writing tests or finalizing Silver modeling):
+- Execute the pre-modeling and pre-test verification gate immediately after Bronze generation and before writing tests or finalizing Silver modeling:
   1. Initialize SQL Runner queries via `init_sql_queries.py` to capture `/sql/:sql_id` links in `data.json`:
      ```bash
      UPDATED_DATA=$(lkr --base-url="$BASE_URL" --dev code-mode sandbox --dev-mode \
@@ -107,7 +107,7 @@ All workflow helper scripts live in `skills/agentic-lookml-workflow/scripts/`:
        --var model_name="$MODEL_NAME")
      echo "$UPDATED_DATA" > "./data/$RUN_ID/data.json"
      ```
-  2. Run LookML Validator gate ([scripts/validate_and_commit_branch.py](scripts/validate_and_commit_branch.py)) with `--var skip_tests="true"` (omitting `commit_message`) to ensure Bronze LookML compiles cleanly without syntax or reference errors (logging any `Validation failed` and `Updating LookML` self-healing steps to `./data/$RUN_ID/summary.md`):
+  2. Run the LookML validator gate ([scripts/validate_and_commit_branch.py](scripts/validate_and_commit_branch.py)) with `--var skip_tests="true"` (omitting `commit_message`) to verify Bronze LookML compiles cleanly without syntax or reference errors, logging any `Validation failed` and `Updating LookML` self-healing steps to `./data/$RUN_ID/summary.md`:
      ```bash
      lkr --base-url="$BASE_URL" --dev code-mode sandbox --dev-mode \
        --file=skills/agentic-lookml-workflow/scripts/validate_and_commit_branch.py \
@@ -131,8 +131,7 @@ All workflow helper scripts live in `skills/agentic-lookml-workflow/scripts/`:
   ```bash
   lkr --base-url="$BASE_URL" --dev tools lookml push "./data/$RUN_ID/lookml" --project-id="$PROJECT_ID" --no-reset
   ```
-- **Target every new or additional test with `lkr code-mode` before committing**:
-  Run `run_lookml_test` targeting each newly added or modified test file (`file_id`) and test name (`test`) via `lkr code-mode sandbox --dev-mode` (use `lookup('run_lookml_test')` or `help('lookml_test')` in `code-mode` to inspect parameters) and record the results in `./data/$RUN_ID/summary.md`:
+- Target every new or additional test with `lkr code-mode` before committing by running `run_lookml_test` filtered by test file (`file_id`) and test name (`test`) via `lkr code-mode sandbox --dev-mode` (use `lookup('run_lookml_test')` or `help('lookml_test')` in `code-mode` to inspect parameters) and recording the results in `./data/$RUN_ID/summary.md`:
   ```bash
   lkr --base-url="$BASE_URL" --dev code-mode sandbox --dev-mode \
     --file=skills/agentic-lookml-workflow/scripts/validate_and_commit_branch.py \
@@ -163,12 +162,7 @@ All workflow helper scripts live in `skills/agentic-lookml-workflow/scripts/`:
 
 ## Automated GitHub PR checks (`.github/workflows/lookml-pr-checks.yml`)
 
-When PRs containing LookML changes or `./data/*/data.json` session files are created or updated, GitHub Actions executes two sequential steps in a single job:
+When pull requests containing LookML changes or `./data/*/data.json` session files are created or updated, GitHub Actions runs two sequential steps in a single job:
 
-1. **LookML Validator & Data Tests**:
-   - Runs [scripts/validate_and_commit_branch.py](scripts/validate_and_commit_branch.py) (without `commit_message`) via `lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode`.
-   - Executes Looker's `validate_project` and `run_lookml_test` on the branch, failing immediately if syntax errors, broken references, or LookML data tests fail.
-2. **SQL-to-LookML Parity Check**:
-   - Runs sequentially only if Step 1 succeeds.
-   - Runs [scripts/record_query_parity.py](scripts/record_query_parity.py) (without `inline_queries_json`) via `lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode`.
-   - Executes each SQL Runner query (`/sql/:sql_id`) and corresponding Looker explore query (`/x/:query_id`), asserting 100% numerical parity.
+1. The first step runs [scripts/validate_and_commit_branch.py](scripts/validate_and_commit_branch.py) (without `commit_message`) via `lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode` to execute Looker's `validate_project` and `run_lookml_test` on the branch, failing immediately if syntax errors, broken references, or LookML data tests fail.
+2. The second step runs only after the validator step succeeds, executing [scripts/record_query_parity.py](scripts/record_query_parity.py) (without `inline_queries_json`) via `lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode` to compare each SQL Runner query (`/sql/:sql_id`) against its corresponding Looker explore query (`/x/:query_id`) and verify numerical parity.

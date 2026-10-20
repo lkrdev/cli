@@ -237,48 +237,48 @@ When the agent analyzes a query via `lkr parse sql-lookml-compare`, it outputs i
 
 ## Operational summary tracking (`./data/:id/summary.md`)
 
-Throughout every `agentic-lookml` session, maintain a high-level operations log in `./data/:id/summary.md`. Update `summary.md` incrementally as each phase completes or self-heals so that reviewers have a clear audit trail attached directly to the GitHub PR:
+Throughout every `agentic-lookml` session, maintain a high-level operations log in `./data/:id/summary.md`. Update `summary.md` incrementally as each phase completes or self-heals so reviewers have a clear audit trail attached to the GitHub pull request:
 
-1. **Generating base views**: Record the physical tables extracted from the input SQL and the `bronze/:table.view.lkml` base views generated or refreshed via `generate-view-from-table`.
-2. **Deconstructing query to canonical form**: Document how each input SQL query deconstructs into the Canonical Looker Query form (`FROM` base table, `LEFT JOIN` paths, projected dimensions, aggregated measures, `WHERE`/`HAVING` filters, `ORDER BY`, `LIMIT`) or why it escalates to a derived table.
-3. **Query patterns from original query**: List the detected pattern categories from the 14 SQL-to-LookML playbooks (for example, single-table with union `["simple_single_table", "unions"]`, or `["pk_fk_joins", "conditional_measures_and_bucketing"]`) and their AST triggers.
-4. **Writing LookML**: Log every LookML file authored or modified across Bronze refinements (`bronze/:table.refinement.lkml`), hidden base explores (`bronze/explores/:table_base.explore.lkml`), Silver cross-view fields/NDTs/SDTs and explores (`silver/`), and Gold specialty views/explores (`gold/`).
-5. **Validation & updating LookML (self-healing loop)**: Record the outcome of the Pre-Modeling Gate and Final LookML Validator / SQL-to-LookML Parity checks. Whenever validation or query parity fails, explicitly log `Validation failed:` (with the specific compiler error, missing reference, or row mismatch) followed by `Updating LookML:` (describing the fix applied before re-validating).
-6. **Writing tests**: Log the LookML data tests authored in `tests/bronze/:table_base.test.lkml` and `tests/silver/:explore.test.lkml`, the immutable filter slice chosen (e.g., `created_date = "2026-01-01"` or primary key fallback), the frozen baseline values from `code-mode`, and the `run_lookml_test` execution result.
+1. Record the physical tables extracted from the input SQL and the `bronze/:table.view.lkml` base views generated or refreshed via `generate-view-from-table`.
+2. Document how each input SQL query deconstructs into the Canonical Looker Query form (`FROM` base table, `LEFT JOIN` paths, projected dimensions, aggregated measures, `WHERE` and `HAVING` filters, `ORDER BY`, `LIMIT`) or why it escalates to a derived table.
+3. List the detected pattern categories from the 14 SQL-to-LookML playbooks (for example, single-table with union `["simple_single_table", "unions"]`, or `["pk_fk_joins", "conditional_measures_and_bucketing"]`) and their AST triggers.
+4. Log every LookML file authored or modified across Bronze refinements (`bronze/:table.refinement.lkml`), hidden base explores (`bronze/explores/:table_base.explore.lkml`), Silver cross-view fields, NDTs, SDTs, and explores (`silver/`), and Gold specialty views and explores (`gold/`).
+5. Record the outcome of the pre-modeling gate and final LookML validator and SQL-to-LookML parity checks. Whenever validation or query parity fails, log `Validation failed:` with the compiler error, missing reference, or row mismatch, followed by `Updating LookML:` describing the fix applied before re-validating.
+6. Log the LookML data tests authored in `tests/bronze/:table_base.test.lkml` and `tests/silver/:explore.test.lkml`, the immutable filter slice chosen (such as `created_date = "2026-01-01"` or a primary key fallback), the frozen baseline values from `code-mode`, and the targeted `run_lookml_test` execution result.
 
 Use this structure for `./data/:id/summary.md`:
 
 ```markdown
-# Agentic LookML Operations Summary (`<run_id>`)
+# Agentic LookML operations summary (`<run_id>`)
 
-## 1. Generating Base Views
-- Generated/refreshed `bronze/orders.view.lkml` from `public.orders`
-- Generated/refreshed `bronze/archived_orders.view.lkml` from `public.archived_orders`
+## Generating base views
+- Generated and refreshed `bronze/orders.view.lkml` from `public.orders`
+- Generated and refreshed `bronze/archived_orders.view.lkml` from `public.archived_orders`
 
-## 2. Deconstructing Query to Canonical Form
-- **Query 1**: Deconstructed CTE and `UNION ALL` branches into canonical base view `orders_all`, grouping by `status` and `created_date` with measures `order_count` and `total_net_revenue`.
+## Deconstructing query to canonical form
+- Query 1 deconstructs CTE and `UNION ALL` branches into canonical base view `orders_all`, grouping by `status` and `created_date` with measures `order_count` and `total_net_revenue`.
 
-## 3. Query Patterns from Original Query
-- **Query 1**: `simple_single_table`, `unions` (single-table aggregation combined with `UNION ALL` across active and archived tables)
+## Query patterns from original query
+- Query 1 matched `simple_single_table` and `unions` (single-table aggregation combined with `UNION ALL` across active and archived tables).
 
-## 4. Writing LookML (Bronze)
+## Writing LookML (Bronze)
 - Created `bronze/orders.refinement.lkml` (primary key `id`, measure `total_net_revenue`)
 - Created `bronze/explores/orders_base.explore.lkml` (`hidden: yes`)
 
-## 5. Pre-Modeling Validation & Parity Gate
+## Pre-modeling validation and parity gate
 - Initialized SQL Runner query (`/sql/<sql_id>`)
-- **Validation failed**: `Unknown field "orders.net_amount" referenced in bronze/orders.refinement.lkml`
-- **Updating LookML**: Replaced `${net_amount}` with `${amount}` in `bronze/orders.refinement.lkml`
-- **Validation passed**: LookML Validator passed with 0 errors; early Bronze query parity verified (`matched`).
+- Validation failed: `Unknown field "orders.net_amount" referenced in bronze/orders.refinement.lkml`
+- Updating LookML: Replaced `${net_amount}` with `${amount}` in `bronze/orders.refinement.lkml`
+- Validation passed: LookML Validator passed with 0 errors and early Bronze query parity matched.
 
-## 6. Writing LookML (Silver / Gold)
+## Writing LookML (Silver and Gold)
 - Created `silver/orders_all.view.lkml` (`UNION ALL` SDT extending `orders` with compound PK)
 - Created `silver/explores/orders.explore.lkml` (fact-anchored explore with Quick Start `query:` block)
 
-## 7. Writing & Evaluating Tests
+## Writing and evaluating tests
 - Created `tests/bronze/orders_base.test.lkml` (grouped refinement measures filtered to immutable date `orders.created_date = "2026-01-01"`)
 - Created `tests/silver/orders.test.lkml` (grouped by join path DAG branch at `orders.created_date = "2026-01-01"`)
-- **Test execution (`run_lookml_test`)**: All tests passed; final SQL-to-LookML parity verified (`/x/<query_id>`).
+- Targeted test execution via `run_lookml_test` passed and final SQL-to-LookML parity matched (`/x/<query_id>`).
 ```
 
 ## Triage between Table Calculations, Custom Fields, and LookML
@@ -336,30 +336,29 @@ Inspect `views[].fields`, `views[].unmodeled_db_columns`, `views[].missing_db_co
 
 ## Opinionated LookML testing and evaluation (`tests/`)
 
-Reliable LookML requires deterministically verifying that semantic models, joins, and calculations compute the expected numbers without regressions. LookML tests (`test: [name] { explore_source: ... assert: ... }`) run in the Looker compiler and warehouse via `run_lookml_test`. Follow these opinionated rules whenever adding or refactoring LookML:
+LookML tests (`test: [name] { explore_source: ... assert: ... }`) run in the Looker compiler and warehouse via `run_lookml_test` to verify that semantic models, joins, and calculations produce the expected numbers without regressions. Follow these rules whenever adding or refactoring LookML.
 
-### 1. The Pre-Modeling & Pre-Test Verification Gate (Validator & Query Parity)
+### Pre-modeling and pre-test verification gate
 
-**Before writing any downstream LookML tests and before completing Silver modeling, execute the LookML Validator and Query Parity checks immediately after generating Bronze views and refinements.**
+Execute the LookML validator and query parity checks immediately after generating Bronze views and refinements, before writing any downstream LookML tests and before completing Silver modeling. Once `bronze/:table.view.lkml`, `bronze/:table.refinement.lkml`, and `bronze/explores/:table_base.explore.lkml` are generated:
 
-Once `bronze/:table.view.lkml`, `bronze/:table.refinement.lkml`, and `bronze/explores/:table_base.explore.lkml` are generated:
-1. **Push Bronze to Dev Workspace**: Push the Bronze files to Looker development mode (`lkr --dev tools lookml push --no-reset`).
-2. **Execute the LookML Validator (`validate_project`)**: Run [validate_and_commit_branch.py](../agentic-lookml-workflow/scripts/validate_and_commit_branch.py) with `--var skip_tests="true"` (omitting `commit_message`) via `lkr --dev code-mode sandbox --dev-mode`. If syntax errors, broken references, or explore definition bugs exist, resolve them immediately before writing any tests.
-3. **Execute SQL Runner Queries (`create_sql_query` -> `/sql/:sql_id`)**: For every query in `input.sql`, create a SQL Runner query using [init_sql_queries.py](../agentic-lookml-workflow/scripts/init_sql_queries.py) to capture the exact SQL query ID and interactive SQL Runner URL (`/sql/:sql_id`).
-4. **Execute Early Parity Check (`run_inline_query` vs `run_sql_query`)**: Formulate the initial Looker explore query corresponding to the SQL query and run [record_query_parity.py](../agentic-lookml-workflow/scripts/record_query_parity.py). Confirm that Looker's generated query yields identical rows to SQL Runner.
-5. **Gate Guarantee**: Never author LookML data tests on top of a model that fails validation or diverges from the user's SQL query results. Both checks must pass *before* writing tests and finalizing Silver modeling.
+1. Push the Bronze files to Looker development mode (`lkr --dev tools lookml push --no-reset`).
+2. Run [validate_and_commit_branch.py](../agentic-lookml-workflow/scripts/validate_and_commit_branch.py) with `--var skip_tests="true"` (omitting `commit_message`) via `lkr --dev code-mode sandbox --dev-mode`. If syntax errors, broken references, or explore definition bugs exist, resolve them before writing any tests.
+3. For every query in `input.sql`, create a SQL Runner query using [init_sql_queries.py](../agentic-lookml-workflow/scripts/init_sql_queries.py) to capture the SQL query ID and interactive SQL Runner URL (`/sql/:sql_id`).
+4. Formulate the initial Looker explore query corresponding to the SQL query and run [record_query_parity.py](../agentic-lookml-workflow/scripts/record_query_parity.py) to confirm that Looker's generated query returns the same rows as SQL Runner.
+5. Never author LookML data tests on top of a model that fails validation or diverges from the user's SQL query results. Both checks must pass before writing tests and finalizing Silver modeling.
 
-### 2. The Silver layer testing rule
+### Silver layer testing rule
 
-**Any metric in any Silver layer must have a Looker test at an appropriate grain.**
+Every metric in any Silver layer must have a Looker test at an appropriate grain:
 - Fact-level measures on base fact views (`orders.total_net_revenue`, `orders.order_count`), Silver NDT rollups (`user_order_facts.lifetime_orders`), and cross-view dimensions and measures in `silver/:view_a_:view_b_fields.view.lkml` (`inventory_items_order_items_fields.total_gross_margin`) must have corresponding test assertions in `tests/silver/:explore.test.lkml`.
 - Untested metrics in the Silver layer are considered incomplete.
 
-### 3. The Bronze refinement testing rule
+### Bronze refinement testing rule
 
-**Any measures added to Bronze refinements must be tested, and these must be grouped into a single test query per refinement.**
-- Self-contained single-table measures (`type: sum`, `type: count`, `type: average`, filtered single-table KPIs) in `bronze/:table.refinement.lkml` must be tested.
-- Instead of creating individual single-measure test queries, group all measures for that Bronze table into a single `explore_source` test block with multiple `column:` definitions and multiple `assert:` statements.
+Every measure added to a Bronze refinement must be tested, and all measures for a given refinement must be grouped into a single test query:
+- Test all self-contained single-table measures (`type: sum`, `type: count`, `type: average`, filtered single-table KPIs) defined in `bronze/:table.refinement.lkml`.
+- Rather than creating individual single-measure test queries, group all measures for that Bronze table into a single `explore_source` test block with multiple `column:` definitions and multiple `assert:` statements.
 - To test Bronze refinement measures without polluting public explores or colliding with Silver explore names, create a hidden base explore:
   ```lookml
   # In bronze/explores/order_items_base.explore.lkml
@@ -369,14 +368,14 @@ Once `bronze/:table.view.lkml`, `bronze/:table.refinement.lkml`, and `bronze/exp
     hidden: yes
   }
   ```
-  Always use the `:table_base` naming convention with `hidden: yes` to eliminate any namespace collision with `silver/explores/order_items.explore.lkml`.
+  Use the `:table_base` naming convention with `hidden: yes` to avoid any namespace collision with `silver/explores/order_items.explore.lkml`.
 
-### 4. Filtering to immutable data (Date heuristics & PK fallback)
+### Filtering to immutable data
 
-Tests that query volatile data (such as "today", "yesterday", or unconstrained table scans) will break over time as data changes. Tests must filter to immutable slices:
-- **Immutable date heuristic (Priority 1)**: Inspect the view's dimensions for immutable date or timestamp columns by matching name patterns such as `*_created_*`, `*_event_*`, `*_ordered_*`, `*_inserted_*`, `*_occurred_*`, `*_at`, or `*_date` (e.g. `orders.created_date`). Filter to a fixed, historical calendar date with stable data (e.g. `2026-01-01`).
-- **Primary key fallback (Priority 2)**: If no immutable timestamp or date dimension exists on the table, filter by a specific primary key (e.g. `id = 123` or a sample PK ID).
-- **Freezing baseline values via `code-mode`**: During test authoring, query the instance via `code-mode` (`run_inline_query` or `run_query`) on the chosen immutable slice (e.g. `created_date = '2026-01-01'`) to retrieve the exact calculated metric value, then freeze that exact number in the LookML `assert:` expression (e.g. `${order_items.total_sale_price} = 125.50`).
+Tests that query volatile data (such as "today", "yesterday", or unconstrained table scans) break over time as underlying rows change. Filter every test to an immutable slice:
+- First, inspect the view's dimensions for immutable date or timestamp columns by matching name patterns such as `*_created_*`, `*_event_*`, `*_ordered_*`, `*_inserted_*`, `*_occurred_*`, `*_at`, or `*_date` (for example, `orders.created_date`), and filter to a fixed historical calendar date with stable data (such as `2026-01-01`).
+- Second, if no immutable timestamp or date dimension exists on the table, filter by a specific primary key (such as `id = 123`).
+- During test authoring, query the instance via `code-mode` (`run_inline_query` or `run_query`) on the chosen immutable slice (such as `created_date = '2026-01-01'`) to retrieve the exact calculated metric value, then freeze that number in the LookML `assert:` expression (for example, `${order_items.total_sale_price} = 125.50`).
 
 Example Bronze test:
 ```lookml
@@ -399,14 +398,12 @@ test: order_items_base_refinement_metrics {
 }
 ```
 
-### 5. Grouping Silver layer tests by join path DAG branch
+### Grouping Silver layer tests by join path DAG branch
 
-In Silver Explores, foreign tables and bare-joined cross-view `*_fields` views are joined along explicit paths in the Explore DAG (`orders -> users`, `orders -> order_items -> inventory_items`).
-- **One test per join path branch**: Group all measures that depend on the same join path branch into a single `explore_source` test block.
-- For example, in `orders.explore.lkml`:
-  1. Base fact branch: Test `orders` measures (`order_count`, `total_revenue`) filtered to the immutable date.
-  2. `orders -> users` join branch: Test `users` measures joined to `orders` and `orders_users_fields` metrics (`revenue_per_user`) in one test block.
-  3. `orders -> order_items -> inventory_items` join branch: Test `inventory_items` and `inventory_items_order_items_fields` metrics (`total_gross_margin`) in one test block.
+In Silver explores, foreign tables and bare-joined cross-view `*_fields` views join along explicit paths in the explore DAG (`orders -> users`, `orders -> order_items -> inventory_items`). Group all measures that depend on the same join path branch into a single `explore_source` test block. For example, in `orders.explore.lkml`:
+1. On the base fact branch, test `orders` measures (`order_count`, `total_revenue`) filtered to the immutable date.
+2. On the `orders -> users` join branch, test `users` measures joined to `orders` alongside `orders_users_fields` metrics (`revenue_per_user`) in one test block.
+3. On the `orders -> order_items -> inventory_items` join branch, test `inventory_items` and `inventory_items_order_items_fields` metrics (`total_gross_margin`) in one test block.
 
 Example Silver test:
 ```lookml
@@ -446,20 +443,19 @@ test: orders_users_join_path_metrics {
 }
 ```
 
-### 6. File structure, model inclusion & targeted test execution via `lkr code-mode`
+### File structure, model inclusion, and targeted test execution
 
-- Tests are partitioned cleanly by Medallion layer in `tests/`:
+- Partition tests by Medallion layer in `tests/`:
   - `tests/bronze/:table_base.test.lkml`
   - `tests/silver/:explore.test.lkml`
-- In `project.model.lkml`, include all tests:
+- Include all tests in `project.model.lkml`:
   ```lookml
   include: "tests/**/*.test.lkml"
   ```
-- **Target every new or additional test with `lkr code-mode` before committing and pushing to the PR**:
-  Looker's `run_lookml_test(project_id, file_id=None, test=None, model=None)` endpoint (inspectable via `lkr code-mode sandbox --code="return lookup('run_lookml_test')"` or `help('lookml_test')`) supports filtering by `file_id`, `test`, and `model`.
-  - After pushing new or modified `.test.lkml` files to the developer branch (`lkr --dev tools lookml push --no-reset`), target each new or additional test directly via `lkr code-mode sandbox --dev-mode` before attempting to commit or open the PR:
-    ```bash
-    lkr --base-url="$BASE_URL" --dev code-mode sandbox --dev-mode \
-      --code='return run_lookml_test(project_id="my_project", file_id="tests/silver/orders.test.lkml", test="orders_fact_metrics_at_fixed_date")'
-    ```
-  - Also pass `--var file_ids="..."` and `--var test_names="..."` when running `validate_and_commit_branch.py` so only the targeted tests are evaluated and verified before committing. Commit is blocked if any targeted test fails.
+- Target every new or additional test with `lkr code-mode` before committing and pushing to the pull request. Looker's `run_lookml_test(project_id, file_id=None, test=None, model=None)` endpoint (inspectable via `lkr code-mode sandbox --code="return lookup('run_lookml_test')"` or `help('lookml_test')`) filters test execution by `file_id`, `test`, and `model`.
+- After pushing new or modified `.test.lkml` files to the developer branch (`lkr --dev tools lookml push --no-reset`), target each new or additional test directly via `lkr code-mode sandbox --dev-mode` before committing or opening the pull request:
+  ```bash
+  lkr --base-url="$BASE_URL" --dev code-mode sandbox --dev-mode \
+    --code='return run_lookml_test(project_id="my_project", file_id="tests/silver/orders.test.lkml", test="orders_fact_metrics_at_fixed_date")'
+  ```
+- Pass `--var file_ids="..."` and `--var test_names="..."` when running `validate_and_commit_branch.py` so only the targeted tests are evaluated before committing. Commit is blocked if any targeted test fails.
