@@ -2821,6 +2821,9 @@ def parse_sql_to_lookml(
     lkml_conn: str | None = None,
     lkml_db: str | None = None,
     lkml_schema: str | None = None,
+    *,
+    manifest: Path | str | None = None,
+    constants: dict[str, str] | None = None,
 ) -> SqlToLookmlResult:
     """Parse SQL queries and map referenced tables and columns to LookML views/fields with file and line locations."""
     sql_db = sql_db or os.getenv("LKR_SQL_DB")
@@ -2830,7 +2833,13 @@ def parse_sql_to_lookml(
     lkml_schema = lkml_schema or os.getenv("LKR_LKML_SCHEMA")
 
     sql_res = parse_sql(sql=sql, file=sql_file, dialect=dialect)
-    project = parse_lookml(path=path, file=lookml_file, lookml=lookml).apply_defaults()
+    project = parse_lookml(
+        path=path,
+        file=lookml_file,
+        lookml=lookml,
+        manifest=manifest,
+        constants=constants,
+    ).apply_defaults()
 
     view_base_decls, view_ref_decls = _collect_declarations(project, "view", LookmlView)
     exp_base_decls, exp_ref_decls = _collect_declarations(

@@ -500,6 +500,18 @@ class LookmlExplore(LookmlParserValues):
 
 class LookmlConstant(LookmlParserValues):
     value: str | None = None
+    export: str | None = None
+
+
+class LookmlLocalDependency(LookmlParserValues):
+    project: str | None = None
+    override_constant: dict[str, LookmlConstant] | None = None
+
+
+class LookmlRemoteDependency(LookmlParserValues):
+    url: str | None = None
+    ref: str | None = None
+    override_constant: dict[str, LookmlConstant] | None = None
 
 
 class LookmlVisualization(LookmlParserValues):
@@ -523,6 +535,18 @@ class LookmlManifest(LookmlFileAttributes):
     includes: list[str] | None = None
     timezone: str | None = None
     constant: dict[str, LookmlConstant] | None = None
+    local_dependency: (
+        LookmlLocalDependency
+        | list[LookmlLocalDependency]
+        | dict[str, LookmlLocalDependency]
+        | None
+    ) = None
+    remote_dependency: (
+        dict[str, LookmlRemoteDependency]
+        | LookmlRemoteDependency
+        | list[LookmlRemoteDependency]
+        | None
+    ) = None
     visualization: list[LookmlVisualization] | dict[str, LookmlVisualization] | None = (
         None
     )
@@ -650,61 +674,378 @@ def _ensure_lookml_parser(version: str = LOOKML_PARSER_VERSION) -> Path:
     return mod_dir
 
 
+def _find_manifest_file(
+    start: Path | None,
+    explicit_manifest: Path | str | None = None,
+) -> Path | None:
+    if explicit_manifest is not None:
+        mpath = Path(explicit_manifest).resolve()
+        if mpath.is_dir():
+            mpath = mpath / "manifest.lkml"
+        if not mpath.is_file():
+            raise FileNotFoundError(f"Manifest file not found: {explicit_manifest}")
+        return mpath
+    if start is None:
+        return None
+    base = start.resolve()
+    if base.is_file():
+        base = base.parent
+    for cand_dir in (base, *list(base.parents)[:3]):
+        cand = cand_dir / "manifest.lkml"
+        if cand.is_file():
+            return cand
+    return None
+
+
 def parse_lookml(
     path: Path | str | None = None,
     file: Path | str | None = None,
     lookml: str | None = None,
+    *,
+    manifest: Path | str | None = None,
+    constants: dict[str, str] | None = None,
 ) -> LookmlProject:
-    """Parse LookML from --path, --file, or --lookml with modelAssembly, extensions/refinements, and positions."""
+    """Parse LookML from --path, --file, or --lookml with modelAssembly, extensions/refinements, constants, and positions."""
     provided = sum(x is not None for x in (path, file, lookml))
     if provided != 1:
         raise ValueError("Specify exactly one of 'path', 'file', or 'lookml'")
 
     mod_dir = _ensure_lookml_parser()
     opts: dict[str, Any] = {}
+    if constants:
+        opts["constants"] = {str(k): str(v) for k, v in constants.items()}
 
     if lookml is not None:
         opts["input"] = [{"path": "inline.model.lkml", "content": lookml}]
+        mpath = _find_manifest_file(None, manifest)
     elif file is not None:
         fpath = Path(file).resolve()
+        mpath = _find_manifest_file(fpath, manifest)
         if fpath.name.endswith(".model.lkml"):
             opts["cwd"] = str(fpath.parent)
             opts["source"] = fpath.name
         else:
-            content = fpath.read_text(encoding="utf-8")
             opts["input"] = [
-                {"path": fpath.name, "content": content},
-                {
-                    "path": "inline.model.lkml",
-                    "content": f'include: "{fpath.name}"',
-                },
+                {"path": fpath.name, "content": fpath.read_text(encoding="utf-8")},
+                {"path": "inline.model.lkml", "content": f'include: "{fpath.name}"'},
             ]
-    elif path is not None:
+    else:
+        assert path is not None
         root = Path(path).resolve()
         if root.is_file():
-            return parse_lookml(file=root)
+            return parse_lookml(file=root, manifest=manifest, constants=constants)
+        mpath = _find_manifest_file(root, manifest)
         if any(root.rglob("*.model.lkml")):
             opts["cwd"] = str(root)
             opts["source"] = "**/*.lkml"
         else:
-            files_input = [
-                {
-                    "path": f.relative_to(root).as_posix(),
-                    "content": f.read_text(encoding="utf-8"),
-                }
-                for f in sorted(root.rglob("*.lkml"))
-                if f.is_file()
+            opts["input"] = [
+                *(
+                    {
+                        "path": f.relative_to(root).as_posix(),
+                        "content": f.read_text(encoding="utf-8"),
+                    }
+                    for f in sorted(root.rglob("*.lkml"))
+                    if f.is_file()
+                ),
+                {"path": "inline.model.lkml", "content": 'include: "**/*.lkml"'},
             ]
-            files_input.append(
-                {"path": "inline.model.lkml", "content": 'include: "**/*.lkml"'}
-            )
-            opts["input"] = files_input
+
+    if (
+        mpath is not None
+        and (file is None or mpath != Path(file).resolve())
+        and (path is None or mpath != (Path(path).resolve() / "manifest.lkml"))
+    ):
+        opts["extraManifestContent"] = mpath.read_text(encoding="utf-8")
 
     js_code = f"""
-const lp = require({json.dumps(str(mod_dir))});
-const opts = JSON.parse(require("fs").readFileSync(0, "utf-8"));
+const path = require("path");
+const modDir = {json.dumps(str(mod_dir))};
+const pegParser = require(path.join(modDir, "lib/parse/parser.generated.js"));
+const getPositionsMod = require(path.join(modDir, "lib/positions/get-positions.js"));
+const xf = require(path.join(modDir, "lib/transformations/index.js"));
+const {{ getSchemaProperty }} = require(path.join(modDir, "lib/schema/lookml-schema.js"));
+
+const origPegParse = pegParser.parse.bind(pegParser);
+const AT_ENC_RE = /@\\{{([a-zA-Z0-9_-]+)\\}}/g;
+const AT_DEC_RE = /__LKR_AT_([a-zA-Z0-9_-]+?)__/g;
+
+function restoreAtTokens(node) {{
+  if (!node || typeof node !== "object") return node;
+  if (Array.isArray(node)) {{
+    node.forEach(restoreAtTokens);
+    return node;
+  }}
+  for (const k of ["value", "raw", "name", "declarationType", "key"]) {{
+    if (typeof node[k] === "string" && node[k].includes("__LKR_AT_")) {{
+      node[k] = node[k].replace(AT_DEC_RE, "@{{$1}}");
+    }}
+  }}
+  for (const k of ["declarations", "items", "entries", "value", "syntax"]) {{
+    if (node[k] && typeof node[k] === "object") restoreAtTokens(node[k]);
+  }}
+  return node;
+}}
+
+pegParser.parse = function(str, options) {{
+  if (typeof str === "string" && str.includes("@{{")) {{
+    try {{
+      return restoreAtTokens(origPegParse(str.replace(AT_ENC_RE, "__LKR_AT_$1__"), options));
+    }} catch (e) {{
+      return origPegParse(str, options);
+    }}
+  }}
+  return origPegParse(str, options);
+}};
+
+const origGetPositionsRecurse = getPositionsMod.getPositionsRecurse;
+const cachedFilePositions = new Map();
+let freezeFilePositions = false;
+getPositionsMod.getPositionsRecurse = function(stringsNode, sl, sc, logPath, d, trace, dataNode, parentKey) {{
+  if (d === 0 && Array.isArray(logPath) && logPath[1]) {{
+    const cacheKey = logPath[1];
+    if (freezeFilePositions && cachedFilePositions.has(cacheKey)) return cachedFilePositions.get(cacheKey);
+    const res = origGetPositionsRecurse(stringsNode, sl, sc, logPath, d, trace, dataNode, parentKey);
+    cachedFilePositions.set(cacheKey, res);
+    return res;
+  }}
+  return origGetPositionsRecurse(stringsNode, sl, sc, logPath, d, trace, dataNode, parentKey);
+}};
+
+const lp = require(modDir);
+const {{ extraManifestContent, constants: cliConstants, ...parseOpts }} = JSON.parse(require("fs").readFileSync(0, "utf-8"));
+
+function normalizeDepList(rawDep) {{
+  if (!rawDep || typeof rawDep !== "object") return [];
+  if (Array.isArray(rawDep)) return rawDep.flatMap(normalizeDepList);
+  return (rawDep.$type || "project" in rawDep || "url" in rawDep || "override_constant" in rawDep)
+    ? [rawDep]
+    : Object.values(rawDep).flatMap(normalizeDepList);
+}}
+
+function extractConsts(mapObj) {{
+  const out = {{}};
+  for (const [k, v] of Object.entries(mapObj || {{}})) {{
+    if (!k.startsWith("$") && v && typeof v === "object" && v.value != null) out[k] = String(v.value);
+  }}
+  return out;
+}}
+
+function extractDepOverrides(obj) {{
+  return [...normalizeDepList(obj?.local_dependency), ...normalizeDepList(obj?.remote_dependency)].map(dep => ({{
+    project: dep.project || dep.$name || null,
+    overrides: extractConsts(dep.override_constant),
+    depRef: dep
+  }}));
+}}
+
+function interpolateString(str, constMap, fallbackMap = {{}}) {{
+  if (typeof str !== "string" || !str.includes("@{{")) return str;
+  return str.replace(AT_ENC_RE, (m, ref) =>
+    Object.hasOwn(constMap, ref) ? constMap[ref] : (Object.hasOwn(fallbackMap, ref) ? fallbackMap[ref] : m)
+  );
+}}
+
+function resolveChainedMap(map, fallbackMap = {{}}) {{
+  for (let pass = 0; pass < 10; pass++) {{
+    let changed = false;
+    for (const [k, v] of Object.entries(map)) {{
+      const next = interpolateString(v, map, fallbackMap);
+      if (next !== v) {{ map[k] = next; changed = true; }}
+    }}
+    if (!changed) break;
+  }}
+  return map;
+}}
+
+const SKIP_KEYS = new Set([
+  "$strings", "$ast", "$p", "$type", "$file_path", "$file_rel", "$file_name", "$file_type",
+  "error", "errors", "info", "constant", "local_dependency", "remote_dependency"
+]);
+
+function substituteNode(node, constMap, parentScope, propKey, posNode, projectErrors) {{
+  if (!node || typeof node !== "object" || !constMap) return node;
+  if (Array.isArray(node)) {{
+    for (let i = 0; i < node.length; i++) {{
+      if (typeof node[i] === "string") node[i] = interpolateString(node[i], constMap);
+      else substituteNode(node[i], constMap, parentScope, propKey, posNode?.[i], projectErrors);
+    }}
+    return node;
+  }}
+
+  const scope = node.$type || propKey || parentScope || "model";
+  if (typeof node.$name === "string") node.$name = interpolateString(node.$name, constMap);
+
+  for (const key of Object.keys(node)) {{
+    if (SKIP_KEYS.has(key)) continue;
+    let targetKey = key;
+    if (key.includes("@{{")) {{
+      const resolvedKey = interpolateString(key, constMap);
+      if (resolvedKey !== key) {{
+        node[resolvedKey] = node[key];
+        delete node[key];
+        if (posNode && typeof posNode === "object" && key in posNode) {{
+          posNode[resolvedKey] = posNode[key];
+          delete posNode[key];
+        }}
+        targetKey = resolvedKey;
+      }}
+    }}
+
+    const val = node[targetKey];
+    if (typeof val === "string" && val.includes("@{{")) {{
+      const resolved = interpolateString(val, constMap);
+      const schema = getSchemaProperty(scope, targetKey);
+      let finalVal = resolved;
+      if (schema?.type === "boolean") {{
+        const low = resolved.trim().toLowerCase();
+        if (low === "yes" || low === "true") finalVal = true;
+        else if (low === "no" || low === "false") finalVal = false;
+      }} else if (schema?.type === "number") {{
+        const trimmed = resolved.trim();
+        if (trimmed !== "" && !Number.isNaN(Number(trimmed))) finalVal = Number(trimmed);
+      }}
+      node[targetKey] = finalVal;
+      if (finalVal !== val && typeof finalVal !== "string") {{
+        const isSpurious = e => e?.code === "INVALID_PROPERTY_TYPE" && e.property === targetKey;
+        if (Array.isArray(node.errors)) {{
+          node.errors = node.errors.filter(e => !isSpurious(e));
+          if (!node.errors.length) delete node.errors;
+        }}
+        if (Array.isArray(projectErrors)) {{
+          projectErrors.splice(0, projectErrors.length, ...projectErrors.filter(e => !isSpurious(e)));
+        }}
+      }}
+    }} else if (val && typeof val === "object") {{
+      substituteNode(val, constMap, scope, targetKey, posNode?.[targetKey], projectErrors);
+    }}
+  }}
+  return node;
+}}
+
+const origAssembleModels = xf.assembleModels;
+xf.assembleModels = function(project, assembleOpts) {{
+  if (extraManifestContent && project.file) {{
+    const manFile = {{
+      ...lp.parse(extraManifestContent, {{ strings: true }}),
+      $file_path: "manifest.lkml",
+      $file_rel: "",
+      $file_name: "",
+      $file_type: "manifest"
+    }};
+    project.file["manifest"] = project.manifest = manFile;
+  }}
+
+  const files = Object.values(project.file || {{}});
+  const rootMan = files.find(f => f.$file_type === "manifest" && !/^imported_projects\\//.test(f.$file_path || ""));
+  if (rootMan) project.manifest = rootMan;
+
+  if (!project.manifest) {{
+    const inlineMan = files.find(f => f.project_name || f.constant || f.local_dependency || f.remote_dependency || f.localization_settings);
+    if (inlineMan || (cliConstants && Object.keys(cliConstants).length)) {{
+      project.manifest = {{
+        $file_path: inlineMan?.$file_path || "manifest.lkml",
+        $file_rel: inlineMan?.$file_rel || "",
+        $file_name: inlineMan?.$file_name || "",
+        $file_type: "manifest",
+        constant: {{}}
+      }};
+      for (const k of ["project_name", "timezone", "constant", "local_dependency", "remote_dependency", "localization_settings"]) {{
+        if (inlineMan?.[k]) project.manifest[k] = structuredClone(inlineMan[k]);
+      }}
+    }}
+  }}
+
+  xf.addPositions(project);
+  freezeFilePositions = true;
+
+  const impDirect = {{}}, impDeps = {{}}, impManifests = {{}}, importedProjectNames = new Set();
+  for (const f of files) {{
+    const m = (f.$file_path || "").match(/^imported_projects\\/([^/]+)\\//);
+    if (m) {{
+      importedProjectNames.add(m[1]);
+      if (f.$file_type === "manifest") {{
+        impManifests[m[1]] = f;
+        impDirect[m[1]] = extractConsts(f.constant);
+        impDeps[m[1]] = extractDepOverrides(f);
+      }}
+    }}
+  }}
+
+  const rootDirect = {{}}, rootDeps = [];
+  for (const src of [...files.filter(f => !/^imported_projects\\//.test(f.$file_path || "")), ...(project.manifest ? [project.manifest] : [])]) {{
+    Object.assign(rootDirect, extractConsts(src?.constant));
+    rootDeps.push(...extractDepOverrides(src));
+  }}
+
+  const rootConsts = {{}};
+  for (const pName of Object.keys(impDirect)) Object.assign(rootConsts, impDirect[pName]);
+  for (const pName of Object.keys(impDeps)) for (const d of impDeps[pName]) Object.assign(rootConsts, d.overrides);
+  Object.assign(rootConsts, rootDirect);
+  for (const d of rootDeps) {{
+    for (const [k, v] of Object.entries(d.overrides)) {{
+      if (!d.project || !importedProjectNames.has(d.project) || !(k in rootDirect)) rootConsts[k] = v;
+    }}
+  }}
+  if (cliConstants) Object.assign(rootConsts, cliConstants);
+  resolveChainedMap(rootConsts);
+
+  const projectConsts = {{}};
+  for (const pName of new Set([...importedProjectNames, ...rootDeps.map(d => d.project).filter(Boolean)])) {{
+    const pMap = {{ ...(impDirect[pName] || {{}}) }};
+    for (const d of impDeps[pName] || []) Object.assign(pMap, d.overrides);
+    for (const d of rootDeps) {{
+      if (!d.project || d.project === pName) {{
+        for (const [k, v] of Object.entries(d.overrides)) pMap[k] = interpolateString(v, rootConsts);
+      }}
+    }}
+    if (cliConstants) Object.assign(pMap, cliConstants);
+    resolveChainedMap(pMap, rootConsts);
+    projectConsts[pName] = pMap;
+    for (const [k, v] of Object.entries(pMap)) if (!(k in rootConsts)) rootConsts[k] = v;
+  }}
+  resolveChainedMap(rootConsts);
+
+  function updateManifestObj(manObj, resolvedMap) {{
+    if (!manObj || typeof manObj !== "object") return;
+    for (const [k, cObj] of Object.entries(manObj.constant || {{}})) {{
+      if (!k.startsWith("$") && cObj && typeof cObj === "object" && k in resolvedMap) cObj.value = resolvedMap[k];
+    }}
+    for (const d of extractDepOverrides(manObj)) {{
+      for (const [k, ocObj] of Object.entries(d.depRef?.override_constant || {{}})) {{
+        if (!k.startsWith("$") && ocObj && typeof ocObj.value === "string") ocObj.value = interpolateString(ocObj.value, resolvedMap);
+      }}
+    }}
+  }}
+
+  if (project.manifest) {{
+    if (cliConstants && Object.keys(cliConstants).length) {{
+      project.manifest.constant = project.manifest.constant || {{}};
+      for (const [k, v] of Object.entries(cliConstants)) {{
+        project.manifest.constant[k] = {{ ...(project.manifest.constant[k] || {{ $type: "constant", $name: k }}), value: String(v) }};
+      }}
+    }}
+    updateManifestObj(project.manifest, rootConsts);
+  }}
+  for (const [pName, impMan] of Object.entries(impManifests)) {{
+    updateManifestObj(impMan, {{ ...rootConsts, ...(projectConsts[pName] || {{}}) }});
+  }}
+
+  if (Object.keys(rootConsts).length) {{
+    for (const [fKey, fObj] of Object.entries(project.file || {{}})) {{
+      const m = (fObj.$file_path || "").match(/^imported_projects\\/([^/]+)\\//);
+      const activeConsts = m ? {{ ...rootConsts, ...(projectConsts[m[1]] || {{}}) }} : rootConsts;
+      substituteNode(fObj, activeConsts, fObj.$file_type || "model", null, cachedFilePositions.get(`file['${{fKey}}']`), project.errors);
+      updateManifestObj(fObj, activeConsts);
+    }}
+    if (Array.isArray(project.errors) && !project.errors.length) delete project.errors;
+  }}
+
+  return origAssembleModels(project, assembleOpts);
+}};
+
 lp.parseFiles({{
-  ...opts,
+  ...parseOpts,
   modelAssembly: true,
   extensions: true,
   positions: true,
@@ -712,6 +1053,9 @@ lp.parseFiles({{
   legacyFileMetadata: true,
   console: []
 }}).then(p => {{
+  if (p.positions && p.positions.file && !p.positions.file.manifest && p.positions.file["inline.model"] && p.manifest) {{
+    p.positions.file.manifest = p.positions.file["inline.model"];
+  }}
   if (p.file && !p.file.view) {{
     const allFiles = Object.values(p.file);
     p.file = {{

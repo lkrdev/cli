@@ -55,6 +55,23 @@ group = typer.Typer(
 )
 
 
+ManifestOpt = Annotated[
+    Path | None,
+    typer.Option(
+        "--manifest",
+        help="Optional path to a manifest.lkml file for constant resolution",
+    ),
+]
+ConstantOpt = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--constant",
+        "-C",
+        help="Constant override in KEY=VALUE format (repeatable)",
+    ),
+]
+
+
 def _write_or_echo(text: str, output: Path | None) -> None:
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -79,14 +96,36 @@ def _validate_lookml_args(
     file: Path | None,
     lookml: str | None,
     file_flag: str = "--file",
+    manifest: Path | None = None,
 ) -> None:
     if sum(x is not None for x in (path, file, lookml)) != 1:
         logger.error(f"Specify exactly one of --path, {file_flag}, or --lookml")
         raise typer.Exit(1)
-    for p, label in ((path, "path"), (file, "file")):
+    for p, label in ((path, "path"), (file, "file"), (manifest, "manifest")):
         if p is not None and not p.exists():
             logger.error(f"LookML {label} not found: {p}")
             raise typer.Exit(1)
+
+
+def _parse_constant_overrides(
+    constant: list[str] | dict[str, str] | None,
+    manifest: Path | None = None,
+) -> dict[str, str] | None:
+    if manifest is not None and not manifest.exists():
+        logger.error(f"LookML manifest not found: {manifest}")
+        raise typer.Exit(1)
+    if not constant:
+        return None
+    if isinstance(constant, dict):
+        return {str(k): str(v) for k, v in constant.items()}
+    out: dict[str, str] = {}
+    for item in constant:
+        k, sep, v = item.partition("=")
+        if not sep or not k.strip():
+            logger.error(f"Invalid --constant '{item}'; expected KEY=VALUE")
+            raise typer.Exit(1)
+        out[k.strip()] = v
+    return out
 
 
 @group.command(name="sql")
@@ -143,6 +182,8 @@ def lookml_callback(
         str | None,
         typer.Option("--lookml", "-l", help="Inline LookML string"),
     ] = None,
+    manifest: ManifestOpt = None,
+    constant: ConstantOpt = None,
     output: Annotated[
         Path | None,
         typer.Option("--output", "-o", help="Optional output .json file path"),
@@ -150,7 +191,14 @@ def lookml_callback(
 ) -> LookmlProject | None:
     """Parse LookML from --path, --file, or --lookml with extensions/refinements and positions."""
     if ctx.invoked_subcommand is None:
-        return lookml_command(path=path, file=file, lookml=lookml, output=output)
+        return lookml_command(
+            path=path,
+            file=file,
+            lookml=lookml,
+            manifest=manifest,
+            constant=constant,
+            output=output,
+        )
     return None
 
 
@@ -159,10 +207,18 @@ def lookml_command(
     file: Path | None = None,
     lookml: str | None = None,
     output: Path | None = None,
+    manifest: Path | None = None,
+    constant: list[str] | dict[str, str] | None = None,
 ) -> LookmlProject:
     """Parse LookML from --path, --file, or --lookml with extensions/refinements and positions."""
-    _validate_lookml_args(path, file, lookml)
-    result = parse_lookml(path=path, file=file, lookml=lookml)
+    _validate_lookml_args(path, file, lookml, manifest=manifest)
+    result = parse_lookml(
+        path=path,
+        file=file,
+        lookml=lookml,
+        manifest=manifest,
+        constants=_parse_constant_overrides(constant),
+    )
     _write_or_echo(
         result.model_dump_json(indent=2, by_alias=True, exclude_none=True), output
     )
@@ -229,6 +285,8 @@ def user_attributes_command(
         str,
         typer.Option("--format", help="Output format (text or json)"),
     ] = "text",
+    manifest: ManifestOpt = None,
+    constant: ConstantOpt = None,
 ) -> LookmlUserAttributesResult:
     """Extract all user attributes referenced in a LookML project, LookML dashboards (.dashboard.lookml), or JSON dashboard filters with optional instance validation."""
     effective_path = (
@@ -261,6 +319,8 @@ def user_attributes_command(
             dashboard_json=dashboard_json,
             validate=validate,
             ctx=ctx,
+            manifest=manifest,
+            constants=_parse_constant_overrides(constant, manifest),
         )
     except ValueError as e:
         logger.error(str(e))
@@ -327,6 +387,8 @@ def snapshot_command(
             help="Optional base LookML or snapshot directory to compare against instead of <path>/__snapshots__",
         ),
     ] = None,
+    manifest: ManifestOpt = None,
+    constant: ConstantOpt = None,
 ) -> LookmlSnapshotResult:
     """Jest-style LookML snapshot testing to guard tests, access controls, connections, and manifest changes."""
     result, console_output = run_lookml_snapshot(
@@ -338,6 +400,8 @@ def snapshot_command(
         format_=format,
         allow_additions=allow_additions,
         base_path=base_path,
+        manifest=manifest,
+        constants=_parse_constant_overrides(constant, manifest),
     )
     if format == "json":
         _write_or_echo(result.model_dump_json(indent=2), output)
@@ -381,6 +445,8 @@ def translations_command(
             help="Alias for --strict",
         ),
     ] = False,
+    manifest: ManifestOpt = None,
+    constant: ConstantOpt = None,
 ) -> TranslationAnalysisResult:
     """Detect missing and bypassed locale strings across LookML models, explores, views, and fields."""
     if not path.exists():
@@ -388,7 +454,12 @@ def translations_command(
         raise typer.Exit(1)
 
     try:
-        result = analyze_lookml_translations(path=path, locale=locale)
+        result = analyze_lookml_translations(
+            path=path,
+            locale=locale,
+            manifest=manifest,
+            constants=_parse_constant_overrides(constant, manifest),
+        )
     except (ValueError, FileNotFoundError) as e:
         logger.error(str(e))
         raise typer.Exit(1)
@@ -493,10 +564,12 @@ def sql_lookml_compare_command(
             help="Schema/dataset override for LookML views",
         ),
     ] = None,
+    manifest: ManifestOpt = None,
+    constant: ConstantOpt = None,
 ) -> SqlToLookmlResult:
     """Compare and map SQL queries (--sql / --sql-file) to LookML views and fields (--path / --lookml-file / --lookml) with file and line numbers."""
     _validate_sql_args(sql, sql_file, "--sql-file")
-    _validate_lookml_args(path, lookml_file, lookml, "--lookml-file")
+    _validate_lookml_args(path, lookml_file, lookml, "--lookml-file", manifest=manifest)
     try:
         result = parse_sql_to_lookml(
             sql=sql,
@@ -511,6 +584,8 @@ def sql_lookml_compare_command(
             lkml_conn=lkml_conn,
             lkml_db=lkml_db,
             lkml_schema=lkml_schema,
+            manifest=manifest,
+            constants=_parse_constant_overrides(constant),
         )
     except ValueError as e:
         logger.error(str(e))
@@ -543,19 +618,23 @@ def lookml_to_api_command(
         str | None,
         typer.Option("--explore", "-e", help="Optional LookML explore name filter"),
     ] = None,
+    manifest: ManifestOpt = None,
+    constant: ConstantOpt = None,
     output: Annotated[
         Path | None,
         typer.Option("--output", "-o", help="Optional output .json file path"),
     ] = None,
 ) -> LookmlToApiResult:
     """Generate Looker API all_lookml_models and lookml_model_explore responses from LookML."""
-    _validate_lookml_args(path, file, lookml)
+    _validate_lookml_args(path, file, lookml, manifest=manifest)
     result = parse_lookml_to_api(
         path=path,
         file=file,
         lookml=lookml,
         model=model,
         explore=explore,
+        manifest=manifest,
+        constants=_parse_constant_overrides(constant),
     )
     _write_or_echo(result.model_dump_json(indent=2, by_alias=True), output)
     return result
@@ -612,6 +691,8 @@ def lookml_database_compare_command(
         Path | None,
         typer.Option("--output", "-o", help="Optional output file path"),
     ] = None,
+    manifest: ManifestOpt = None,
+    constant: ConstantOpt = None,
 ) -> LookmlDatabaseCompareResult:
     """Compile explore SQL and validate tables and columns against the database.
 
@@ -621,7 +702,7 @@ def lookml_database_compare_command(
     tables and columns are modeled in LookML (`unmodeled_in_lookml`) and that LookML
     references exist in the database (`missing_in_database`).
     """
-    _validate_lookml_args(path, lookml_file, lookml, "--lookml-file")
+    _validate_lookml_args(path, lookml_file, lookml, "--lookml-file", manifest=manifest)
     sdk = None
     try:
         auth = get_auth(ctx)
@@ -642,6 +723,8 @@ def lookml_database_compare_command(
             validate_columns=validate_columns,
             db_schema_file=db_schema_file,
             sdk=sdk,
+            manifest=manifest,
+            constants=_parse_constant_overrides(constant),
         )
     except (ValueError, FileNotFoundError) as e:
         logger.error(str(e))

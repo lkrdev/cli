@@ -623,6 +623,8 @@ $ lkr parse sql-lookml-compare [OPTIONS]
 * `--lkml-conn <str>`: Looker connection name override for LookML views  [env var: LKR_LKML_CONN]
 * `--lkml-db <str>`: Database/project override for LookML views  [env var: LKR_LKML_DB]
 * `--lkml-schema <str>`: Schema/dataset override for LookML views  [env var: LKR_LKML_SCHEMA]
+* `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
+* `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)
 * `--help`: Show this message and exit.
 
 ### `lkr parse lookml-to-api`
@@ -642,6 +644,8 @@ $ lkr parse lookml-to-api [OPTIONS]
 * `-l, --lookml <str>`: Inline LookML string
 * `-m, --model <str>`: Optional LookML model name filter
 * `-e, --explore <str>`: Optional LookML explore name filter
+* `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
+* `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)
 * `-o, --output <path>`: Optional output .json file path
 * `--help`: Show this message and exit.
 
@@ -674,6 +678,8 @@ $ lkr parse lookml-database-compare [OPTIONS]
 * `--db-schema-file <path>`: Path to JSON file containing database schema for offline validation
 * `--format <console|json|txt>`: Output format: console, json, txt  [default: console]
 * `-o, --output <path>`: Optional output file path
+* `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
+* `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)
 * `--help`: Show this message and exit.
 
 ### `lkr parse lookml`
@@ -691,6 +697,8 @@ $ lkr parse lookml [OPTIONS] COMMAND [ARGS]...
 * `-p, --path <path>`: Path to a LookML directory
 * `-f, --file <path>`: Path to a LookML file
 * `-l, --lookml <str>`: Inline LookML string
+* `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
+* `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)
 * `-o, --output <path>`: Optional output .json file path
 * `--help`: Show this message and exit.
 
@@ -720,6 +728,8 @@ $ lkr parse lookml user-attributes [OPTIONS]
 * `-o, --output <path>`: Optional output file path
 * `--validate`: Validate user attributes against Looker instance
 * `--format <str>`: Output format (text or json)  [default: text]
+* `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
+* `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)
 * `--help`: Show this message and exit.
 
 #### `lkr parse lookml snapshot`
@@ -743,6 +753,8 @@ $ lkr parse lookml snapshot [OPTIONS]
 * `-o, --output <path>`: Optional output file path
 * `--allow-additions`: Pass on additive snapshot changes; fail only on material modifications or removals
 * `--base-path <path>`: Optional base LookML or snapshot directory to compare against instead of &lt;path&gt;/__snapshots__
+* `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
+* `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)
 * `--help`: Show this message and exit.
 
 #### `lkr parse lookml translations`
@@ -763,4 +775,6 @@ $ lkr parse lookml translations [OPTIONS]
 * `--format <str>`: Output format: console, json, or text  [default: console]
 * `--strict`: Exit non-zero if missing or bypassed translations or missing labels are detected
 * `--validate`: Alias for --strict
+* `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
+* `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)
 * `--help`: Show this message and exit.

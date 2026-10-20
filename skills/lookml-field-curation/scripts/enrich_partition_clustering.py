@@ -37,6 +37,11 @@ def format_partition_id_to_date(partition_id) -> str | None:
     return s
 
 
+def _humanize_label(name: str) -> str:
+    words = [w for w in name.split(".")[-1].split("_") if w]
+    return " ".join("ID" if w.lower() == "id" else w.capitalize() for w in words)
+
+
 def resolve_lookml_field_for_column(
     col_name: str, fields_meta: list[dict], is_time_partition: bool = False
 ) -> dict:
@@ -48,10 +53,13 @@ def resolve_lookml_field_for_column(
             dg = f.get("dimension_group")
             is_dg = bool(dg) or f.get("category") == "dimension_group"
             name = str(dg).split(".")[-1] if dg else str(f.get("short_name") or short)
+            filter_field = f"{name}_date" if is_dg else name
+            raw_lbl = str(f.get("label_short") or "").strip()
             return {
                 "lookml_construct": "dimension_group" if is_dg else "dimension",
                 "lookml_name": name,
-                "filter_field": f"{name}_date" if is_dg else name,
+                "filter_field": filter_field,
+                "filter_label": raw_lbl or _humanize_label(filter_field),
                 "existing_description": str(f.get("description") or "").strip(),
             }
 
@@ -60,10 +68,12 @@ def resolve_lookml_field_for_column(
         if is_time_partition
         else low_col
     )
+    filter_field = f"{name}_date" if is_time_partition else name
     return {
         "lookml_construct": "dimension_group" if is_time_partition else "dimension",
         "lookml_name": name,
-        "filter_field": f"{name}_date" if is_time_partition else name,
+        "filter_field": filter_field,
+        "filter_label": _humanize_label(filter_field),
         "existing_description": "",
     }
 
@@ -119,7 +129,7 @@ def main():
         fields_meta = []
 
     parts = [p.strip('`" ') for p in t_name.split(".") if p.strip('`" ')]
-    cat, sch, tbl = [None, None, *parts][-3:] if parts else (None, None, t_name)
+    cat, sch, tbl = [None, None, None, *parts][-3:]
     p_id = p_id or cat or ""
     d_name = d_name or sch or ""
     bare_table = tbl or t_name
@@ -176,6 +186,7 @@ def main():
     refinement_snippets = []
     partition_recommendation = None
     filter_timeframe_ref = "partition_date"
+    filter_timeframe_label = "Partition Date"
 
     if partition_col:
         is_time = any(
@@ -186,6 +197,7 @@ def main():
         )
         construct, lname = mapped["lookml_construct"], mapped["lookml_name"]
         filter_timeframe_ref = mapped["filter_field"]
+        filter_timeframe_label = mapped["filter_label"]
         existing_desc = mapped["existing_description"]
         prefix = (existing_desc.rstrip(".") + ". ") if existing_desc else ""
         min_date_str = f" Min date available: {min_partition_date}." if min_partition_date else ""
@@ -202,6 +214,7 @@ def main():
             "lookml_construct": construct,
             "lookml_field_name": lname,
             "filter_timeframe_field": f"{target_view}.{filter_timeframe_ref}",
+            "filter_timeframe_label": filter_timeframe_label,
             "recommended_description": rec_desc,
             "lookml_snippet": snippet,
         }
@@ -213,7 +226,7 @@ def main():
         construct, lname = mapped["lookml_construct"], mapped["lookml_name"]
         existing_desc = mapped["existing_description"]
         prefix = (existing_desc.rstrip(".") + ". ") if existing_desc else ""
-        target = f"alongside {filter_timeframe_ref}" if partition_col else "on this field"
+        target = f"alongside {filter_timeframe_label}" if partition_col else "on this field"
         rec_desc = (
             f"{prefix}Clustering column (order {pos}). Filtering {target} enables block pruning."
         )
@@ -226,6 +239,7 @@ def main():
             "ordinal_position": pos,
             "lookml_construct": construct,
             "lookml_field_name": lname,
+            "lookml_label": mapped["filter_label"],
             "recommended_description": rec_desc,
             "lookml_snippet": snippet,
         })

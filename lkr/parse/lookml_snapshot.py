@@ -475,12 +475,15 @@ def extract_manifest_snapshot(
     if isinstance(manifest_obj.constant, dict):
         for c_name, c_obj in sorted(manifest_obj.constant.items()):
             cf_path, c_line = _find_position(positions, "manifest", ["constant", c_name])
-            constants_out[c_name] = {
+            c_entry: dict[str, Any] = {
                 "name": c_name,
                 "value": getattr(c_obj, "value", None),
                 "file": cf_path,
                 "line": c_line,
             }
+            if getattr(c_obj, "export", None) is not None:
+                c_entry["export"] = getattr(c_obj, "export", None)
+            constants_out[c_name] = c_entry
 
     includes = sorted(manifest_obj.includes or [])
 
@@ -751,6 +754,9 @@ def run_lookml_snapshot(
     format_: Literal["console", "json"] = "console",
     allow_additions: bool = False,
     base_path: Path | None = None,
+    *,
+    manifest: Path | str | None = None,
+    constants: dict[str, str] | None = None,
 ) -> tuple[LookmlSnapshotResult, str]:
     """Execute LookML snapshot comparison and return (result, console_output)."""
     resolved_path = path.resolve()
@@ -774,7 +780,7 @@ def run_lookml_snapshot(
         if not resolved_base_path.exists() or not resolved_base_path.is_dir():
             return _fail(f"Base LookML directory not found: {resolved_base_path}")
         if any(resolved_base_path.rglob("*.lkml")):
-            base_project = parse_lookml(path=resolved_base_path)
+            base_project = parse_lookml(path=resolved_base_path, constants=constants)
 
     ci_mode = ci or os.getenv("CI", "").strip().lower() in ("true", "1")
 
@@ -788,7 +794,7 @@ def run_lookml_snapshot(
     else:
         target_objects = list(VALID_SNAPSHOT_OBJECTS)
 
-    project = parse_lookml(path=resolved_path)
+    project = parse_lookml(path=resolved_path, manifest=manifest, constants=constants)
     proj_name = _resolve_project_name(project, resolved_path)
     snapshot_dir = resolved_path / "__snapshots__"
 

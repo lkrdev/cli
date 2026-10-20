@@ -261,8 +261,13 @@ def test_local_lookml_to_api_and_sandbox_pipeline() -> None:
         recs_by_name = {r["short_name"]: r for r in profile_res["recommendations"]}
 
         assert recs_by_name["order_id"]["classification"] == "surrogate_or_system_key"
+        assert recs_by_name["order_id"]["label_short"] == "Order ID"
         assert recs_by_name["order_id"]["recommended_hidden"] is True
         assert recs_by_name["order_id"]["recommended_suggestable"] is False
+        assert (
+            recs_by_name["order_id"]["recommended_description"]
+            == "Internal key or system metadata column not intended for end-user grouping."
+        )
 
         assert recs_by_name["status"]["classification"] == "low_cardinality_enum"
         assert recs_by_name["status"]["recommended_hidden"] is False
@@ -275,16 +280,23 @@ def test_local_lookml_to_api_and_sandbox_pipeline() -> None:
         assert recs_by_name["category"]["classification"] == "medium_cardinality_categorical"
         assert recs_by_name["category"]["recommended_hidden"] is False
         assert recs_by_name["category"]["recommended_suggestable"] is True
-        assert "Top values include:" in recs_by_name["category"]["recommended_description"]
+        assert recs_by_name["category"]["recommended_description"].startswith("Top values include:")
         assert "(25 distinct values)" in recs_by_name["category"]["recommended_description"]
 
         assert recs_by_name["customer_notes"]["classification"] == "high_cardinality_or_free_text"
         assert recs_by_name["customer_notes"]["recommended_hidden"] is False
         assert recs_by_name["customer_notes"]["recommended_suggestable"] is False
+        assert recs_by_name["customer_notes"]["recommended_description"].startswith(
+            "High-cardinality or free-text string"
+        )
 
         assert recs_by_name["metadata_json"]["classification"] == "json_payload"
         assert recs_by_name["metadata_json"]["recommended_hidden"] is True
         assert recs_by_name["metadata_json"]["recommended_suggestable"] is False
+        assert (
+            recs_by_name["metadata_json"]["recommended_description"]
+            == "Raw JSON payload; hidden and filter suggestions disabled to prevent full-column scans."
+        )
 
         assert recs_by_name["user_uuid"]["classification"] == "uuid_or_hash"
         assert recs_by_name["user_uuid"]["recommended_hidden"] is True
@@ -330,6 +342,7 @@ def test_local_lookml_to_api_and_sandbox_pipeline() -> None:
         assert part_col["lookml_field_name"] == "created"
         assert part_col["min_partition_date"] == "2023-01-15"
         assert part_col["filter_timeframe_field"] == "orders.created_date"
+        assert part_col["filter_timeframe_label"] == "Created Date"
         assert (
             part_col["recommended_description"]
             == "Physical partition column (required). Min date available: 2023-01-15. Do not use 'is any value'."
@@ -337,7 +350,7 @@ def test_local_lookml_to_api_and_sandbox_pipeline() -> None:
         clust_cols = enrich_res["clustering_columns"]
         assert [c["lookml_field_name"] for c in clust_cols] == ["user_id", "country"]
         assert (
-            "Filtering alongside created_date enables block pruning."
+            "Filtering alongside Created Date enables block pruning."
             in clust_cols[0]["recommended_description"]
         )
         assert 'filters: [orders.created_date: "7 days"]' in enrich_res["base_explore_lookml"]
@@ -384,6 +397,24 @@ def test_standalone_view_and_edge_cases() -> None:
     assert enrich_mod.format_partition_id_to_date("2025") == "2025-01-01"
     assert enrich_mod.format_partition_id_to_date("__NULL__") is None
     assert enrich_mod.format_partition_id_to_date("__UNPARTITIONED__") is None
+
+    # 4. Constant substitution and overrides in inspect_local_lookml
+    const_lookml = """
+    constant: bq_proj { value: "default-proj" export: override_optional }
+    constant: bq_ds { value: "default_ds" export: override_optional }
+    view: const_orders {
+      sql_table_name: `@{bq_proj}.@{bq_ds}.orders` ;;
+      dimension: status { type: string }
+    }
+    """
+    const_api_res = inspect_mod.build_api_result_from_lookml(
+        lookml=const_lookml, constants={"bq_proj": "override-proj"}
+    )
+    const_meta = inspect_mod.extract_curation_metadata(const_api_res)
+    const_exp = const_meta["explores"]["inline::const_orders"]
+    assert const_exp["parsed_table"]["catalog"] == "override-proj"
+    assert const_exp["parsed_table"]["schema"] == "default_ds"
+    assert const_exp["parsed_table"]["table"] == "orders"
 
 
 if __name__ == "__main__":

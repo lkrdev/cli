@@ -666,6 +666,8 @@ def parse_lookml_database_compare(
     db_schema_file: Path | str | None = None,
     sdk: Any | None = None,
     project: LookmlProject | None = None,
+    manifest: Path | str | None = None,
+    constants: dict[str, str] | None = None,
 ) -> LookmlDatabaseCompareResult:
     """Compile physical tables/columns across LookML explores and validate them against the database."""
     if validate_columns:
@@ -691,7 +693,13 @@ def parse_lookml_database_compare(
     proj = (
         project.apply_defaults()
         if project is not None
-        else parse_lookml(path=path, file=lookml_file, lookml=lookml).apply_defaults()
+        else parse_lookml(
+            path=path,
+            file=lookml_file,
+            lookml=lookml,
+            manifest=manifest,
+            constants=constants,
+        ).apply_defaults()
     )
 
     view_base_decls, view_ref_decls = _collect_declarations(proj, "view", LookmlView)

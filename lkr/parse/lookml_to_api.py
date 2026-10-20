@@ -1491,12 +1491,20 @@ def lookml_to_all_lookml_models(
     *,
     project: LookmlProject | None = None,
     model: str | None = None,
+    manifest: Path | str | None = None,
+    constants: dict[str, str] | None = None,
 ) -> list[ApiLookmlModel]:
     """Generate the `all_lookml_models` SDK payload from LookML."""
     proj = (
         project.with_defaults()
         if project
-        else parse_lookml(path=path, file=file, lookml=lookml).apply_defaults()
+        else parse_lookml(
+            path=path,
+            file=file,
+            lookml=lookml,
+            manifest=manifest,
+            constants=constants,
+        ).apply_defaults()
     )
     project_name = _resolve_project_name(proj)
     out: list[ApiLookmlModel] = []
@@ -1551,12 +1559,20 @@ def lookml_to_lookml_model_explore(
     lookml: str | None = None,
     *,
     project: LookmlProject | None = None,
+    manifest: Path | str | None = None,
+    constants: dict[str, str] | None = None,
 ) -> ApiLookmlModelExplore:
     """Generate the `lookml_model_explore` SDK payload for `<model>::<explore>` from LookML."""
     proj = (
         project.with_defaults()
         if project
-        else parse_lookml(path=path, file=file, lookml=lookml).apply_defaults()
+        else parse_lookml(
+            path=path,
+            file=file,
+            lookml=lookml,
+            manifest=manifest,
+            constants=constants,
+        ).apply_defaults()
     )
     models = proj.model or {}
     m_obj = models.get(model)
@@ -1597,12 +1613,20 @@ def parse_lookml_to_api(
     model: str | None = None,
     explore: str | None = None,
     project: LookmlProject | None = None,
+    manifest: Path | str | None = None,
+    constants: dict[str, str] | None = None,
 ) -> LookmlToApiResult:
     """Parse LookML and build both `all_lookml_models` and `lookml_model_explores` API payloads."""
     proj = (
         project.with_defaults()
         if project
-        else parse_lookml(path=path, file=file, lookml=lookml).apply_defaults()
+        else parse_lookml(
+            path=path,
+            file=file,
+            lookml=lookml,
+            manifest=manifest,
+            constants=constants,
+        ).apply_defaults()
     )
     all_models = lookml_to_all_lookml_models(project=proj, model=model)
     view_base_decls, view_ref_decls = _collect_declarations(proj, "view", LookmlView)
