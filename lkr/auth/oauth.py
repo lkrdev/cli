@@ -247,7 +247,6 @@ class OAuth2PKCE:
         )
         sys.stdout.flush()
 
-        # ponytail: use POSIX select on real stdin fd so localhost callback cancels wait without leaving a blocked readline thread
         try:
             if os.name != "posix":
                 raise io.UnsupportedOperation("select on stdin requires posix")

@@ -1,0 +1,14 @@
+connection: "{{CONNECTION_NAME}}"
+
+# Medallion LookML model template (<project_id>.model.lkml)
+# Include each pattern below as matching files are written in ./data/$RUN_ID/lookml
+# and verify with `lkr parse lookml --path "./data/$RUN_ID/lookml"` that `model.<model_name>`
+# picks up every view, refinement, explore, and test in `file.*`.
+include: "/bronze/**/*.view.lkml"
+include: "/bronze/**/*.refinement.lkml"
+include: "/bronze/explores/*.explore.lkml"
+include: "/silver/**/*.view.lkml"
+include: "/silver/explores/*.explore.lkml"
+include: "/gold/**/*.view.lkml"
+include: "/gold/explores/*.explore.lkml"
+include: "/tests/**/*.test.lkml"

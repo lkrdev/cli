@@ -9,7 +9,10 @@ Usage:
 
 
 def main():
-    proj = globals().get("project_name", "my_new_project")
+    try:
+        proj = str(project_name) or "my_new_project"  # ty: ignore[unresolved-reference]
+    except NameError:
+        proj = "my_new_project"
 
     try:
         p = project(proj)  # ty: ignore[unresolved-reference]

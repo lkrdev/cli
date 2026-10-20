@@ -9,9 +9,18 @@ Usage:
 
 
 def main():
-    proj = globals().get("project_name", "my_new_project")
-    model = globals().get("model_name", proj)
-    conn = globals().get("connection_name", "")
+    try:
+        proj = str(project_name) or "my_new_project"  # ty: ignore[unresolved-reference]
+    except NameError:
+        proj = "my_new_project"
+    try:
+        model = str(model_name) or proj  # ty: ignore[unresolved-reference]
+    except NameError:
+        model = proj
+    try:
+        conn = str(connection_name)  # ty: ignore[unresolved-reference]
+    except NameError:
+        conn = ""
 
     if not conn or "PLACEHOLDER" in conn:
         conns = all_connections()  # ty: ignore[unresolved-reference]

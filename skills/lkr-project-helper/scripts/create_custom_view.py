@@ -12,10 +12,22 @@ Usage:
 
 
 def main():
-    proj = globals().get("project_name", "my_new_project")
-    view = globals().get("view_name", "custom_derived_table")
-    sql = globals().get("sql_query", "SELECT 1 as id")
-    folder = globals().get("folder_name", "views")
+    try:
+        proj = str(project_name) or "my_new_project"  # ty: ignore[unresolved-reference]
+    except NameError:
+        proj = "my_new_project"
+    try:
+        view = str(view_name) or "custom_derived_table"  # ty: ignore[unresolved-reference]
+    except NameError:
+        view = "custom_derived_table"
+    try:
+        sql = str(sql_query) or "SELECT 1 as id"  # ty: ignore[unresolved-reference]
+    except NameError:
+        sql = "SELECT 1 as id"
+    try:
+        folder = str(folder_name)  # ty: ignore[unresolved-reference]
+    except NameError:
+        folder = "views"
 
     path = f"{folder}/{view}.view.lkml" if folder else f"{view}.view.lkml"
     content = f"""view: {view} {{

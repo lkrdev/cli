@@ -11,9 +11,18 @@ Run with `--dev-mode` flag so session is in development workspace without manual
 
 
 def main():
-    proj = globals().get("project_name", "my_new_project")
-    msg = globals().get("commit_message", "Automated LookML sync and deploy")
-    raw_strict = globals().get("strict", "false")
+    try:
+        proj = str(project_name) or "my_new_project"  # ty: ignore[unresolved-reference]
+    except NameError:
+        proj = "my_new_project"
+    try:
+        msg = str(commit_message) or "Automated LookML sync and deploy"  # ty: ignore[unresolved-reference]
+    except NameError:
+        msg = "Automated LookML sync and deploy"
+    try:
+        raw_strict = str(strict)  # ty: ignore[unresolved-reference]
+    except NameError:
+        raw_strict = "false"
     is_strict = str(raw_strict).lower() in ("true", "1", "yes")
 
     # 1. Validate LookML syntax & semantics

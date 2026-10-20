@@ -61,27 +61,71 @@ jobs:
               --agent antigravity \
               --skill "${NEW_LOOKML_SKILLS[@]}" \
               -y
-            echo "new_skills=${NEW_LOOKML_SKILLS[*]}" >> "$GITHUB_OUTPUT"
+          fi
+
+          # 3. Check upstream lkrdev/ojof-gym for any new *ojof* LookML skills
+          OJOF_DIR=$(mktemp -d)
+          git clone --depth 1 https://github.com/lkrdev/ojof-gym.git "$OJOF_DIR"
+          NEW_OJOF_SKILLS=()
+
+          while IFS= read -r skill_md; do
+            skill_dir=$(dirname "$skill_md")
+            skill_name=$(basename "$skill_dir")
+            if [[ "$skill_name" == *ojof* ]] && [ ! -d ".agents/skills/$skill_name" ]; then
+              NEW_OJOF_SKILLS+=("$skill_name")
+            fi
+          done < <(find "$OJOF_DIR" -name "SKILL.md")
+
+          rm -rf "$OJOF_DIR"
+
+          if [ ${#NEW_OJOF_SKILLS[@]} -gt 0 ]; then
+            echo "Installing new OJOF skills: ${NEW_OJOF_SKILLS[*]}"
+            npx --yes skills add lkrdev/ojof-gym \
+              --agent antigravity \
+              --skill "${NEW_OJOF_SKILLS[@]}" \
+              -y
+          fi
+
+          ALL_NEW_SKILLS=("${NEW_LOOKML_SKILLS[@]}" "${NEW_OJOF_SKILLS[@]}")
+          if [ ${#ALL_NEW_SKILLS[@]} -gt 0 ]; then
+            echo "new_skills=${ALL_NEW_SKILLS[*]}" >> "$GITHUB_OUTPUT"
           else
             echo "new_skills=" >> "$GITHUB_OUTPUT"
           fi
 
-          # 3. Return all lookml-* skills to skills/lookml/sub-skills/ (.agents/skills/lookml/sub-skills/)
+          # 4. Return all lookml-* skills to skills/lookml/sub-skills/ (.agents/skills/lookml/sub-skills/)
           mkdir -p skills/lookml/sub-skills
           mv .agents/skills/lookml-* skills/lookml/sub-skills/
 
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v7
-        with:
-          commit-message: "chore(skills): update looker-open-source/looker-skills"
-          title: "chore(skills): weekly looker-skills sync"
-          body: |
-            Automated weekly sync of LookML writing skills from [`looker-open-source/looker-skills`](https://github.com/looker-open-source/looker-skills) via `npx skills`.
+      - name: Create or Update Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_SKILLS: ${{ steps.sync_skills.outputs.new_skills }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet && [ -z "$(git status --porcelain)" ]; then
+            echo "No skill changes detected."
+            exit 0
+          fi
 
-            - Updates existing skills tracked in `skills-lock.json` and `.agents/skills/lookml/sub-skills/*`.
-            - Newly discovered `lookml-*` skills installed: `${{ steps.sync_skills.outputs.new_skills || 'none' }}`
+          BRANCH="chore/update-looker-skills"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add skills/lookml/sub-skills skills-lock.json
+          git commit -m "chore(skills): update looker-open-source/looker-skills and lkrdev/ojof-gym"
+          git push --force origin "$BRANCH"
 
-            If new `lookml-*` skills were added, consider adding them to `skills/lookml/SKILL.md` and `skills/agentic-lookml/SKILL.md`.
-          branch: chore/update-looker-skills
-          delete-branch: true
-          labels: dependencies
+          BODY="Automated weekly sync of LookML writing skills from [\`looker-open-source/looker-skills\`](https://github.com/looker-open-source/looker-skills) and [\`lkrdev/ojof-gym\`](https://github.com/lkrdev/ojof-gym) via \`npx skills\`.
+
+          - Updates existing skills tracked in \`skills-lock.json\` and \`.agents/skills/lookml/sub-skills/*\`.
+          - Newly discovered \`lookml-*\` skills installed: \`${NEW_SKILLS:-none}\`
+
+          If new \`lookml-*\` skills were added, consider adding them to \`skills/lookml/SKILL.md\` and \`skills/agentic-lookml/SKILL.md\`."
+
+          EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING_PR" ]; then
+            gh pr edit "$EXISTING_PR" --title "chore(skills): weekly looker-skills sync" --body "$BODY"
+          else
+            gh pr create --head "$BRANCH" --title "chore(skills): weekly looker-skills sync" --body "$BODY"
+          fi

@@ -74,3 +74,103 @@ def test_compare_row_sets_row_count_mismatch():
     matched, mismatches = compare_row_sets(sql_rows, looker_rows)
     assert matched is False
     assert "Row count mismatch" in mismatches[0]
+
+
+def test_generate_bronze_view_monty_compatible():
+    script_path = (
+        Path(__file__).resolve().parent.parent
+        / "skills"
+        / "generate-view-from-table"
+        / "scripts"
+        / "generate_bronze_view.py"
+    )
+    source = script_path.read_text()
+    assert "globals(" not in source
+
+    called_kwargs = {}
+
+    def fake_generate(**kwargs):
+        called_kwargs.update(kwargs)
+        return {"new_files": [{"path": "bronze/order_items.view.lkml"}]}
+
+    ns = {
+        "project_id": "proj",
+        "model_name": "mod",
+        "connection_name": "conn",
+        "schema_name": "bigquery-public-data.thelook_ecommerce",
+        "table_name": "order_items",
+        "generate_lookml_with_new_files": fake_generate,
+    }
+    exec(compile(source, str(script_path), "exec"), ns)  # noqa: S102
+    assert called_kwargs["folder_name"] == "bronze"
+    assert called_kwargs["body"] == {
+        "tables": [
+            {"schema": "bigquery-public-data.thelook_ecommerce", "table_name": "order_items", "base_view": True}
+        ]
+    }
+
+
+def test_configure_model_defaults_to_project_id_and_creates_model():
+    script_path = SCRIPTS_DIR / "configure_model.py"
+    source = script_path.read_text()
+    assert "globals(" not in source
+
+    created_bodies = []
+
+    def fake_create_lookml_model(body):
+        created_bodies.append(body)
+        return body
+
+    ns = {
+        "project_id": "agentic-thelook",
+        "connection_name": "bigquery_public",
+        "all_lookml_models": list,
+        "create_lookml_model": fake_create_lookml_model,
+        "update_lookml_model": lambda **_kw: None,
+    }
+    exec(compile(source, str(script_path), "exec"), ns)  # noqa: S102
+    assert created_bodies == [
+        {
+            "name": "agentic_thelook",
+            "project_name": "agentic-thelook",
+            "allowed_db_connection_names": ["bigquery_public"],
+        }
+    ]
+
+
+def test_validate_and_commit_pushes_branch_to_remote():
+    script_path = SCRIPTS_DIR / "validate_and_commit_branch.py"
+    source = script_path.read_text()
+    assert "globals(" not in source
+
+    pushed_paths = []
+
+    def fake_post(path, **_kw):
+        pushed_paths.append(path)
+        return ""
+
+    ns = {
+        "project_id": "agentic-thelook",
+        "commit_message": "feat(lookml): refactor SQL queries",
+        "skip_tests": "true",
+        "validate_project": lambda **_kw: {"errors": []},
+        "run_lookml_test": lambda **_kw: [],
+        "commit": lambda **_kw: {},
+        "post": fake_post,
+        "encode_path_param": lambda s: s,
+        "git_branch": lambda **_kw: {"name": "20261020_093734_975_1", "ref": "abc1234"},
+    }
+    exec(compile(source, str(script_path), "exec"), ns)  # noqa: S102
+    assert pushed_paths == ["/projects/agentic-thelook/push_branch"]
+
+
+def test_no_monty_globals_in_skill_scripts():
+    skills_dir = Path(__file__).resolve().parent.parent / "skills"
+    for py_file in skills_dir.rglob("*.py"):
+        text = py_file.read_text()
+        assert "globals().get(" not in text, f"{py_file} uses globals().get()"
+        assert "locals().get(" not in text, f"{py_file} uses locals().get()"
+
+
+
+

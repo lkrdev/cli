@@ -31,6 +31,12 @@
       "skillPath": "skills/lookml-model/SKILL.md",
       "computedHash": "55ebcdd9b5c92bc0c3ce9c296c88edb3ac36ead0302726def0d97cadbf4faa57"
     },
+    "lookml-ojof": {
+      "source": "lkrdev/ojof-gym",
+      "sourceType": "github",
+      "skillPath": "tasks/task_synth_test_01/environment/skills/lookml-ojof/SKILL.md",
+      "computedHash": "3fd78481969e4b625c0f766e15c7111f842728d897e01189e8fa50c7a1d528f4"
+    },
     "lookml-refinements": {
       "source": "looker-open-source/looker-skills",
       "sourceType": "github",

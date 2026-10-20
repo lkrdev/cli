@@ -9,8 +9,14 @@ Usage:
 
 
 def main():
-    target_conn = globals().get("connection_name", "")
-    target_schema = globals().get("schema_name", "")
+    try:
+        target_conn = str(connection_name)  # ty: ignore[unresolved-reference]
+    except NameError:
+        target_conn = ""
+    try:
+        target_schema = str(schema_name)  # ty: ignore[unresolved-reference]
+    except NameError:
+        target_schema = ""
 
     all_conns = all_connections()  # ty: ignore[unresolved-reference]
     conn_list = [

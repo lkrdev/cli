@@ -49,6 +49,10 @@ def main():
         return {"passed": True, "committed": False, "errors": [], "failed_tests": []}
 
     commit(project_id=p_id, body={"message": c_msg})  # ty: ignore[unresolved-reference]
+    try:
+        post(path=f"/projects/{encode_path_param(p_id)}/push_branch", structure=str)  # ty: ignore[unresolved-reference]
+    except NameError:
+        pass
     branch = git_branch(project_id=p_id) or {}  # ty: ignore[unresolved-reference]
     return {
         "passed": True,

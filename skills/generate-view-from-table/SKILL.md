@@ -71,7 +71,7 @@ When operating inside an active branch or `lkr code-mode` sandbox session, run [
 
 ```bash
 lkr --base-url="$BASE_URL" --dev code-mode sandbox --dev-mode \
-  --file=skills/generate-view-from-table/scripts/generate_bronze_view.py \
+  --file=.agents/skills/generate-view-from-table/scripts/generate_bronze_view.py \
   --var project_id="<project_id>" \
   --var model_name="<model_name>" \
   --var connection_name="<connection_name>" \

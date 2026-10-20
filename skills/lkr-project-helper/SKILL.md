@@ -80,11 +80,11 @@ Inspect available connections, verify connectivity, and list schemas/tables:
 ```bash
 # List all connections on the instance
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox \
-  --file=skills/lkr-project-helper/scripts/inspect_connections.py
+  --file=.agents/skills/lkr-project-helper/scripts/inspect_connections.py
 
 # Test a specific connection and list its schemas and tables
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox \
-  --file=skills/lkr-project-helper/scripts/inspect_connections.py \
+  --file=.agents/skills/lkr-project-helper/scripts/inspect_connections.py \
   --var connection_name="looker-private-demo" \
   --var schema_name="thelook"
 ```
@@ -99,7 +99,7 @@ Before pushing local LookML or running LookML generators on a new project, run `
 
 ```bash
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
-  --file=skills/lkr-project-helper/scripts/ensure_project_and_model.py \
+  --file=.agents/skills/lkr-project-helper/scripts/ensure_project_and_model.py \
   --var project_name="my_new_project" \
   --var model_name="my_model" \
   --var connection_name="looker-private-demo"
@@ -119,7 +119,7 @@ Use `scripts/generate_lookml.py` with `--dev-mode` to invoke `generate_lookml_wi
 
 ```bash
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
-  --file=skills/lkr-project-helper/scripts/generate_lookml.py \
+  --file=.agents/skills/lkr-project-helper/scripts/generate_lookml.py \
   --var project_name="my_new_project" \
   --var model_name="my_model" \
   --var connection_name="looker-private-demo" \
@@ -157,7 +157,7 @@ When the user provides a raw SQL query (including complex joins, CTEs, or BigQue
 
 ```bash
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
-  --file=skills/lkr-project-helper/scripts/bq_view_lookml_generator.py \
+  --file=.agents/skills/lkr-project-helper/scripts/bq_view_lookml_generator.py \
   --var project="my_new_project" \
   --var connection="looker-private-demo" \
   --var model="my_model" \
@@ -170,7 +170,7 @@ uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
 
 ```bash
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
-  --file=skills/lkr-project-helper/scripts/create_custom_view.py \
+  --file=.agents/skills/lkr-project-helper/scripts/create_custom_view.py \
   --var project_name="my_new_project" \
   --var view_name="order_summary_view" \
   --var folder_name="views" \
@@ -185,7 +185,7 @@ If the user describes what they want to analyze without naming specific tables:
 
 ```bash
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
-  --file=skills/lkr-project-helper/scripts/generate_lookml.py \
+  --file=.agents/skills/lkr-project-helper/scripts/generate_lookml.py \
   --var project_name="my_new_project" \
   --var model_name="my_model" \
   --var connection_name="looker-private-demo" \
@@ -223,7 +223,7 @@ To validate LookML syntax (blocking on errors), commit, deploy to production, an
 
 ```bash
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
-  --file=skills/lkr-project-helper/scripts/deploy_and_reset_workspace.py \
+  --file=.agents/skills/lkr-project-helper/scripts/deploy_and_reset_workspace.py \
   --var project_name="my_new_project" \
   --var commit_message="Initial LookML project setup and deployment" \
   --var strict="true"

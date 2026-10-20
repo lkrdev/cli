@@ -11,9 +11,18 @@ Usage:
 
 
 def main():
-    proj = globals().get("project_name", "my_new_project")
-    msg = globals().get("commit_message", "Initial project generation")
-    raw_deploy = globals().get("deploy", "false")
+    try:
+        proj = str(project_name) or "my_new_project"  # ty: ignore[unresolved-reference]
+    except NameError:
+        proj = "my_new_project"
+    try:
+        msg = str(commit_message) or "Initial project generation"  # ty: ignore[unresolved-reference]
+    except NameError:
+        msg = "Initial project generation"
+    try:
+        raw_deploy = str(deploy)  # ty: ignore[unresolved-reference]
+    except NameError:
+        raw_deploy = "false"
     should_deploy = str(raw_deploy).lower() in ("true", "1", "yes")
 
     validation = validate_project(proj)  # ty: ignore[unresolved-reference]
