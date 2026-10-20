@@ -13,7 +13,7 @@ def _load_module(name: str, path: Path):
 
 
 init_mod = _load_module("init_sql_queries", SCRIPTS_DIR / "init_sql_queries.py")
-verify_mod = _load_module("verify_sql_lookml_parity", SCRIPTS_DIR / "verify_sql_lookml_parity.py")
+verify_mod = _load_module("record_query_parity", SCRIPTS_DIR / "record_query_parity.py")
 
 split_sql_statements = init_mod.split_sql_statements
 compare_row_sets = verify_mod.compare_row_sets

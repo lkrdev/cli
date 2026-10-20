@@ -1,8 +1,7 @@
 # ruff: noqa: F821, BLE001
-"""Register Looker queries, verify result parity against SQL Runner, and update data.json."""
+"""Register Looker queries (when inline_queries_json is provided) and verify result parity against SQL Runner."""
 
 import json
-from pathlib import Path
 
 
 def normalize_val(v):
@@ -11,119 +10,89 @@ def normalize_val(v):
     if isinstance(v, (int, float)):
         return round(float(v), 4)
     if isinstance(v, str):
-        s = v.strip()
         try:
-            return round(float(s), 4)
+            return round(float(v.strip()), 4)
         except ValueError:
-            return s
+            return v.strip()
     return str(v)
+
+
+def _norm_row(row):
+    return {k.split(".")[-1]: normalize_val(v) for k, v in row.items()}
 
 
 def compare_row_sets(sql_rows, looker_rows):
     if len(sql_rows) != len(looker_rows):
-        return False, [f"Row count mismatch: SQL has {len(sql_rows)}, Looker has {len(looker_rows)}"]
-
-    if not sql_rows and not looker_rows:
-        return True, []
-
-    sql_cols = list(sql_rows[0].keys())
-    looker_cols = list(looker_rows[0].keys())
-
-    # Map looker columns (often prefixed e.g. 'orders.total_amount') to unqualified sql column names
-    col_mapping = {}
-    unmapped_looker = []
-    for l_col in looker_cols:
-        tail = l_col.split(".")[-1]
-        if tail in sql_cols:
-            col_mapping[l_col] = tail
-        elif l_col in sql_cols:
-            col_mapping[l_col] = l_col
-        else:
-            unmapped_looker.append(l_col)
-
-    if unmapped_looker and len(sql_cols) == len(looker_cols):
-        # Fall back to positional alignment if column count matches
-        for l_col, s_col in zip(looker_cols, sql_cols, strict=False):
-            col_mapping[l_col] = s_col
-
+        return False, [f"Row count mismatch: SQL={len(sql_rows)}, Looker={len(looker_rows)}"]
     mismatches = []
-    for r_idx in range(min(len(sql_rows), len(looker_rows))):
-        s_row = sql_rows[r_idx]
-        l_row = looker_rows[r_idx]
-        for l_col, s_col in col_mapping.items():
-            s_val = normalize_val(s_row.get(s_col))
-            l_val = normalize_val(l_row.get(l_col))
-            if s_val != l_val:
-                mismatches.append(
-                    f"Row {r_idx} mismatch for {l_col} ({s_col}): SQL={s_val}, Looker={l_val}"
-                )
-                if len(mismatches) >= 5:
-                    return False, mismatches
-
-    return len(mismatches) == 0, mismatches
+    for idx, (sr, lr) in enumerate(zip(sql_rows, looker_rows, strict=False)):
+        sn, ln = _norm_row(sr), _norm_row(lr)
+        pairs = (
+            [(k, sn.get(k), ln.get(k)) for k in sn]
+            if set(sn) == set(ln)
+            else [(f"col_{i}", sv, lv) for i, (sv, lv) in enumerate(zip(sn.values(), ln.values(), strict=False))]
+        )
+        for col, sv, lv in pairs:
+            if sv != lv:
+                mismatches.append(f"Row {idx} ({col}): SQL={sv}, Looker={lv}")
+    return not mismatches, mismatches[:5]
 
 
 def main():
-    data_path = Path(data_json_path)  # ty: ignore[unresolved-reference]
-    data = json.loads(data_path.read_text(encoding="utf-8")) if data_path.exists() else {}
-    b_url = str(base_url).rstrip("/")  # ty: ignore[unresolved-reference]
-    queries = data.get("queries") or []
-
-    # inline_queries_payload can be passed as a JSON string mapping query_index to inline_query dict
-    query_payloads = (
-        json.loads(inline_queries_json)  # ty: ignore[unresolved-reference]
-        if isinstance(inline_queries_json, str)  # ty: ignore[unresolved-reference]
-        else inline_queries_json  # ty: ignore[unresolved-reference]
-    )
+    try:
+        data = json.loads(data_json) if isinstance(data_json, str) else (data_json or {})  # ty: ignore[unresolved-reference]
+    except NameError:
+        return None
+    try:
+        b_url = str(base_url).rstrip("/")  # ty: ignore[unresolved-reference]
+    except NameError:
+        b_url = ""
+    try:
+        payloads = (
+            json.loads(inline_queries_json)  # ty: ignore[unresolved-reference]
+            if isinstance(inline_queries_json, str)  # ty: ignore[unresolved-reference]
+            else (inline_queries_json or {})  # ty: ignore[unresolved-reference]
+        )
+    except NameError:
+        payloads = {}
 
     all_matched = True
-    for q_entry in queries:
-        idx = q_entry["query_index"]
-        idx_key = str(idx)
-        if idx_key not in query_payloads and idx not in query_payloads:
+    for q in data.get("queries") or []:
+        idx = q.get("query_index")
+        inline_q = payloads.get(str(idx)) or payloads.get(idx)
+        if inline_q:
+            q_obj = create_query(body=inline_q) or {}  # ty: ignore[unresolved-reference]
+            slug = q_obj.get("slug") or q_obj.get("client_id")
+            q["query_id"] = str(q_obj["id"]) if q_obj.get("id") is not None else None
+            q["query_slug"] = str(slug) if slug is not None else None
+            q["explore_url"] = f"{b_url}/x/{slug}" if (b_url and slug) else (q_obj.get("share_url") or "")
+            q["inline_query"] = inline_q
+
+        sql_slug = q.get("sql_query_id")
+        active_q = q.get("inline_query")
+        if not sql_slug or not (active_q or q.get("query_id")):
             continue
+        try:
+            s_raw = run_sql_query(slug=sql_slug, result_format="json")  # ty: ignore[unresolved-reference]
+            s_rows = json.loads(s_raw) if isinstance(s_raw, str) else (s_raw or [])
+            l_raw = (
+                run_inline_query(result_format="json", body=active_q)  # ty: ignore[unresolved-reference]
+                if active_q
+                else run_query(query_id=q["query_id"], result_format="json")  # ty: ignore[unresolved-reference]
+            )
+            l_rows = json.loads(l_raw) if isinstance(l_raw, str) else (l_raw or [])
+            matched, mismatches = compare_row_sets(s_rows, l_rows)
+            q["parity_status"] = "matched" if matched else "mismatched"
+            q["mismatches"] = mismatches
+            all_matched = all_matched and matched
+        except Exception as e:
+            q["parity_status"] = "error"
+            q["mismatches"] = [str(e)]
+            all_matched = False
 
-        inline_q = query_payloads.get(idx_key) or query_payloads.get(idx)
-        if not inline_q:
-            continue
-
-        # Register query in Looker to get query id and explore slug
-        q_obj = create_query(body=inline_q) or {}  # ty: ignore[unresolved-reference]
-        q_id = q_obj.get("id")
-        q_slug = q_obj.get("slug") or q_obj.get("client_id")
-        explore_url = f"{b_url}/x/{q_slug}" if q_slug else (q_obj.get("share_url") or "")
-
-        q_entry["query_id"] = str(q_id) if q_id is not None else None
-        q_entry["query_slug"] = str(q_slug) if q_slug is not None else None
-        q_entry["explore_url"] = explore_url
-        q_entry["inline_query"] = inline_q
-
-        # Run comparison between SQL Runner and Looker query
-        sql_slug = q_entry.get("sql_query_id")
-        if sql_slug:
-            try:
-                sql_res_raw = run_sql_query(slug=sql_slug, result_format="json")  # ty: ignore[unresolved-reference]
-                sql_rows = json.loads(sql_res_raw) if isinstance(sql_res_raw, str) else (sql_res_raw or [])
-
-                looker_res_raw = run_inline_query(result_format="json", body=inline_q)  # ty: ignore[unresolved-reference]
-                looker_rows = json.loads(looker_res_raw) if isinstance(looker_res_raw, str) else (looker_res_raw or [])
-
-                matched, mismatches = compare_row_sets(sql_rows, looker_rows)
-                q_entry["parity_status"] = "matched" if matched else "mismatched"
-                q_entry["mismatches"] = mismatches
-                if not matched:
-                    all_matched = False
-            except Exception as e:
-                q_entry["parity_status"] = "error"
-                q_entry["mismatches"] = [str(e)]
-                all_matched = False
-
-    data["queries"] = queries
-    data_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    return {"all_matched": all_matched, "queries": queries}
+    data["passed"] = all_matched
+    data["all_queries_matched"] = all_matched
+    return data
 
 
-try:
-    main()
-except NameError:
-    pass
+main()
