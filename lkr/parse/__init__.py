@@ -54,6 +54,7 @@ from lkr.parse.lookml_database_compare import (
 )
 from lkr.parse.lookml_snapshot import (
     LookmlSnapshotResult,
+    find_material_changes,
     run_lookml_snapshot,
 )
 from lkr.parse.lookml_to_api import (
@@ -244,6 +245,7 @@ __all__ = [
     "analyze_lookml_translations",
     "build_explore_join_graph",
     "fetch_sdk_database_catalog",
+    "find_material_changes",
     "format_compare_result",
     "format_user_attributes",
     "group",

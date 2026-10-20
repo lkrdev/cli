@@ -741,6 +741,8 @@ $ lkr parse lookml snapshot [OPTIONS]
 * `-m, --model <str>`: Optional model name filter for snapshot
 * `--format <console|json>`: Output format: console or json  [default: console]
 * `-o, --output <path>`: Optional output file path
+* `--allow-additions`: Pass on additive snapshot changes; fail only on material modifications or removals
+* `--base-path <path>`: Optional base LookML or snapshot directory to compare against instead of &lt;path&gt;/__snapshots__
 * `--help`: Show this message and exit.
 
 #### `lkr parse lookml translations`

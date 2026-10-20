@@ -10,8 +10,12 @@ REPO=$(jq -r '.git_remote_url' "$DATA_JSON")
 HEAD_BRANCH=$(jq -r '.branch_name' "$DATA_JSON")
 BASE_BRANCH=$(jq -r '.production_branch // "main"' "$DATA_JSON")
 
+if [[ -d "$SESSION_DIR/lookml" && ! -f "$SESSION_DIR/snapshot_check.json" ]]; then
+  lkr parse lookml snapshot --path "$SESSION_DIR/lookml" --allow-additions --format json --output "$SESSION_DIR/snapshot_check.json" || true
+fi
+
 FILES=()
-for f in summary.md input.sql metrics.md compare_initial.json compare_post_refactor.json; do
+for f in summary.md input.sql metrics.md compare_initial.json compare_post_refactor.json snapshot_check.json; do
   [[ -f "$SESSION_DIR/$f" ]] && FILES+=("$SESSION_DIR/$f")
 done
 if [[ ${#FILES[@]} -eq 0 ]]; then
@@ -22,6 +26,18 @@ fi
 GIST_URL=$(gh gist create "${FILES[@]}" --desc "agentic-lookml attachments ($RUN_ID)")
 GIST_ID="${GIST_URL##*/}"
 ATTACHMENTS=$(gh api "/gists/$GIST_ID" --jq '.files | map_values(.raw_url)')
+
+SNAPSHOT_SECTION=""
+PR_EXTRA_ARGS=()
+if [[ -f "$SESSION_DIR/snapshot_check.json" ]]; then
+  if jq -e '.requires_review == true' "$SESSION_DIR/snapshot_check.json" >/dev/null 2>&1; then
+    MAT_LIST=$(jq -r '.material_changes[]? | "- `" + . + "`"' "$SESSION_DIR/snapshot_check.json")
+    SNAPSHOT_SECTION=$'\n\n### Material Snapshot Changes (Human Review Required)\n'"$MAT_LIST"
+    [[ -n "${LOOKML_REVIEWERS:-}" ]] && PR_EXTRA_ARGS+=(--reviewer "$LOOKML_REVIEWERS")
+  else
+    SNAPSHOT_SECTION=$'\n\n### LookML Snapshot Status\nAdditive-only changes verified (`requires_review: false`).'
+  fi
+fi
 
 QUERIES_TABLE=""
 if jq -e '.queries and (.queries | length > 0)' "$DATA_JSON" >/dev/null 2>&1; then
@@ -42,11 +58,11 @@ fi
 
 PR_BODY="Automated SQL-to-LookML refactor (\`$RUN_ID\`).
 
-Attachments: $GIST_URL$QUERIES_TABLE$SUMMARY_BODY"
+Attachments: $GIST_URL$SNAPSHOT_SECTION$QUERIES_TABLE$SUMMARY_BODY"
 
 PR_URL=$(gh pr create --repo "$REPO" --head "$HEAD_BRANCH" --base "$BASE_BRANCH" \
   --title "feat(lookml): SQL-to-LookML refactor ($RUN_ID)" \
-  --body "$PR_BODY")
+  --body "$PR_BODY" "${PR_EXTRA_ARGS[@]}")
 
 jq --arg pr "$PR_URL" --arg gist "$GIST_URL" --argjson att "$ATTACHMENTS" \
   '. + {pr_url: $pr, gist_url: $gist, attachments: $att}' "$DATA_JSON" > "$DATA_JSON.tmp" \

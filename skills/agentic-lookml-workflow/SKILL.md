@@ -23,7 +23,7 @@ flowchart TD
     Auth --> InitBranch["Reset to prod & create branch: scripts/init_branch.py -> ./data/:id/data.json"]
     InitBranch --> ExtractFiles["Save ./data/:id/input.sql, ./data/:id/metrics.md & initialize ./data/:id/summary.md"]
     ExtractFiles --> GenBronze["Generate/refresh Bronze views for all SQL tables: generate_bronze_view.py (log to summary.md)"]
-    GenBronze --> PullLookML["Pull LookML: lkr --dev tools lookml pull ./data/:id/lookml"]
+    GenBronze --> PullLookML["Pull LookML & baseline snapshots: lookml pull + lkr parse lookml snapshot -u"]
     PullLookML --> GenBronzeRefinements["Deconstruct query, identify patterns & author Bronze refinements in ./data/:id/lookml (log to summary.md)"]
     GenBronzeRefinements --> PushBronze["Push Bronze to dev branch: lkr --dev tools lookml push --no-reset"]
     PushBronze --> PreGate["PRE-MODELING & PRE-TEST GATE: Validate LookML + Init SQL Runner + Early Query Parity"]
@@ -31,7 +31,8 @@ flowchart TD
     PreGateCheck -- "Yes" --> FixBronze["Log 'Validation failed' & 'Updating LookML' to summary.md; self-heal Bronze"]
     FixBronze --> PushBronze
     PreGateCheck -- "No" --> RunAgentic["Model Silver/Gold & write LookML tests (tests/) in ./data/:id/lookml (log to summary.md)"]
-    RunAgentic --> PushFinal["Push final LookML to dev branch: lkr --dev tools lookml push --no-reset"]
+    RunAgentic --> SnapshotGate["Check snapshots: lkr parse lookml snapshot --allow-additions -> snapshot_check.json"]
+    SnapshotGate --> PushFinal["Push final LookML to dev branch: lkr --dev tools lookml push --no-reset"]
     PushFinal --> TargetTests["Target new/additional tests via lkr code-mode: run_lookml_test(file_id=..., test=...)"]
     TargetTests --> RecordParity["Register final Explore queries: scripts/record_query_parity.py -> /x/:query_id"]
     RecordParity --> ValidateCommit["Final validation & targeted tests: scripts/validate_and_commit_branch.py"]
@@ -50,7 +51,7 @@ All workflow helper scripts live in `skills/agentic-lookml-workflow/scripts/`:
 - [init_sql_queries.py](scripts/init_sql_queries.py) runs in `lkr code-mode sandbox --dev-mode` to split multi-statement SQL in `input.sql`, create SQL Runner queries via `create_sql_query`, and populate `data.json["queries"]` with `sql_query_id` and `sql_runner_url` (`{BASE_URL}/sql/{sql_id}`).
 - [record_query_parity.py](scripts/record_query_parity.py) runs in `lkr code-mode sandbox --dev-mode` to register Looker explore queries via `create_query` (when `inline_queries_json` is provided), store `query_id`, `query_slug`, and `explore_url` (`{BASE_URL}/x/{query_slug}`), and compare row outputs between SQL Runner (`run_sql_query`) and Looker (`run_inline_query` / `run_query`) both locally and in CI.
 - [validate_and_commit_branch.py](scripts/validate_and_commit_branch.py) runs in `lkr code-mode sandbox --dev-mode` to validate the project (`validate_project`), execute targeted LookML data tests (`run_lookml_test` filtered by `test_names` / `file_ids`, or skipped via `skip_tests="true"`), block commits if any test fails, and optionally commit the branch via the Looker API (`commit`) when `commit_message` is provided.
-- [create_github_pr.sh](scripts/create_github_pr.sh) attaches `./data/:id/summary.md`, `./data/:id/input.sql`, `./data/:id/metrics.md`, `./data/:id/compare_initial.json`, and `./data/:id/compare_post_refactor.json` via `gh gist create`, embeds `summary.md` and the interactive SQL Runner (`/sql/:sql_id`) and Looker Explore (`/x/:query_id`) link table in the PR description, writes attachment URLs into `./data/:id/data.json`, and opens the GitHub PR against `git_production_branch_name` via `gh pr create`.
+- [create_github_pr.sh](scripts/create_github_pr.sh) runs `lkr parse lookml snapshot --allow-additions` if `snapshot_check.json` is not yet generated, attaches `./data/:id/summary.md`, `./data/:id/input.sql`, `./data/:id/metrics.md`, `./data/:id/compare_initial.json`, `./data/:id/compare_post_refactor.json`, and `./data/:id/snapshot_check.json` via `gh gist create`, embeds `summary.md`, the snapshot review status, and the interactive SQL Runner (`/sql/:sql_id`) and Looker Explore (`/x/:query_id`) link table in the PR description, writes attachment URLs into `./data/:id/data.json`, and opens the GitHub PR against `git_production_branch_name` via `gh pr create` (requesting reviewers when material snapshot changes are detected).
 
 ## Workflow steps
 
@@ -90,6 +91,7 @@ All workflow helper scripts live in `skills/agentic-lookml-workflow/scripts/`:
     --var schema_name="$SCHEMA_NAME" \
     --var table_name="$TABLE_NAMES"
   lkr --base-url="$BASE_URL" --dev tools lookml pull "./data/$RUN_ID/lookml" --project-id="$PROJECT_ID"
+  lkr parse lookml snapshot --path "./data/$RUN_ID/lookml" -u
   lkr parse sql-lookml-compare --sql-file "./data/$RUN_ID/input.sql" --path "./data/$RUN_ID/lookml" --output "./data/$RUN_ID/compare_initial.json"
   ```
 - Deconstruct the SQL query to canonical form, identify the matched query patterns from the original query, author Bronze refinements (`bronze/:table.refinement.lkml`) and hidden base explores (`bronze/explores/:table_base.explore.lkml`), record these steps in `./data/$RUN_ID/summary.md`, and push Bronze files to the dev branch:
@@ -123,9 +125,10 @@ All workflow helper scripts live in `skills/agentic-lookml-workflow/scripts/`:
        --var inline_queries_json="$INLINE_QUERIES_JSON")
      echo "$UPDATED_DATA" > "./data/$RUN_ID/data.json"
      ```
-- Model Silver explores, cross-view `*_fields`, and author LookML data tests (`tests/bronze/` and `tests/silver/`) in `./data/$RUN_ID/lookml` following [agentic-lookml](../agentic-lookml/SKILL.md) (using the verified immutable baseline values from the parity gate), log the authored LookML and tests in `./data/$RUN_ID/summary.md`, and re-run compare:
+- Model Silver explores, cross-view `*_fields`, and author LookML data tests (`tests/bronze/` and `tests/silver/`) in `./data/$RUN_ID/lookml` following [agentic-lookml](../agentic-lookml/SKILL.md) (using the verified immutable baseline values from the parity gate), log the authored LookML and tests in `./data/$RUN_ID/summary.md`, re-run compare, and evaluate LookML snapshots with `--allow-additions` so pure additions pass automatically while any modified or removed test assert, test field, connection name, measure label, access grant, or manifest setting is flagged in `snapshot_check.json`:
   ```bash
   lkr parse sql-lookml-compare --sql-file "./data/$RUN_ID/input.sql" --path "./data/$RUN_ID/lookml" --output "./data/$RUN_ID/compare_post_refactor.json"
+  lkr parse lookml snapshot --path "./data/$RUN_ID/lookml" --allow-additions --format json --output "./data/$RUN_ID/snapshot_check.json"
   ```
 - Push final LookML edits to the active developer branch with `--no-reset`:
   ```bash
@@ -162,7 +165,8 @@ All workflow helper scripts live in `skills/agentic-lookml-workflow/scripts/`:
 
 ## Automated GitHub PR checks (`.github/workflows/lookml-pr-checks.yml`)
 
-When pull requests containing LookML changes or `./data/*/data.json` session files are created or updated, GitHub Actions runs two sequential steps in a single job:
+When pull requests containing LookML changes, snapshots, or `./data/*/data.json` session files are created, updated, or reviewed, GitHub Actions runs three sequential steps in a single job:
 
-1. The first step runs [scripts/validate_and_commit_branch.py](scripts/validate_and_commit_branch.py) (without `commit_message`) via `lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode` to execute Looker's `validate_project` and `run_lookml_test` on the branch, failing immediately if syntax errors, broken references, or LookML data tests fail.
-2. The second step runs only after the validator step succeeds, executing [scripts/record_query_parity.py](scripts/record_query_parity.py) (without `inline_queries_json`) via `lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode` to compare each SQL Runner query (`/sql/:sql_id`) against its corresponding Looker explore query (`/x/:query_id`) and verify numerical parity.
+1. The first step runs `lkr parse lookml snapshot --path "$LOOKML_DIR" --base-path "$BASE_LOOKML_DIR" --allow-additions --format json` against the base branch (`origin/${{ github.base_ref }}`). Purely additive changes (adding new tests, new assertions, new test columns or derived columns, new measures, or adding labels to previously unlabeled measures) pass automatically with `requires_review: false`. Material changes (modifying or removing an existing test assertion, modifying or removing an existing test field, changing a database connection name, changing or removing a label on an existing measure, or modifying/removing access controls or manifest entries) set `requires_review: true`, post a summary of the material changes, request reviewers if `LOOKML_REVIEWERS` is configured, and block the check until a human reviewer approves the PR (`reviewDecision == "APPROVED"`).
+2. The second step runs [scripts/validate_and_commit_branch.py](scripts/validate_and_commit_branch.py) (without `commit_message`) via `lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode` to execute Looker's `validate_project` and `run_lookml_test` on the branch, failing immediately if syntax errors, broken references, or LookML data tests fail.
+3. The third step runs only after the validator step succeeds, executing [scripts/record_query_parity.py](scripts/record_query_parity.py) (without `inline_queries_json`) via `lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode` to compare each SQL Runner query (`/sql/:sql_id`) against its corresponding Looker explore query (`/x/:query_id`) and verify numerical parity.
