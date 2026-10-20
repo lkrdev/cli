@@ -2603,5 +2603,317 @@ view: share_of_net_return {
     assert "share_of_net_return.amount" in f_by_name["daily_net_return_rate"].via
 
 
+def test_parse_lookml_constants_quoted_unquoted_and_positions(tmp_path: Path):
+    (tmp_path / "manifest.lkml").write_text(
+        'project_name: "const_proj"\n'
+        'constant: conn_name {\n'
+        '  value: "bigquery_prod"\n'
+        '  export: override_required\n'
+        '}\n'
+        'constant: bq_dataset {\n'
+        '  value: "analytics_prod.ecomm"\n'
+        '  export: override_optional\n'
+        '}\n'
+        'constant: dg_name {\n'
+        '  value: "daily_dg"\n'
+        '}\n'
+        'constant: base_view_name {\n'
+        '  value: "base_entity"\n'
+        '}\n'
+        'constant: is_secret_hidden {\n'
+        '  value: "yes"\n'
+        '}\n'
+        'constant: col_prefix {\n'
+        '  value: "order"\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "orders.view.lkml").write_text(
+        "view: base_entity {\n"
+        "  extension: required\n"
+        "  dimension: id {\n"
+        "    primary_key: yes\n"
+        "    type: number\n"
+        "    sql: ${TABLE}.@{col_prefix}_id ;;\n"
+        "  }\n"
+        "}\n"
+        "view: orders {\n"
+        "  extends: [@{base_view_name}]\n"
+        "  sql_table_name: `@{bq_dataset}.orders` ;;\n"
+        '  label: "Orders (@{bq_dataset})"\n'
+        "  dimension: secret_code {\n"
+        "    hidden: @{is_secret_hidden}\n"
+        "    type: string\n"
+        "    sql: ${TABLE}.secret_code ;;\n"
+        "  }\n"
+        "  dimension: status {\n"
+        "    type: string\n"
+        "    sql: ${TABLE}.status ;;\n"
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "ecomm.model.lkml").write_text(
+        'connection: "@{conn_name}"\n'
+        'include: "*.view.lkml"\n'
+        "datagroup: daily_dg {\n"
+        "  sql_trigger: SELECT CURRENT_DATE() ;;\n"
+        "}\n"
+        "explore: orders {\n"
+        "  persist_with: @{dg_name}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    proj = parse_lookml(path=tmp_path)
+    assert proj.errors is None
+    assert proj.manifest is not None
+    assert proj.manifest.project_name == "const_proj"
+    assert proj.manifest.constant is not None
+    assert proj.manifest.constant["conn_name"].value == "bigquery_prod"
+    assert proj.manifest.constant["conn_name"].export == "override_required"
+    assert proj.manifest.constant["bq_dataset"].export == "override_optional"
+
+    assert proj.model is not None
+    model = proj.model["ecomm"]
+    assert model.connection == "bigquery_prod"
+    assert model.explore is not None
+    exp = model.explore["orders"]
+    assert isinstance(exp, LookmlExplore)
+    assert exp.persist_with == "daily_dg"
+
+    assert model.view is not None
+    orders_v = model.view["orders"]
+    assert isinstance(orders_v, LookmlView)
+    assert (orders_v.sql_table_name or "").strip() == "`analytics_prod.ecomm.orders`"
+    assert orders_v.label == "Orders (analytics_prod.ecomm)"
+    assert orders_v.dimension is not None
+    assert orders_v.dimension["id"].primary_key is True
+    assert (orders_v.dimension["id"].sql or "").strip() == "${TABLE}.order_id"
+    assert orders_v.dimension["secret_code"].hidden is True
+    assert (orders_v.dimension["status"].sql or "").strip() == "${TABLE}.status"
+
+    # Verify source positions remain exact despite @{bq_dataset} expanding in length
+    assert proj.positions is not None
+    v_pos = proj.positions.file["orders.view"]["view"]["orders"]
+    # dimension: status starts at 0-indexed line 17 (1-indexed line 18)
+    assert v_pos["dimension"]["status"]["$p"][0] == 17
+
+
+def test_parse_lookml_manifest_dependency_override_constants(tmp_path: Path):
+    from lkr.parse import LookmlLocalDependency, LookmlRemoteDependency
+
+    imp_dir = tmp_path / "imported_projects" / "core_hub"
+    imp_dir.mkdir(parents=True)
+    (imp_dir / "manifest.lkml").write_text(
+        'project_name: "core_hub"\n'
+        'constant: schema_name {\n'
+        '  value: "default_core_schema"\n'
+        '  export: override_optional\n'
+        '}\n'
+        'constant: conn {\n'
+        '  value: "default_conn"\n'
+        '  export: override_required\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    (imp_dir / "users.view.lkml").write_text(
+        "view: users_core {\n"
+        "  sql_table_name: @{schema_name}.users ;;\n"
+        "  dimension: id {\n"
+        "    primary_key: yes\n"
+        "    type: number\n"
+        "    sql: ${TABLE}.id ;;\n"
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    (tmp_path / "manifest.lkml").write_text(
+        'project_name: "spoke_project"\n'
+        'constant: parent_conn {\n'
+        '  value: "spoke_bq_conn"\n'
+        '}\n'
+        "local_dependency: {\n"
+        '  project: "core_hub"\n'
+        "  override_constant: schema_name {\n"
+        '    value: "spoke_prod_schema"\n'
+        "  }\n"
+        "  override_constant: conn {\n"
+        '    value: "@{parent_conn}"\n'
+        "  }\n"
+        "}\n"
+        "remote_dependency: shared_ext {\n"
+        '  url: "https://github.com/example/shared_ext.git"\n'
+        '  ref: "main"\n'
+        "  override_constant: ext_table {\n"
+        '    value: "spoke_prod_schema.events"\n'
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "spoke.model.lkml").write_text(
+        'connection: "@{conn}"\n'
+        'include: "/imported_projects/core_hub/*.view.lkml"\n'
+        "explore: users_core {}\n",
+        encoding="utf-8",
+    )
+
+    proj = parse_lookml(path=tmp_path)
+    # Root manifest is preserved (not overwritten by imported_projects/core_hub/manifest.lkml)
+    assert proj.manifest is not None
+    assert proj.manifest.project_name == "spoke_project"
+    assert isinstance(proj.manifest.local_dependency, LookmlLocalDependency)
+    assert proj.manifest.local_dependency.project == "core_hub"
+    assert proj.manifest.local_dependency.override_constant is not None
+    assert (
+        proj.manifest.local_dependency.override_constant["schema_name"].value
+        == "spoke_prod_schema"
+    )
+    assert isinstance(proj.manifest.remote_dependency, dict)
+    assert "shared_ext" in proj.manifest.remote_dependency
+    assert isinstance(
+        proj.manifest.remote_dependency["shared_ext"], LookmlRemoteDependency
+    )
+
+    assert proj.model is not None
+    m = proj.model["spoke"]
+    assert m.connection == "spoke_bq_conn"
+    assert m.view is not None
+    users_v = m.view["users_core"]
+    assert isinstance(users_v, LookmlView)
+    assert (users_v.sql_table_name or "").strip() == "spoke_prod_schema.users"
+
+
+def test_parse_lookml_manifest_autodiscovery_and_cli_overrides(tmp_path: Path):
+    from lkr.parse import (
+        parse_lookml_database_compare,
+        parse_lookml_to_api,
+        parse_sql_to_lookml,
+    )
+
+    (tmp_path / "manifest.lkml").write_text(
+        'project_name: "auto_proj"\n'
+        'constant: target_schema {\n'
+        '  value: "manifest_schema"\n'
+        '  export: override_optional\n'
+        '}\n'
+        'constant: target_conn {\n'
+        '  value: "manifest_conn"\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    views_dir = tmp_path / "views"
+    views_dir.mkdir()
+    view_file = views_dir / "items.view.lkml"
+    view_file.write_text(
+        "view: items {\n"
+        "  sql_table_name: @{target_schema}.items ;;\n"
+        "  dimension: id {\n"
+        "    primary_key: yes\n"
+        "    type: number\n"
+        "    sql: ${TABLE}.id ;;\n"
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.model.lkml").write_text(
+        'connection: "@{target_conn}"\n'
+        'include: "/views/*.view.lkml"\n'
+        "explore: items {}\n",
+        encoding="utf-8",
+    )
+
+    # 1. Single --file inside a subdirectory auto-discovers ../manifest.lkml
+    proj_from_file = parse_lookml(file=view_file)
+    assert proj_from_file.model is not None
+    assert proj_from_file.model["inline"].view is not None
+    v_from_file = proj_from_file.model["inline"].view["items"]
+    assert isinstance(v_from_file, LookmlView)
+    assert (v_from_file.sql_table_name or "").strip() == "manifest_schema.items"
+
+    # 2. Python constants override takes highest precedence
+    proj_override = parse_lookml(
+        file=view_file, constants={"target_schema": "override_schema"}
+    )
+    assert proj_override.model is not None
+    assert proj_override.model["inline"].view is not None
+    v_override = proj_override.model["inline"].view["items"]
+    assert isinstance(v_override, LookmlView)
+    assert (v_override.sql_table_name or "").strip() == "override_schema.items"
+
+    # 3. sql-lookml-compare resolves constants from manifest & CLI --constant override
+    sql_cmp_default = parse_sql_to_lookml(
+        sql="SELECT id FROM manifest_schema.items",
+        lookml_file=view_file,
+    )
+    assert len(sql_cmp_default.queries[0].views) == 1
+    assert sql_cmp_default.queries[0].views[0].view_name == "items"
+
+    cli_sql_cmp = runner.invoke(
+        app,
+        [
+            "parse",
+            "sql-lookml-compare",
+            "--sql",
+            "SELECT id FROM custom_cli_schema.items",
+            "--lookml-file",
+            str(view_file),
+            "--constant",
+            "target_schema=custom_cli_schema",
+        ],
+    )
+    assert cli_sql_cmp.exit_code == 0
+    cmp_payload = json.loads(cli_sql_cmp.stdout)
+    assert len(cmp_payload["queries"][0]["views"]) == 1
+    assert cmp_payload["queries"][0]["views"][0]["sql_table"] == "custom_cli_schema.items"
+
+    # 4. lookml-to-api resolves constants and CLI --constant override
+    api_res = parse_lookml_to_api(
+        path=tmp_path,
+        constants={"target_conn": "override_conn", "target_schema": "override_schema"},
+    )
+    assert api_res.all_lookml_models[0].allowed_db_connection_names == ["override_conn"]
+    assert (
+        api_res.lookml_model_explores["main::items"].sql_table_name
+        == "override_schema.items  AS items"
+    )
+
+    cli_api = runner.invoke(
+        app,
+        [
+            "parse",
+            "lookml-to-api",
+            "--path",
+            str(tmp_path),
+            "-C",
+            "target_conn=cli_conn",
+            "-C",
+            "target_schema=cli_schema",
+        ],
+    )
+    assert cli_api.exit_code == 0
+    api_payload = json.loads(cli_api.stdout)
+    assert api_payload["all_lookml_models"][0]["allowed_db_connection_names"] == [
+        "cli_conn"
+    ]
+    assert (
+        api_payload["lookml_model_explores"]["main::items"]["sql_table_name"]
+        == "cli_schema.items  AS items"
+    )
+
+    # 5. lookml-database-compare resolves constants and CLI --constant override
+    db_cmp = parse_lookml_database_compare(
+        path=tmp_path,
+        columns=True,
+        constants={"target_schema": "db_cmp_schema", "target_conn": "db_cmp_conn"},
+    )
+    assert len(db_cmp.tables) == 1
+    assert db_cmp.tables[0].table == "db_cmp_schema.items"
+    assert db_cmp.tables[0].schema_ == "db_cmp_schema"
+    assert db_cmp.tables[0].connection == "db_cmp_conn"
+
+
+
 
 

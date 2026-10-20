@@ -19,16 +19,6 @@ def _ensure_period(text: str) -> str:
     return (cleaned if cleaned[-1] in ".!?" else cleaned + ".") if cleaned else ""
 
 
-def _humanize_name(short_name: str) -> str:
-    words = [w for w in short_name.replace(".", "_").split("_") if w]
-    if not words:
-        return "Field."
-    upper_tokens = ("id", "uuid", "guid", "url", "uri", "sku", "json", "pk", "fk", "etl")
-    return (
-        " ".join(w.upper() if w.lower() in upper_tokens else w.capitalize() for w in words) + "."
-    )
-
-
 def _is_json_value(val: str) -> bool:
     s = val.strip()
     if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
@@ -62,12 +52,14 @@ def classify_string_field(
 ) -> dict:
     full_name = str(field_meta.get("field_name") or field_meta.get("name") or "")
     short_name = str(field_meta.get("short_name") or full_name.split(".")[-1])
+    label = str(field_meta.get("label") or "")
+    label_short = str(field_meta.get("label_short") or "")
     low_name = short_name.lower()
     sql_expr = str(field_meta.get("sql") or "")
     existing_desc = str(field_meta.get("description") or "").strip()
     is_pk = bool(field_meta.get("primary_key"))
     is_helper = bool(field_meta.get("is_helper")) or low_name.startswith(("_", "helper_", "tmp_"))
-    base_prefix = _ensure_period(existing_desc) if existing_desc else _humanize_name(short_name)
+    base_prefix = (_ensure_period(existing_desc) + " ") if existing_desc else ""
 
     non_empty = [str(v).strip() for v in sample_values if v is not None and str(v).strip() != ""]
     json_hits = sum(1 for v in non_empty if _is_json_value(v))
@@ -110,28 +102,28 @@ def classify_string_field(
             "json_payload",
             True,
             False,
-            f"{base_prefix} Raw JSON payload; hidden and filter suggestions disabled to prevent full-column scans.",
+            f"{base_prefix}Raw JSON payload; hidden and filter suggestions disabled to prevent full-column scans.",
         )
     elif is_internal_id:
         classification, rec_hidden, rec_suggestable, rec_desc = (
             "surrogate_or_system_key",
             True,
             False,
-            f"{base_prefix} Internal key or system metadata column not intended for end-user grouping.",
+            f"{base_prefix}Internal key or system metadata column not intended for end-user grouping.",
         )
     elif is_uuid_col:
         classification, rec_hidden, rec_suggestable, rec_desc = (
             "uuid_or_hash",
             True,
             False,
-            f"{base_prefix} High-cardinality UUID or hash identifier.",
+            f"{base_prefix}High-cardinality UUID or hash identifier.",
         )
     elif distinct_count == 0:
         classification, rec_hidden, rec_suggestable, rec_desc = (
             "empty_or_null_only",
             True,
             False,
-            f"{base_prefix} Column contains only NULL or empty values in sampled data.",
+            f"{base_prefix}Column contains only NULL or empty values in sampled data.",
         )
     elif not is_free_text and distinct_count <= enum_threshold:
         vals_str = ", ".join(f"'{v}'" for v in non_empty[:enum_threshold])
@@ -139,7 +131,7 @@ def classify_string_field(
             "low_cardinality_enum",
             False,
             True,
-            f"{base_prefix} Values: {vals_str}.",
+            f"{base_prefix}Values: {vals_str}.",
         )
     elif not is_free_text and distinct_count <= categorical_threshold:
         vals_str = ", ".join(f"'{v}'" for v in non_empty[:top_n])
@@ -147,13 +139,13 @@ def classify_string_field(
             "medium_cardinality_categorical",
             False,
             True,
-            f"{base_prefix} Top values include: {vals_str} ({distinct_count} distinct values).",
+            f"{base_prefix}Top values include: {vals_str} ({distinct_count} distinct values).",
         )
     else:
         sample_preview = ", ".join(f"'{v[:40]}'" for v in non_empty[:3])
         preview_suffix = f" Example values: {sample_preview}." if sample_preview else ""
         desc_text = (
-            f"{base_prefix} High-cardinality or free-text string ({distinct_count}+ distinct values, max length {max_length}); "
+            f"{base_prefix}High-cardinality or free-text string ({distinct_count}+ distinct values, max length {max_length}); "
             f"filter suggestions disabled.{preview_suffix}"
         )
         classification, rec_hidden, rec_suggestable, rec_desc = (
@@ -174,6 +166,8 @@ def classify_string_field(
     return {
         "field_name": full_name,
         "short_name": short_name,
+        "label": label,
+        "label_short": label_short,
         "classification": classification,
         "distinct_count": distinct_count,
         "total_rows_sampled": total_rows,
@@ -251,6 +245,8 @@ def main():
                 field_list.append({
                     "field_name": fname,
                     "short_name": sname,
+                    "label": str(d.get("label") or ""),
+                    "label_short": str(d.get("label_short") or ""),
                     "sql_column": sname,
                     "primary_key": bool(d.get("primary_key")),
                     "hidden": bool(d.get("hidden")),

@@ -55,21 +55,23 @@ On high-cardinality strings, free-text notes, URLs, or unparsed JSON columns, th
 
 ## String profiling tiers
 
-The [profile_string_fields.py](scripts/profile_string_fields.py) script classifies every `type: string` dimension in priority order and preserves any existing `INFORMATION_SCHEMA` description as the leading sentence (`<Base>.`):
+The [profile_string_fields.py](scripts/profile_string_fields.py) script classifies every `type: string` dimension in priority order and preserves any existing `INFORMATION_SCHEMA` description as an optional leading sentence (`<Base>. `) without echoing the field name when no prior description exists:
 
 | Priority | `classification` value | Trigger condition | `recommended_hidden` | `recommended_suggestable` | `recommended_description` format |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| 1 | `json_payload` | Name matches `(^\|_)(json\|payload\|raw_event\|proto\|xml)($\|_)`, `JSON_` in `sql:`, or $\ge 50\%$ of sample values parse as JSON `{...}` / `[...]` | `True` (`yes`) | `False` (`no`) | `"<Base>. Raw JSON payload; hidden and filter suggestions disabled to prevent full-column scans."` |
-| 2 | `surrogate_or_system_key` | `primary_key: yes`, `is_helper`, name matches `^(_fivetran_\|_airbyte_\|_sdc_\|_baton_\|etl_\|ingest_)\|(_pk\|_fk\|_sk)$`, or (`id` / `*_id` with `distinct_count > categorical_threshold`) | `True` (`yes`) | `False` (`no`) | `"<Base>. Internal key or system metadata column not intended for end-user grouping."` |
-| 3 | `uuid_or_hash` | Name matches `(^\|_)(uuid\|guid\|hash\|md5\|sha256\|row_hash\|record_hash)($\|_)` or $\ge 80\%$ of sample values match UUID or 32 to 64 char hex regex | `True` (`yes`) | `False` (`no`) | `"<Base>. High-cardinality UUID or hash identifier."` |
-| 4 | `empty_or_null_only` | `distinct_count == 0` (all sampled values are `NULL` or empty string) | `True` (`yes`) | `False` (`no`) | `"<Base>. Column contains only NULL or empty values in sampled data."` |
-| 5 | `low_cardinality_enum` | Not free-text and `1 <= distinct_count <= enum_threshold` (default `15`) | `False` (`no`) | `True` (`yes`) | `"<Base>. Values: '<v1>', '<v2>', '<v3>'."` |
-| 6 | `medium_cardinality_categorical` | Not free-text and `enum_threshold < distinct_count <= categorical_threshold` (default `100`) | `False` (`no`) | `True` (`yes`) | `"<Base>. Top values include: '<v1>', ..., '<v10>' (<distinct_count> distinct values)."` |
-| 7 | `high_cardinality_or_free_text` | `distinct_count > categorical_threshold`, `max_length > 120`, `avg_length > 60.0`, or free-text suffix (`comment`, `notes`, `message`, `body`, `url`, `uri`, `path`, etc.) | `False` (`no`) | `False` (`no`) | `"<Base>. High-cardinality or free-text string (<distinct_count>+ distinct values, max length <max_length>); filter suggestions disabled. Example values: '<v1>', '<v2>', '<v3>'."` |
+| 1 | `json_payload` | Name matches `(^\|_)(json\|payload\|raw_event\|proto\|xml)($\|_)`, `JSON_` in `sql:`, or $\ge 50\%$ of sample values parse as JSON `{...}` / `[...]` | `True` (`yes`) | `False` (`no`) | `"Raw JSON payload; hidden and filter suggestions disabled to prevent full-column scans."` |
+| 2 | `surrogate_or_system_key` | `primary_key: yes`, `is_helper`, name matches `^(_fivetran_\|_airbyte_\|_sdc_\|_baton_\|etl_\|ingest_)\|(_pk\|_fk\|_sk)$`, or (`id` / `*_id` with `distinct_count > categorical_threshold`) | `True` (`yes`) | `False` (`no`) | `"Internal key or system metadata column not intended for end-user grouping."` |
+| 3 | `uuid_or_hash` | Name matches `(^\|_)(uuid\|guid\|hash\|md5\|sha256\|row_hash\|record_hash)($\|_)` or $\ge 80\%$ of sample values match UUID or 32 to 64 char hex regex | `True` (`yes`) | `False` (`no`) | `"High-cardinality UUID or hash identifier."` |
+| 4 | `empty_or_null_only` | `distinct_count == 0` (all sampled values are `NULL` or empty string) | `True` (`yes`) | `False` (`no`) | `"Column contains only NULL or empty values in sampled data."` |
+| 5 | `low_cardinality_enum` | Not free-text and `1 <= distinct_count <= enum_threshold` (default `15`) | `False` (`no`) | `True` (`yes`) | `"Values: '<v1>', '<v2>', '<v3>'."` (prefixed with `<Base>. ` if an `INFORMATION_SCHEMA` comment exists) |
+| 6 | `medium_cardinality_categorical` | Not free-text and `enum_threshold < distinct_count <= categorical_threshold` (default `100`) | `False` (`no`) | `True` (`yes`) | `"Top values include: '<v1>', ..., '<v10>' (<distinct_count> distinct values)."` |
+| 7 | `high_cardinality_or_free_text` | `distinct_count > categorical_threshold`, `max_length > 120`, `avg_length > 60.0`, or free-text suffix (`comment`, `notes`, `message`, `body`, `url`, `uri`, `path`, etc.) | `False` (`no`) | `False` (`no`) | `"High-cardinality or free-text string (<distinct_count>+ distinct values, max length <max_length>); filter suggestions disabled. Example values: '<v1>', '<v2>', '<v3>'."` |
 
 ## Field description templates
 
-Keep curated descriptions to 1 or 2 concise sentences that retain any accurate domain definition from `INFORMATION_SCHEMA` while adding concrete operational metadata.
+Keep curated descriptions to 1 or 2 user-friendly sentences that retain any accurate domain definition from `INFORMATION_SCHEMA` while adding concrete operational metadata:
+- Never include raw LookML field identifiers (`order_items.sale_price`, `created_date`, `_raw_amount`), table aliases, or raw SQL syntax (`COUNT(DISTINCT ...)`, `NULLIF(...)`) in `description:`. Always use human-readable field labels (`Sale Price`, `Cost`, `Created Date`, `Completed Revenue`, `Order Count`), and do not repeat the field's own name at the start of its description.
+- When referencing other fields in a description, either insert their resolved short labels (`label_short` from `lkr parse lookml-to-api` and [inspect_local_lookml.py](scripts/inspect_local_lookml.py), such as `Sale Price - Cost`) or use Looker Liquid label variables (`{{ order_items.sale_price._label }} - {{ inventory_items.cost._label }}` across views, or `{{ sale_price._label }}` within the same view). Looker evaluates `._label` when rendering the Explore field picker metadata (`lookml_model_explore`) without adding the referenced field or join to the SQL query. Note that `._label` returns the full Explore label (`<View Label> <Field Short Label>`, such as `Order Items Sale Price - Inventory Items Cost`).
 
 ### String dimensions
 
@@ -96,21 +98,21 @@ view: +orders {
   dimension: customer_notes {
     hidden: no
     suggestable: no
-    description: "Customer Notes. High-cardinality or free-text string (140+ distinct values, max length 142); filter suggestions disabled."
+    description: "High-cardinality or free-text string (140+ distinct values, max length 142); filter suggestions disabled."
   }
 
   # Raw JSON payload: hide and disable suggestions
   dimension: metadata_json {
     hidden: yes
     suggestable: no
-    description: "Metadata JSON. Raw JSON payload; hidden and filter suggestions disabled to prevent full-column scans."
+    description: "Raw JSON payload; hidden and filter suggestions disabled to prevent full-column scans."
   }
 }
 ```
 
 ### Partitioning and clustering guidance
 
-When a table is partitioned or clustered in `INFORMATION_SCHEMA.COLUMNS` and `INFORMATION_SCHEMA.PARTITIONS`, add the `# PARTITION_COLUMN: ... | MIN_DATE: ... | CLUSTERED_BY: ...` header comment in `bronze/:table.refinement.lkml`, document the minimum partition date and `"Do not use 'is any value'"` warning on the partition `dimension_group`, and document the clustering order and block-pruning hint on each clustering `dimension`:
+When a table is partitioned or clustered in `INFORMATION_SCHEMA.COLUMNS` and `INFORMATION_SCHEMA.PARTITIONS`, add the `# PARTITION_COLUMN: ... | MIN_DATE: ... | CLUSTERED_BY: ...` header comment in `bronze/:table.refinement.lkml`, document the minimum partition date and `"Do not use 'is any value'"` warning on the partition `dimension_group`, and document the clustering order and block-pruning hint (using the partition field's human-readable label, such as `Created Date`) on each clustering `dimension`:
 
 ```lookml
 # File: bronze/orders.refinement.lkml
@@ -124,11 +126,11 @@ view: +orders {
 
   dimension: user_id {
     suggestable: no
-    description: "Clustering column (order 1). Filtering alongside created_date enables block pruning."
+    description: "Clustering column (order 1). Filtering alongside Created Date enables block pruning."
   }
 
   dimension: country {
-    description: "Clustering column (order 2). Filtering alongside created_date enables block pruning."
+    description: "Clustering column (order 2). Filtering alongside Created Date enables block pruning."
   }
 }
 ```
@@ -149,7 +151,7 @@ explore: orders_base {
 
 ### Measures and calculated dimensions
 
-Specify the aggregation formula, entity grain, and included or excluded filter conditions so analysts and Conversational Analytics agents can distinguish similar KPIs:
+Specify the business formula, entity grain, and included or excluded filter conditions using human-readable field labels so analysts and Conversational Analytics agents can distinguish similar KPIs:
 
 ```lookml
 # File: bronze/orders.refinement.lkml
@@ -160,27 +162,27 @@ view: +orders {
     primary_key: yes
     hidden: yes
     suggestable: no
-    description: "Order ID. Internal key or system metadata column not intended for end-user grouping."
+    description: "Internal key or system metadata column not intended for end-user grouping."
   }
 
   dimension: _raw_amount {
     hidden: yes
     sql: ${TABLE}.amount ;;
-    description: "Internal helper dimension referenced by net_amount."
+    description: "Internal helper dimension referenced by Net Amount."
   }
 
   dimension: net_amount {
     type: number
     sql: ${_raw_amount} * 0.9 ;;
     value_format_name: usd
-    description: "Order line net amount after 10% standard discount (_raw_amount * 0.9)."
+    description: "Order line net amount after 10% standard discount."
   }
 
   measure: order_count {
     type: count_distinct
     sql: ${order_id} ;;
     value_format_name: decimal_0
-    description: "Count of distinct orders across all statuses (COUNT(DISTINCT order_id))."
+    description: "Count of distinct orders across all statuses."
   }
 
   measure: completed_revenue {
@@ -188,19 +190,19 @@ view: +orders {
     sql: ${net_amount} ;;
     filters: [status: "Complete"]
     value_format_name: usd
-    description: "Sum of net_amount at order grain for completed orders only (filters: status = 'Complete'; excludes Pending, Cancelled, and Returned)."
+    description: "Total Net Amount at order grain for completed orders only (Status is 'Complete'; excludes 'Pending', 'Cancelled', and 'Returned')."
   }
 
   measure: average_order_value {
     type: number
     sql: 1.0 * ${completed_revenue} / NULLIF(${order_count}, 0) ;;
     value_format_name: usd
-    description: "Completed revenue divided by distinct order count (completed_revenue / NULLIF(order_count, 0))."
+    description: "Completed Revenue divided by Order Count."
   }
 }
 ```
 
-For cross-view calculations in `silver/:view_a_:view_b_fields.view.lkml`:
+For cross-view calculations in `silver/:view_a_:view_b_fields.view.lkml`, reference the human-readable field labels directly (`Sale Price - Cost`) or via Liquid `._label` (`{{ order_items.sale_price._label }} - {{ inventory_items.cost._label }}`):
 
 ```lookml
 # File: silver/inventory_items_order_items_fields.view.lkml
@@ -209,14 +211,14 @@ view: inventory_items_order_items_fields {
     type: number
     sql: ${order_items.sale_price} - ${inventory_items.cost} ;;
     value_format_name: usd
-    description: "Line-item gross margin before tax and shipping (order_items.sale_price - inventory_items.cost)."
+    description: "Line-item gross margin before tax and shipping (Sale Price - Cost)."
   }
 
   measure: total_gross_margin {
     type: sum
     sql: ${gross_margin} ;;
     value_format_name: usd
-    description: "Sum of line-item gross margin across joined order_items and inventory_items (SUM(sale_price - cost))."
+    description: "Total Gross Margin across joined order items and inventory items (Sale Price - Cost)."
   }
 }
 ```

@@ -18,9 +18,7 @@ def parse_sql_table_name(raw_sql_table_name: str | None) -> dict[str, str | None
         r"\s+AS\s+[a-zA-Z0-9_]+\s*$", "", raw_sql_table_name.strip(), flags=re.IGNORECASE
     ).strip()
     parts = [p.strip('`" ') for p in cleaned.split(".") if p.strip('`" ')]
-    catalog, schema, table = (
-        [None, None, *parts][-3:] if parts else (None, None, None)
-    )
+    catalog, schema, table = [None, None, None, *parts][-3:]
     return {
         "raw": raw_sql_table_name,
         "table_expr": cleaned,
@@ -71,8 +69,12 @@ def build_api_result_from_lookml(
     lookml: str | None = None,
     model: str | None = None,
     explore: str | None = None,
+    manifest: Path | str | None = None,
+    constants: dict[str, str] | None = None,
 ) -> LookmlToApiResult:
-    proj = parse_lookml(path=path, file=file, lookml=lookml)
+    proj = parse_lookml(
+        path=path, file=file, lookml=lookml, manifest=manifest, constants=constants
+    )
     for m_obj in (proj.model or {}).values():
         m_obj.explore = m_obj.explore or {}
         explored_views = {
@@ -126,10 +128,16 @@ def extract_curation_metadata(
         all_filts = fields_block.get("filters") or []
 
         referenced_by: dict[str, list[str]] = {}
+        field_labels: dict[str, dict[str, str]] = {}
         for f in (*all_dims, *all_meas, *all_filts):
             if isinstance(f, dict):
                 f_name = str(f.get("name") or "")
                 f_view = str(f.get("view") or base_view)
+                if f_name:
+                    field_labels[f_name] = {
+                        "label": str(f.get("label") or ""),
+                        "label_short": str(f.get("label_short") or ""),
+                    }
                 for ref in extract_lookml_refs(f.get("sql"), f_view):
                     if f_name not in referenced_by.setdefault(ref, []):
                         referenced_by[ref].append(f_name)
@@ -148,6 +156,8 @@ def extract_curation_metadata(
 
             full_name = str(d.get("name") or "")
             short_name = full_name.split(".", 1)[-1]
+            label = str(d.get("label") or "")
+            label_short = str(d.get("label_short") or "")
             dtype = str(d.get("type") or "string")
             desc = str(d.get("description") or "")
             hidden = bool(d.get("hidden", False))
@@ -157,6 +167,7 @@ def extract_curation_metadata(
             sql_raw = d.get("sql")
             sql_str = sql_raw.strip() if isinstance(sql_raw, str) else None
             sql_col = extract_sql_column(sql_str, v_alias)
+            sql_refs = extract_lookml_refs(sql_str, v_alias)
             refs_to_this = referenced_by.get(full_name, [])
             is_helper = bool(refs_to_this) and short_name.lower().startswith(
                 ("_", "helper_", "tmp_", "raw_")
@@ -166,9 +177,18 @@ def extract_curation_metadata(
                 dg_str = str(dg)
                 if (v_alias, dg_str) not in seen_dgs:
                     seen_dgs.add((v_alias, dg_str))
+                    tf_labels = field_labels.get(f"{dg_str}_date") or {}
+                    dg_label_short = str(
+                        tf_labels.get("label_short")
+                        or d.get("field_group_label")
+                        or label_short
+                    )
+                    dg_label = str(tf_labels.get("label") or label or dg_label_short)
                     dg_entry = {
                         "name": dg_str,
                         "short_name": dg_str.split(".", 1)[-1],
+                        "label": dg_label,
+                        "label_short": dg_label_short,
                         "category": "dimension_group",
                         "dimension_group": dg_str,
                         "sql_column": sql_col,
@@ -181,6 +201,8 @@ def extract_curation_metadata(
             v_entry["dimensions"].append({
                 "name": full_name,
                 "short_name": short_name,
+                "label": label,
+                "label_short": label_short,
                 "type": dtype,
                 "description": desc,
                 "hidden": hidden,
@@ -188,12 +210,20 @@ def extract_curation_metadata(
                 "primary_key": pk,
                 "sql": sql_str,
                 "sql_column": sql_col,
+                "referenced_fields": [
+                    {"name": r, **field_labels.get(r, {})} for r in sql_refs
+                ],
                 "referenced_by": refs_to_this,
+                "referenced_by_labels": [
+                    field_labels.get(r, {}).get("label_short") or r for r in refs_to_this
+                ],
                 "is_helper": is_helper,
             })
             v_entry["all_columns_for_enrichment"].append({
                 "name": full_name,
                 "short_name": short_name,
+                "label": label,
+                "label_short": label_short,
                 "category": "dimension",
                 "dimension_group": None,
                 "sql_column": sql_col or short_name,
@@ -205,6 +235,8 @@ def extract_curation_metadata(
                 v_entry["string_columns"].append({
                     "field_name": full_name,
                     "short_name": short_name,
+                    "label": label,
+                    "label_short": label_short,
                     "sql_column": sql_col or short_name,
                     "primary_key": pk,
                     "hidden": hidden,
@@ -231,6 +263,7 @@ def extract_curation_metadata(
             if reason:
                 v_entry["static_curation_candidates"].append({
                     "field_name": full_name,
+                    "label_short": label_short,
                     "reason": reason,
                     "recommended_hidden": True,
                     "recommended_suggestable": False,
@@ -246,21 +279,41 @@ def extract_curation_metadata(
             v_entry = _ensure_view(views_map, v_alias, orig_view)
 
             full_name = str(m.get("name") or "")
+            label = str(m.get("label") or "")
+            label_short = str(m.get("label_short") or "")
             desc = str(m.get("description") or "")
             hidden = bool(m.get("hidden", False))
             sql_raw = m.get("sql")
+            sql_str = sql_raw.strip() if isinstance(sql_raw, str) else None
+            sql_refs = extract_lookml_refs(sql_str, v_alias)
             v_entry["measures"].append({
                 "name": full_name,
                 "short_name": full_name.split(".", 1)[-1],
+                "label": label,
+                "label_short": label_short,
                 "type": str(m.get("type") or "string"),
                 "description": desc,
                 "hidden": hidden,
-                "sql": sql_raw.strip() if isinstance(sql_raw, str) else None,
-                "filters": m.get("filters") or [],
+                "sql": sql_str,
+                "referenced_fields": [
+                    {"name": r, **field_labels.get(r, {})} for r in sql_refs
+                ],
+                "filters": [
+                    {
+                        **flt,
+                        "field_label_short": field_labels.get(
+                            str(flt.get("field") or ""), {}
+                        ).get("label_short", ""),
+                    }
+                    if isinstance(flt, dict)
+                    else flt
+                    for flt in (m.get("filters") or [])
+                ],
             })
             if not desc.strip() and not hidden:
                 v_entry["static_curation_candidates"].append({
                     "field_name": full_name,
+                    "label_short": label_short,
                     "reason": "measure_missing_description",
                     "recommended_hidden": False,
                 })
@@ -321,6 +374,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", "-m", type=str, help="Optional LookML model filter")
     parser.add_argument("--explore", "-e", type=str, help="Optional LookML explore filter")
     parser.add_argument("--view", "-v", type=str, help="Optional LookML view filter")
+    parser.add_argument("--manifest", type=Path, help="Optional explicit manifest.lkml file path")
+    parser.add_argument(
+        "--constant",
+        "-C",
+        action="append",
+        help="Constant override KEY=VALUE (repeatable)",
+    )
     parser.add_argument("--output", "-o", type=Path, help="Optional output JSON file path")
     args = parser.parse_args(argv)
 
@@ -334,12 +394,21 @@ def main(argv: list[str] | None = None) -> int:
     else:
         if sum(x is not None for x in (args.path, args.file, args.lookml)) != 1:
             parser.error("Specify either --api-json or exactly one of --path, --file, or --lookml")
+        if any("=" not in c or not c.split("=", 1)[0].strip() for c in (args.constant or [])):
+            parser.error("Invalid --constant; expected KEY=VALUE")
+        const_overrides = (
+            {k.strip(): v for k, v in (c.split("=", 1) for c in args.constant)}
+            if args.constant
+            else None
+        )
         api_payload = build_api_result_from_lookml(
             path=args.path,
             file=args.file,
             lookml=args.lookml,
             model=args.model,
             explore=args.explore,
+            manifest=args.manifest,
+            constants=const_overrides,
         )
 
     out_text = json.dumps(extract_curation_metadata(api_payload, view_filter=args.view), indent=2)

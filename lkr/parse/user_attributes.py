@@ -849,6 +849,9 @@ def parse_user_attributes(
     validate: bool = False,
     sdk: Any | None = None,
     ctx: typer.Context | LkrCtxObj | None = None,
+    *,
+    manifest: Path | str | None = None,
+    constants: dict[str, str] | None = None,
 ) -> LookmlUserAttributesResult:
     """Parse LookML project and/or dashboard filter JSON to extract referenced user attributes.
 
@@ -912,9 +915,15 @@ def parse_user_attributes(
                 validate=validate,
                 sdk=sdk,
                 ctx=ctx,
+                manifest=manifest,
+                constants=constants,
             )
         if any(not f.name.endswith(".dashboard.lkml") for f in root.rglob("*.lkml")):
-            refs.extend(_extract_from_project(parse_lookml(path=root)))
+            refs.extend(
+                _extract_from_project(
+                    parse_lookml(path=root, manifest=manifest, constants=constants)
+                )
+            )
         for df in sorted(
             {*root.rglob("*.dashboard.lookml"), *root.rglob("*.dashboard.lkml")}
         ):
@@ -926,7 +935,13 @@ def parse_user_attributes(
                     )
                 )
     elif file is not None or lookml is not None:
-        refs.extend(_extract_from_project(parse_lookml(file=file, lookml=lookml)))
+        refs.extend(
+            _extract_from_project(
+                parse_lookml(
+                    file=file, lookml=lookml, manifest=manifest, constants=constants
+                )
+            )
+        )
 
     if dashboard_file is not None:
         refs.extend(

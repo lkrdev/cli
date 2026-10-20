@@ -290,6 +290,9 @@ def _resolve_manifest_settings(project: LookmlProject) -> tuple[str, str]:
 def analyze_lookml_translations(
     path: Path | str,
     locale: str | None = None,
+    *,
+    manifest: Path | str | None = None,
+    constants: dict[str, str] | None = None,
 ) -> TranslationAnalysisResult:
     """Analyze LookML models, explores, views, and fields for translation completeness and bypasses."""
     root = Path(path).resolve()
@@ -300,7 +303,7 @@ def analyze_lookml_translations(
     if not strings_map:
         raise ValueError("No strings JSON files were found in the project.")
 
-    project = parse_lookml(path=root)
+    project = parse_lookml(path=root, manifest=manifest, constants=constants)
     default_locale, manifest_level = _resolve_manifest_settings(project)
 
     if locale is not None:
