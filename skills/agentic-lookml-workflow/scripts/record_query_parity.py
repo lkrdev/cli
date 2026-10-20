@@ -5,8 +5,8 @@ import json
 
 
 def normalize_val(v):
-    if v is None:
-        return None
+    if v is None or isinstance(v, bool):
+        return v
     if isinstance(v, (int, float)):
         return round(float(v), 4)
     if isinstance(v, str):
@@ -27,6 +27,9 @@ def compare_row_sets(sql_rows, looker_rows):
     mismatches = []
     for idx, (sr, lr) in enumerate(zip(sql_rows, looker_rows, strict=False)):
         sn, ln = _norm_row(sr), _norm_row(lr)
+        if len(sn) != len(ln):
+            mismatches.append(f"Row {idx} column count mismatch: SQL={len(sn)}, Looker={len(ln)}")
+            continue
         pairs = (
             [(k, sn.get(k), ln.get(k)) for k in sn]
             if set(sn) == set(ln)
@@ -40,9 +43,15 @@ def compare_row_sets(sql_rows, looker_rows):
 
 def main():
     try:
-        data = json.loads(data_json) if isinstance(data_json, str) else (data_json or {})  # ty: ignore[unresolved-reference]
+        raw_data = data_json  # ty: ignore[unresolved-reference]
     except NameError:
         return None
+    try:
+        data = json.loads(raw_data) if isinstance(raw_data, str) else (raw_data or {})
+    except (json.JSONDecodeError, TypeError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
     try:
         b_url = str(base_url).rstrip("/")  # ty: ignore[unresolved-reference]
     except NameError:

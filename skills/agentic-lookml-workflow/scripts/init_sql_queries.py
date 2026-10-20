@@ -6,9 +6,13 @@ import re
 
 
 def split_sql_statements(raw_sql: str) -> list[str]:
-    # ponytail: regex strips SQL comments outside quotes and splits on semicolons; ceiling: backslash-escaped quotes -> upgrade: sqlglot.transpile
-    cleaned = re.sub(r"('[^']*')|--[^\n]*|/\*[\s\S]*?\*/", lambda m: m.group(1) or "", raw_sql)
-    return [s.strip() for s in re.split(r";(?=(?:[^']*'[^']*')*[^']*$)", cleaned) if s.strip()]
+    # ponytail: Monty sandbox has no sqlglot; single-pass regex preserves '', "", `` literals while stripping comments and splitting on ;
+    tokenized = re.sub(
+        r"""('[^']*'|"[^"]*"|`[^`]*`)|(?:--[^\n]*|/\*[\s\S]*?\*/)|;""",
+        lambda m: m.group(1) if m.group(1) is not None else ("\0" if m.group(0) == ";" else ""),
+        raw_sql,
+    )
+    return [s.strip() for s in tokenized.split("\0") if s.strip()]
 
 
 def main():

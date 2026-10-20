@@ -12,13 +12,13 @@ def main():
     except NameError:
         c_msg = ""
     try:
-        t_names = [x.strip() for x in str(test_names).split(",") if x.strip()]  # ty: ignore[unresolved-reference]
+        t_names = [x.strip() for x in str(test_names).split(",") if x.strip()] if test_names is not None else []  # ty: ignore[unresolved-reference]
     except NameError:
-        t_names = [None]
+        t_names = []
     try:
-        f_ids = [x.strip() for x in str(file_ids).split(",") if x.strip()]  # ty: ignore[unresolved-reference]
+        f_ids = [x.strip() for x in str(file_ids).split(",") if x.strip()] if file_ids is not None else []  # ty: ignore[unresolved-reference]
     except NameError:
-        f_ids = [None]
+        f_ids = []
     try:
         s_tests = str(skip_tests).lower() in ("true", "1", "yes")  # ty: ignore[unresolved-reference]
     except NameError:
