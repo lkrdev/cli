@@ -6,10 +6,10 @@ import re
 
 
 def split_sql_statements(raw_sql: str) -> list[str]:
-    # ponytail: Monty sandbox has no sqlglot or callable re.sub; single-pass finditer preserves '', "", `` literals while stripping comments and splitting on ;
     out = []
     last = 0
-    for m in re.finditer(r"""('[^']*'|"[^"]*"|`[^`]*`)|(?:--[^\n]*|/\*[\s\S]*?\*/)|;""", raw_sql):
+    pattern = r"""('[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*"|`[^`\\]*(?:\\.[^`\\]*)*`)|(?:--[^\n]*|/\*[\s\S]*?\*/)|;"""
+    for m in re.finditer(pattern, raw_sql):
         if m.group(1) is not None:
             out.append(raw_sql[last : m.end()])
         elif m.group(0) == ";":
