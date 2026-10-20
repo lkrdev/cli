@@ -311,3 +311,266 @@ def test_run_lookml_snapshot_python_api(sample_lookml_project: Path):
     assert result.success is True
     assert result.written == 4
     assert "4 snapshots written" in text
+
+
+def test_snapshot_allow_additions_passes_on_new_tests_asserts_columns_and_measure_labels(
+    sample_lookml_project: Path,
+):
+    # Initialize baseline with an unlabeled measure and a labeled measure
+    (sample_lookml_project / "users.view.lkml").write_text(
+        "view: users {\n"
+        "  sql_table_name: public.users ;;\n"
+        "  dimension: id {\n"
+        "    primary_key: yes\n"
+        "    type: number\n"
+        "    sql: ${TABLE}.id ;;\n"
+        "    required_access_grants: [marketing, finance]\n"
+        "  }\n"
+        "  dimension: email {\n"
+        "    type: string\n"
+        "    sql: ${TABLE}.email ;;\n"
+        "  }\n"
+        "  measure: count {\n"
+        "    type: count\n"
+        "  }\n"
+        "  measure: total_users {\n"
+        "    type: count_distinct\n"
+        "    sql: ${id} ;;\n"
+        '    label: "Total Users"\n'
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    runner.invoke(
+        app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project)]
+    )
+
+    # Now add:
+    # 1. A label to the previously unlabeled measure `count`
+    # 2. A brand-new measure `active_users` with a label
+    # 3. A new column, derived_column, and assert to existing `test_user_id_unique`
+    # 4. A brand-new test `test_user_count_positive`
+    (sample_lookml_project / "users.view.lkml").write_text(
+        "view: users {\n"
+        "  sql_table_name: public.users ;;\n"
+        "  dimension: id {\n"
+        "    primary_key: yes\n"
+        "    type: number\n"
+        "    sql: ${TABLE}.id ;;\n"
+        "    required_access_grants: [marketing, finance]\n"
+        "  }\n"
+        "  dimension: email {\n"
+        "    type: string\n"
+        "    sql: ${TABLE}.email ;;\n"
+        "  }\n"
+        "  measure: count {\n"
+        "    type: count\n"
+        '    label: "User Count"\n'
+        "  }\n"
+        "  measure: total_users {\n"
+        "    type: count_distinct\n"
+        "    sql: ${id} ;;\n"
+        '    label: "Total Users"\n'
+        "  }\n"
+        "  measure: active_users {\n"
+        "    type: count\n"
+        '    label: "Active Users"\n'
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (sample_lookml_project / "shop.model.lkml").write_text(
+        'connection: "snowflake_prod"\n'
+        'include: "*.view.lkml"\n'
+        "access_grant: pii_access {\n"
+        "  user_attribute: can_view_pii\n"
+        '  allowed_values: ["yes", "true"]\n'
+        "}\n"
+        "explore: users {\n"
+        "  required_access_grants: [pii_access]\n"
+        "}\n"
+        "test: test_user_id_unique {\n"
+        "  explore_source: users {\n"
+        "    column: id { field: users.id }\n"
+        "    column: email { field: users.email }\n"
+        "    derived_column: id_plus_one { sql: ${id} + 1 ;; }\n"
+        "  }\n"
+        "  assert: id_not_null {\n"
+        "    expression: ${users.id} is not null ;;\n"
+        "  }\n"
+        "  assert: id_positive {\n"
+        "    expression: ${users.id} > 0 ;;\n"
+        "  }\n"
+        "}\n"
+        "test: test_user_count_positive {\n"
+        "  explore_source: users {\n"
+        "    column: count { field: users.count }\n"
+        "  }\n"
+        "  assert: count_pos {\n"
+        "    expression: ${users.count} >= 0 ;;\n"
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    # Strict mode fails because snapshots grew
+    strict_res, _ = run_lookml_snapshot(path=sample_lookml_project)
+    assert strict_res.success is False
+    assert strict_res.requires_review is False
+    assert strict_res.material_changes == []
+
+    # Additive mode passes without requiring human review
+    add_res = runner.invoke(
+        app,
+        [
+            "parse",
+            "lookml",
+            "snapshot",
+            "--path",
+            str(sample_lookml_project),
+            "--allow-additions",
+            "--format",
+            "json",
+        ],
+    )
+    assert add_res.exit_code == 0
+    payload = json.loads(add_res.output)
+    assert payload["success"] is True
+    assert payload["requires_review"] is False
+    assert payload["material_changes"] == []
+    assert payload["passed"] == 4
+
+
+def test_snapshot_allow_additions_fails_on_material_changes(
+    sample_lookml_project: Path,
+):
+    # Setup baseline with measure label, test assert, test column, and connection
+    (sample_lookml_project / "users.view.lkml").write_text(
+        "view: users {\n"
+        "  sql_table_name: public.users ;;\n"
+        "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+        '  measure: total_revenue { type: sum sql: ${TABLE}.rev ;; label: "Total Revenue" }\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    runner.invoke(
+        app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project)]
+    )
+
+    # 1. Change assert expression -> requires review
+    model_file = sample_lookml_project / "shop.model.lkml"
+    orig_model = model_file.read_text(encoding="utf-8")
+    model_file.write_text(
+        orig_model.replace("${users.id} is not null", "${users.id} > 10"),
+        encoding="utf-8",
+    )
+    res1, _ = run_lookml_snapshot(path=sample_lookml_project, allow_additions=True)
+    assert res1.success is False
+    assert res1.requires_review is True
+    assert any("assert.id_not_null.expression" in c for c in res1.material_changes)
+
+    # 2. Remove test column -> requires review
+    model_file.write_text(
+        orig_model.replace(
+            "column: id { field: users.id }", "column: other { field: users.id }"
+        ),
+        encoding="utf-8",
+    )
+    res2, _ = run_lookml_snapshot(path=sample_lookml_project, allow_additions=True)
+    assert res2.success is False
+    assert res2.requires_review is True
+    assert any("column.id: removed" in c for c in res2.material_changes)
+
+    # 3. Change connection name -> requires review
+    model_file.write_text(
+        orig_model.replace(
+            'connection: "snowflake_prod"', 'connection: "bigquery_prod"'
+        ),
+        encoding="utf-8",
+    )
+    res3, _ = run_lookml_snapshot(path=sample_lookml_project, allow_additions=True)
+    assert res3.success is False
+    assert res3.requires_review is True
+    assert any("connections.shop.connection" in c for c in res3.material_changes)
+    model_file.write_text(orig_model, encoding="utf-8")
+
+    # 4. Change measure label -> requires review
+    view_file = sample_lookml_project / "users.view.lkml"
+    orig_view = view_file.read_text(encoding="utf-8")
+    view_file.write_text(
+        orig_view.replace('label: "Total Revenue"', 'label: "Gross Revenue"'),
+        encoding="utf-8",
+    )
+    res4, _ = run_lookml_snapshot(path=sample_lookml_project, allow_additions=True)
+    assert res4.success is False
+    assert res4.requires_review is True
+    assert any(
+        "access.fields.shop.users.total_revenue.label" in c
+        for c in res4.material_changes
+    )
+
+    # 5. Remove measure label -> requires review
+    view_file.write_text(
+        orig_view.replace('label: "Total Revenue"', ""),
+        encoding="utf-8",
+    )
+    res5, _ = run_lookml_snapshot(path=sample_lookml_project, allow_additions=True)
+    assert res5.success is False
+    assert res5.requires_review is True
+    assert any(
+        "access.fields.shop.users.total_revenue: removed" in c
+        for c in res5.material_changes
+    )
+
+
+def test_snapshot_base_path_comparison_and_update_guard(
+    sample_lookml_project: Path, tmp_path: Path
+):
+    import shutil
+
+    base_dir = tmp_path / "base_lookml"
+    shutil.copytree(sample_lookml_project, base_dir)
+
+    # Add a new assert in head project and compare against base_dir (without __snapshots__)
+    model_file = sample_lookml_project / "shop.model.lkml"
+    orig_model = model_file.read_text(encoding="utf-8")
+    model_file.write_text(
+        orig_model.replace(
+            "  assert: id_not_null {\n    expression: ${users.id} is not null ;;\n  }\n",
+            "  assert: id_not_null {\n    expression: ${users.id} is not null ;;\n  }\n"
+            "  assert: id_gt_zero {\n    expression: ${users.id} > 0 ;;\n  }\n",
+        ),
+        encoding="utf-8",
+    )
+
+    res_add, _ = run_lookml_snapshot(
+        path=sample_lookml_project,
+        base_path=base_dir,
+        allow_additions=True,
+    )
+    assert res_add.success is True
+    assert res_add.requires_review is False
+
+    # Mutate connection in head project and verify --allow-additions -u refuses to overwrite
+    runner.invoke(
+        app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project)]
+    )
+    model_file.write_text(
+        orig_model.replace('connection: "snowflake_prod"', 'connection: "mutated_db"'),
+        encoding="utf-8",
+    )
+    res_mut, _ = run_lookml_snapshot(
+        path=sample_lookml_project,
+        update=True,
+        allow_additions=True,
+    )
+    assert res_mut.success is False
+    assert res_mut.requires_review is True
+    assert res_mut.updated < 4
+    conn_snap = (
+        sample_lookml_project / "__snapshots__" / "ecommerce_analytics.connections.snap"
+    )
+    assert (
+        json.loads(conn_snap.read_text(encoding="utf-8"))["shop"]["connection"]
+        == "snowflake_prod"
+    )

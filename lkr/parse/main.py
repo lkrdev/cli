@@ -313,6 +313,20 @@ def snapshot_command(
         Path | None,
         typer.Option("--output", "-o", help="Optional output file path"),
     ] = None,
+    allow_additions: Annotated[
+        bool,
+        typer.Option(
+            "--allow-additions",
+            help="Pass on additive snapshot changes; fail only on material modifications or removals",
+        ),
+    ] = False,
+    base_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--base-path",
+            help="Optional base LookML or snapshot directory to compare against instead of <path>/__snapshots__",
+        ),
+    ] = None,
 ) -> LookmlSnapshotResult:
     """Jest-style LookML snapshot testing to guard tests, access controls, connections, and manifest changes."""
     result, console_output = run_lookml_snapshot(
@@ -322,6 +336,8 @@ def snapshot_command(
         only=only,
         model=model,
         format_=format,
+        allow_additions=allow_additions,
+        base_path=base_path,
     )
     if format == "json":
         _write_or_echo(result.model_dump_json(indent=2), output)
