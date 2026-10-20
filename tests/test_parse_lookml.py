@@ -7,6 +7,7 @@ from lkr.main import app
 from lkr.parse import (
     LookmlExplore,
     LookmlExploreSource,
+    LookmlFile,
     LookmlProject,
     LookmlTest,
     LookmlView,
@@ -2461,5 +2462,59 @@ view: summary {
     dg_u = next(u for u in q.usages if u.matched_property == "datagroup.sql_trigger")
     assert dg_u.property_path == "datagroup.orders_dg.sql_trigger"
     assert dg_u.datagroup_name == "orders_dg"
+
+
+def test_parse_lookml_separate_test_file(tmp_path: Path):
+    model_file = tmp_path / "ecommerce.model.lkml"
+    model_file.write_text(
+        'connection: "test_db"\n'
+        'include: "*.view.lkml"\n'
+        'include: "tests/**/*.test.lkml"\n'
+        'explore: orders {}\n',
+        encoding="utf-8",
+    )
+    view_file = tmp_path / "orders.view.lkml"
+    view_file.write_text(
+        'view: orders {\n'
+        '  sql_table_name: public.orders ;;\n'
+        '  dimension: id { primary_key: yes }\n'
+        '  measure: count { type: count }\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    tests_dir = tmp_path / "tests" / "silver"
+    tests_dir.mkdir(parents=True)
+    test_file = tests_dir / "orders.test.lkml"
+    test_file.write_text(
+        'test: orders_pk_is_unique {\n'
+        '  explore_source: orders {\n'
+        '    column: id { field: orders.id }\n'
+        '    column: count { field: orders.count }\n'
+        '  }\n'
+        '  assert: count_is_one {\n'
+        '    expression: ${orders.count} = 1 ;;\n'
+        '  }\n'
+        '}\n',
+        encoding="utf-8",
+    )
+
+    proj = parse_lookml(path=tmp_path)
+    assert proj.model is not None and "ecommerce" in proj.model
+    m = proj.model["ecommerce"]
+    assert m.test is not None and "orders_pk_is_unique" in m.test
+    assert isinstance(proj.file, LookmlFile) and proj.file.test is not None
+    assert any("orders" in k for k in proj.file.test)
+
+    from lkr.parse.sql_to_lookml import parse_sql_to_lookml
+
+    res = parse_sql_to_lookml(
+        sql="SELECT id, count FROM public.orders",
+        path=tmp_path,
+        sql_schema="public",
+    )
+    q = res.queries[0]
+    test_names = {t.test_name for t in q.tests}
+    assert "orders_pk_is_unique" in test_names
+
 
 

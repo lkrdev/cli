@@ -1,0 +1,61 @@
+name: LookML PR Checks
+
+on:
+  pull_request:
+    paths:
+      - "**/*.lkml"
+      - "**/*.lookml"
+      - "**/data.json"
+      - "**/input.sql"
+  workflow_dispatch:
+
+jobs:
+  lookml-checks:
+    name: LookML Validator, Data Tests & Query Parity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: latest
+
+      - name: Install lkr-dev-cli
+        run: |
+          uv tool install "lkr-dev-cli[tools,code-mode,parse]"
+
+      - name: Authenticate Looker API
+        env:
+          LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
+          LOOKERSDK_CLIENT_ID: ${{ secrets.LOOKERSDK_CLIENT_ID }}
+          LOOKERSDK_CLIENT_SECRET: ${{ secrets.LOOKERSDK_CLIENT_SECRET }}
+        run: |
+          lkr --base-url="$LOOKERSDK_BASE_URL" --client-id="$LOOKERSDK_CLIENT_ID" --client-secret="$LOOKERSDK_CLIENT_SECRET" --dev auth add-access-token
+
+      - name: Run LookML Validator & Data Tests
+        env:
+          LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
+          PROJECT_ID: ${{ secrets.LOOKER_PROJECT_NAME || vars.LOOKER_PROJECT_NAME }}
+        run: |
+          OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode \
+            --file=skills/agentic-lookml-workflow/scripts/validate_and_commit_branch.py \
+            --var project_id="$PROJECT_ID")
+          echo "$OUT"
+          echo "$OUT" | jq -e '.passed == true' >/dev/null
+
+      - name: Verify Query Parity (SQL Runner vs Looker Inline Query)
+        env:
+          LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
+        run: |
+          DATA_FILE=$(find ./data -name "data.json" 2>/dev/null | head -n 1 || true)
+          if [[ -z "$DATA_FILE" || ! -f "$DATA_FILE" ]]; then
+            echo "No data.json session file found, skipping query parity check."
+            exit 0
+          fi
+          OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode \
+            --file=skills/agentic-lookml-workflow/scripts/record_query_parity.py \
+            --var data_json="$(cat "$DATA_FILE")")
+          echo "$OUT"
+          echo "$OUT" | jq -e '.passed == true' >/dev/null

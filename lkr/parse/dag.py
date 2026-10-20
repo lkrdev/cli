@@ -54,7 +54,7 @@ def _collect_declarations(
 
     pos_files = project.positions.file if project.positions else {}
 
-    for category in ("view", "model", "explore"):
+    for category in ("view", "model", "explore", "test"):
         cat_dict = getattr(project.file, category, None)
         if not isinstance(cat_dict, dict):
             continue
