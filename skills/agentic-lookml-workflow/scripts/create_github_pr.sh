@@ -32,8 +32,12 @@ PR_EXTRA_ARGS=()
 if [[ -f "$SESSION_DIR/snapshot_check.json" ]]; then
   if jq -e '.requires_review == true' "$SESSION_DIR/snapshot_check.json" >/dev/null 2>&1; then
     MAT_LIST=$(jq -r '.material_changes[]? | "- `" + . + "`"' "$SESSION_DIR/snapshot_check.json")
+    CODEOWNERS_REQ=$(jq -r '[.required_reviewers[]?, (env.LOOKML_REVIEWERS // "" | split(",")[] | select(length > 0))] | unique | join(",")' "$SESSION_DIR/snapshot_check.json")
     SNAPSHOT_SECTION=$'\n\n### Material Snapshot Changes (Human Review Required)\n'"$MAT_LIST"
-    [[ -n "${LOOKML_REVIEWERS:-}" ]] && PR_EXTRA_ARGS+=(--reviewer "$LOOKML_REVIEWERS")
+    if [[ -n "$CODEOWNERS_REQ" ]]; then
+      SNAPSHOT_SECTION+=$'\n\nRequired CODEOWNERS: `'"$CODEOWNERS_REQ"$'`'
+      PR_EXTRA_ARGS+=(--reviewer "$CODEOWNERS_REQ")
+    fi
   else
     SNAPSHOT_SECTION=$'\n\n### LookML Snapshot Status\nAdditive-only changes verified (`requires_review: false`).'
   fi

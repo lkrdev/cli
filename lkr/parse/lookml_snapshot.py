@@ -1,6 +1,7 @@
 """Jest-style LookML snapshot testing to guard tests, access controls, connections, and manifest."""
 
 import difflib
+import fnmatch
 import json
 import os
 import re
@@ -35,6 +36,8 @@ class LookmlSnapshotResult(BaseModel):
     total: int = 0
     requires_review: bool = False
     material_changes: list[str] = Field(default_factory=list)
+    material_change_files: list[str] = Field(default_factory=list)
+    required_reviewers: list[str] = Field(default_factory=list)
     diffs: list[str] = Field(default_factory=list)
     snapshots: dict[str, Any] = Field(default_factory=dict)
     message: str | None = None
@@ -565,55 +568,167 @@ def format_jest_diff(
 _META_KEYS = ("file", "line", "position", "$p")
 
 
+def _match_codeowner_pattern(pattern: str, rel_path: str) -> bool:
+    rel = rel_path.strip("/")
+    pat = pattern.strip()
+    if not pat:
+        return False
+    if pat == "*":
+        return True
+    if pat.endswith("/"):
+        prefix = pat.strip("/")
+        return rel == prefix or rel.startswith(f"{prefix}/")
+    anchored = pat.startswith("/")
+    clean = pat.lstrip("/")
+    if (
+        "/" not in clean
+        and not anchored
+        and fnmatch.fnmatchcase(Path(rel).name, clean)
+    ):
+        return True
+    if "**" in clean:
+        regex = (
+            "^"
+            + re.escape(clean)
+            .replace(r"\*\*/", "(?:.+/)?")
+            .replace(r"\*\*", ".*")
+            .replace(r"\*", "[^/]*")
+            .replace(r"\?", "[^/]")
+            + "$"
+        )
+        return bool(re.match(regex, rel))
+    return fnmatch.fnmatchcase(rel, clean)
+
+
+def resolve_codeowners(root_path: Path, files: list[str]) -> list[str]:
+    """Resolve GitHub CODEOWNERS (last matching pattern wins) for relative file paths."""
+    if not files:
+        return []
+    codeowners_file: Path | None = None
+    owner_root = root_path.resolve()
+    for base in [owner_root, *owner_root.parents]:
+        for rel_candidate in (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"):
+            cand = base / rel_candidate
+            if cand.is_file():
+                codeowners_file = cand
+                owner_root = base
+                break
+        if codeowners_file is not None or (base / ".git").exists():
+            break
+    if codeowners_file is None:
+        return []
+
+    rel_prefix = (
+        root_path.resolve().relative_to(owner_root).as_posix().strip(".")
+        if owner_root != root_path.resolve()
+        else ""
+    )
+    rules: list[tuple[str, list[str]]] = []
+    for raw_line in codeowners_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if line:
+            parts = line.split()
+            rules.append(
+                (parts[0], [p.lstrip("@") for p in parts[1:] if p.lstrip("@")])
+            )
+
+    owners: list[str] = []
+    for f in files:
+        matched: list[str] = []
+        for pat, pat_owners in rules:
+            if _match_codeowner_pattern(pat, f) or (
+                rel_prefix and _match_codeowner_pattern(pat, f"{rel_prefix}/{f}")
+            ):
+                matched = pat_owners
+        for o in matched:
+            if o not in owners:
+                owners.append(o)
+    return owners
+
+
 def find_material_changes(
     obj_name: str,
     saved_data: Any,
     current_data: Any,
+    files_out: list[str] | None = None,
 ) -> list[str]:
     """Return human-readable descriptions of material (non-additive) changes between saved and current snapshot data."""
-    saved = strip_positions(saved_data, _META_KEYS)
-    current = strip_positions(current_data, _META_KEYS)
+    saved = strip_positions(saved_data)
+    current = strip_positions(current_data)
+    changes: list[str] = []
+
+    def _record_file(f: str | None) -> None:
+        if f and files_out is not None and f not in files_out:
+            files_out.append(f)
+
     if (
         obj_name == "connections"
         and isinstance(saved, dict)
         and isinstance(current, dict)
     ):
-        changes: list[str] = []
         for k in sorted(set(saved) | set(current)):
+            f_ref = (saved.get(k) or current.get(k) or {}).get("file")
             if k not in current:
                 changes.append(
                     f"connections.{k}: removed (was {saved[k].get('connection')!r})"
                 )
+                _record_file(f_ref)
             elif k not in saved:
                 changes.append(
                     f"connections.{k}: added ({current[k].get('connection')!r})"
                 )
-            elif saved[k] != current[k]:
+                _record_file(f_ref)
+            elif strip_positions(saved[k], _META_KEYS) != strip_positions(
+                current[k], _META_KEYS
+            ):
                 changes.append(
                     f"connections.{k}.connection: changed from {saved[k].get('connection')!r} to {current[k].get('connection')!r}"
                 )
+                _record_file(f_ref)
         return changes
 
-    changes = []
-
-    def _walk(s: Any, c: Any, path: str) -> None:
-        if s == c or (s is None and isinstance(c, (dict, list))):
+    def _walk(
+        s: Any, c: Any, path: str, cur_file: str | None = None
+    ) -> None:
+        if strip_positions(s, _META_KEYS) == strip_positions(c, _META_KEYS) or (
+            s is None and isinstance(c, (dict, list))
+        ):
             return
+        f_here = (
+            (s.get("file") if isinstance(s, dict) else None)
+            or (c.get("file") if isinstance(c, dict) else None)
+            or cur_file
+        )
         if isinstance(s, dict):
             if not isinstance(c, dict):
-                changes.append(f"{path}: removed (was {s!r})")
+                changes.append(
+                    f"{path}: removed (was {strip_positions(s, _META_KEYS)!r})"
+                )
+                _record_file(f_here)
                 return
             for k, sv in sorted(s.items()):
+                if k == "file":
+                    continue
                 sub = f"{path}.{k}"
                 if k not in c:
-                    changes.append(f"{sub}: removed (was {sv!r})")
+                    f_sub = (
+                        sv.get("file") if isinstance(sv, dict) else None
+                    ) or f_here
+                    changes.append(
+                        f"{sub}: removed (was {strip_positions(sv, _META_KEYS)!r})"
+                    )
+                    _record_file(f_sub)
                 else:
-                    _walk(sv, c[k], sub)
+                    _walk(sv, c[k], sub, f_here)
             return
         if isinstance(s, list) and isinstance(c, list) and path == "manifest.includes":
-            changes.extend(f"{path}: removed {item!r}" for item in s if item not in c)
+            for item in s:
+                if item not in c:
+                    changes.append(f"{path}: removed {item!r}")
+                    _record_file(f_here)
             return
         changes.append(f"{path}: changed from {s!r} to {c!r}")
+        _record_file(f_here)
 
     _walk(saved, current, obj_name)
     return changes
@@ -681,6 +796,7 @@ def run_lookml_snapshot(
     failed_count = 0
     diff_reports: list[str] = []
     material_changes: list[str] = []
+    material_change_files: list[str] = []
     snapshots_out: dict[str, Any] = {}
 
     for obj_name in target_objects:
@@ -750,7 +866,13 @@ def run_lookml_snapshot(
                     )
                     continue
 
-            obj_material = find_material_changes(obj_name, saved_data, current_data)
+            obj_material = find_material_changes(
+                obj_name, saved_data, current_data, files_out=material_change_files
+            )
+            if obj_material:
+                snap_rel = f"__snapshots__/{proj_name}.{obj_name}.snap"
+                if snap_rel not in material_change_files:
+                    material_change_files.append(snap_rel)
             material_changes.extend(obj_material)
 
             if allow_additions:
@@ -782,12 +904,21 @@ def run_lookml_snapshot(
 
     success = failed_count == 0
     requires_review = bool(material_changes)
+    required_reviewers = (
+        resolve_codeowners(resolved_path, material_change_files)
+        if requires_review
+        else []
+    )
     total = len(target_objects)
 
     # Build console output message
     console_lines: list[str] = []
     if diff_reports:
         console_lines.extend(diff_reports)
+        if required_reviewers:
+            console_lines.append(
+                f"Required CODEOWNERS: {', '.join(required_reviewers)}"
+            )
         console_lines.append("")
 
     summary_parts: list[str] = []
@@ -826,6 +957,8 @@ def run_lookml_snapshot(
         total=total,
         requires_review=requires_review,
         material_changes=material_changes,
+        material_change_files=material_change_files,
+        required_reviewers=required_reviewers,
         diffs=diff_reports,
         snapshots=snapshots_out,
         message=summary_msg,

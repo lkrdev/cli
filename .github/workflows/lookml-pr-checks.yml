@@ -68,22 +68,42 @@ jobs:
             exit 0
           fi
 
+          CODEOWNERS_REQ=$(jq -r '.required_reviewers // [] | join(",")' /tmp/snapshot_check.json)
+          ALL_REVIEWERS=$(jq -r '[.required_reviewers[]?, (env.LOOKML_REVIEWERS // "" | split(",")[] | select(length > 0))] | unique | join(",")' /tmp/snapshot_check.json)
           {
             echo "### Material LookML Snapshot Changes (Human Review Required)"
             echo ""
             jq -r '.material_changes[]? | "- `" + . + "`"' /tmp/snapshot_check.json
+            if [[ -n "$CODEOWNERS_REQ" ]]; then
+              echo ""
+              echo "Required CODEOWNERS: \`$CODEOWNERS_REQ\`"
+            fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
           if [[ -n "$PR_NUMBER" ]]; then
-            [[ -n "$LOOKML_REVIEWERS" ]] && gh pr edit "$PR_NUMBER" --add-reviewer "$LOOKML_REVIEWERS" >/dev/null 2>&1 || true
-            DECISION=$(gh pr view "$PR_NUMBER" --json reviewDecision --jq '.reviewDecision // ""' 2>/dev/null || true)
-            if [[ "$DECISION" == "APPROVED" ]]; then
-              echo "Material LookML changes detected and approved by human reviewer."
+            [[ -n "$ALL_REVIEWERS" ]] && gh pr edit "$PR_NUMBER" --add-reviewer "$ALL_REVIEWERS" >/dev/null 2>&1 || true
+            PR_REVIEWS=$(gh pr view "$PR_NUMBER" --json reviewDecision,latestReviews 2>/dev/null || echo "{}")
+            REQ_JSON=$(jq -c '.required_reviewers // []' /tmp/snapshot_check.json)
+            if echo "$PR_REVIEWS" | jq -e --argjson req "$REQ_JSON" '
+              ([.latestReviews[]? | select(.state == "APPROVED") | .author.login | ascii_downcase]) as $approved
+              | ($req | map(ascii_downcase)) as $required
+              | ($required | map(select((contains("/") or contains("@")) | not))) as $req_users
+              | (.reviewDecision != "CHANGES_REQUESTED") and (
+                  if ($req_users | length) > 0 then
+                    ($req_users | all(. as $u | ($approved | index($u)) != null)) and (
+                      (($required | length) == ($req_users | length)) or (.reviewDecision == "APPROVED")
+                    )
+                  else
+                    .reviewDecision == "APPROVED" or (($approved | length) > 0 and ($required | length) == 0)
+                  end
+                )
+            ' >/dev/null 2>&1; then
+              echo "Material LookML changes detected and approved by required CODEOWNERS / human reviewer."
               exit 0
             fi
           fi
 
-          echo "::error::Material LookML snapshot changes detected (modified or removed assert, test field, connection, measure label, access control, or manifest). Human review approval is required."
+          echo "::error::Material LookML snapshot changes detected (modified or removed assert, test field, connection, measure label, access control, or manifest). Approval from required CODEOWNERS (${CODEOWNERS_REQ:-human reviewer}) is required."
           exit 1
 
       - name: Authenticate Looker API

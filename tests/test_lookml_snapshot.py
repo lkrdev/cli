@@ -574,3 +574,71 @@ def test_snapshot_base_path_comparison_and_update_guard(
         json.loads(conn_snap.read_text(encoding="utf-8"))["shop"]["connection"]
         == "snowflake_prod"
     )
+
+
+def test_snapshot_codeowners_resolution_on_material_changes(
+    sample_lookml_project: Path,
+):
+    gh_dir = sample_lookml_project / ".github"
+    gh_dir.mkdir(parents=True, exist_ok=True)
+    (gh_dir / "CODEOWNERS").write_text(
+        "# Project code owners\n"
+        "* @default-owner\n"
+        "*.model.lkml @model-owner @org/data-eng\n"
+        "/users.view.lkml @view-owner\n"
+        "__snapshots__/*.snap @snap-owner\n",
+        encoding="utf-8",
+    )
+    view_file = sample_lookml_project / "users.view.lkml"
+    view_file.write_text(
+        "view: users {\n"
+        "  sql_table_name: public.users ;;\n"
+        "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+        '  measure: total_revenue { type: sum sql: ${TABLE}.rev ;; label: "Total Revenue" }\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    runner.invoke(
+        app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project)]
+    )
+
+    # Material change in users.view.lkml -> resolves view-owner and snap-owner
+    orig_view = view_file.read_text(encoding="utf-8")
+    view_file.write_text(
+        orig_view.replace('label: "Total Revenue"', 'label: "Net Revenue"'),
+        encoding="utf-8",
+    )
+    res_view, text_view = run_lookml_snapshot(
+        path=sample_lookml_project, allow_additions=True
+    )
+    assert res_view.success is False
+    assert res_view.requires_review is True
+    assert "users.view.lkml" in res_view.material_change_files
+    assert (
+        "__snapshots__/ecommerce_analytics.access.snap"
+        in res_view.material_change_files
+    )
+    assert res_view.required_reviewers == ["view-owner", "snap-owner"]
+    assert "Required CODEOWNERS: view-owner, snap-owner" in text_view
+
+    # Restore view and make material change in shop.model.lkml -> resolves model-owner, org/data-eng, snap-owner
+    view_file.write_text(orig_view, encoding="utf-8")
+    model_file = sample_lookml_project / "shop.model.lkml"
+    orig_model = model_file.read_text(encoding="utf-8")
+    model_file.write_text(
+        orig_model.replace(
+            'connection: "snowflake_prod"', 'connection: "bigquery_prod"'
+        ),
+        encoding="utf-8",
+    )
+    res_model, _ = run_lookml_snapshot(
+        path=sample_lookml_project, allow_additions=True
+    )
+    assert res_model.requires_review is True
+    assert "shop.model.lkml" in res_model.material_change_files
+    assert res_model.required_reviewers == [
+        "model-owner",
+        "org/data-eng",
+        "snap-owner",
+    ]
+
