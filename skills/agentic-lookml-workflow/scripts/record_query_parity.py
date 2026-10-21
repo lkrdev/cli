@@ -1,5 +1,8 @@
 # ruff: noqa: F821, BLE001
-"""Register Looker queries (when inline_queries_json is provided) and verify result parity against SQL Runner."""
+"""Deprecated: Use pre_gate.py instead.
+
+Register Looker queries (when inline_queries_json is provided) and verify result parity against SQL Runner.
+"""
 
 import json
 

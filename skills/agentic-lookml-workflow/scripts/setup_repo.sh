@@ -4,8 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# 1. Run CLI preflight (uv, lkr-dev-cli[tools,code-mode,parse], gh auth)
-bash "$SCRIPT_DIR/preflight.sh"
+# 1. Run CLI preflight (uv, lkr-dev-cli[tools,code-mode,parse], gh auth) unless skipped
+if [[ "${*:-}" != *"--skip-preflight"* && -z "${LOOKML_DIR:-}" ]]; then
+  bash "$SCRIPT_DIR/preflight.sh"
+fi
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "Error: 'jq' is required on PATH." >&2

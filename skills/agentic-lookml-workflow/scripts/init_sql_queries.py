@@ -1,5 +1,8 @@
 # ruff: noqa: F821
-"""Initialize SQL Runner queries for all statements in input.sql and return updated data.json payload."""
+"""Deprecated: Use pre_gate.py instead.
+
+Initialize SQL Runner queries for all statements in input.sql and return updated data.json payload.
+"""
 
 import json
 import re

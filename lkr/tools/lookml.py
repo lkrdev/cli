@@ -57,6 +57,11 @@ def _get_file_id(f: Any) -> str:
     return str(f)
 
 
+def _is_hidden_path(path: str) -> bool:
+    parts = [p for p in path.replace("\\", "/").split("/")[:-1] if p]
+    return any(p.startswith(".") and p not in (".", "..") for p in parts)
+
+
 def _resolve_project_id(
     folder_name: str | None, project_id_opt: str | None
 ) -> str:
@@ -206,6 +211,15 @@ def push(
     message: Annotated[
         str, typer.Option("--message", help="Commit message when deploying")
     ] = "push from lkr cli",
+    sync_hidden: Annotated[
+        bool,
+        typer.Option(
+            "--sync-hidden",
+            "--include-hidden",
+            "--sync-dot-directories",
+            help="Enable syncing of hidden dot-directories (e.g. .agents/, .github/)",
+        ),
+    ] = False,
 ):
     """
     Push local files to Looker, removing files on the instance that aren't being pushed.
@@ -265,6 +279,11 @@ def push(
             raise typer.Exit(1)
 
         rel_path = os.path.relpath(full_path, lookml_dir).replace("\\", "/")
+        if not sync_hidden and _is_hidden_path(rel_path):
+            logger.error(
+                f"Local file '{file_opt}' is in a hidden dot-directory. Pass --sync-hidden to push it."
+            )
+            raise typer.Exit(1)
         with open(full_path, "r", encoding="utf-8") as f:
             content = f.read()
         files_to_push.append({
@@ -278,15 +297,19 @@ def push(
             raise typer.Exit(1)
 
         logger.info(f"Reading local files from {lookml_dir} for project {project_id}...")
-        for root, _, files in os.walk(lookml_dir):
-            if ".git" in root.split(os.sep):
-                continue
+        for root, dirs, files in os.walk(lookml_dir):
+            if not sync_hidden:
+                dirs[:] = [d for d in dirs if not d.startswith(".")]
+            else:
+                dirs[:] = [d for d in dirs if d != ".git"]
             for file in files:
                 if file in (".gitignore", ".DS_Store"):
                     continue
+                full_path = os.path.join(root, file)
+                rel_path = os.path.relpath(full_path, lookml_dir).replace("\\", "/")
+                if not sync_hidden and _is_hidden_path(rel_path):
+                    continue
                 if any(file.endswith(ext) for ext in VALID_EXTENSIONS):
-                    full_path = os.path.join(root, file)
-                    rel_path = os.path.relpath(full_path, lookml_dir).replace("\\", "/")
                     with open(full_path, "r", encoding="utf-8") as f:
                         content = f.read()
                     files_to_push.append({
@@ -359,6 +382,8 @@ def push(
         existing_remote = sdk.all_project_files(project_id=project_id) or []
         for rf in existing_remote:
             rf_path = _get_file_id(rf)
+            if not sync_hidden and _is_hidden_path(rf_path):
+                continue
             if not any(rf_path.endswith(ext) for ext in VALID_EXTENSIONS):
                 logger.warning(
                     f"Remote file '{rf_path}' has an extension not supported by Looker."
@@ -425,6 +450,15 @@ def pull(
     message: Annotated[
         str, typer.Option("--message", help="Commit message when deploying")
     ] = "pull from lkr cli then commit and deploy",
+    sync_hidden: Annotated[
+        bool,
+        typer.Option(
+            "--sync-hidden",
+            "--include-hidden",
+            "--sync-dot-directories",
+            help="Enable syncing of hidden dot-directories (e.g. .agents/, .github/)",
+        ),
+    ] = False,
 ):
     """
     Pull remote files from Looker to local disk, removing local files that aren't on the instance.
@@ -449,6 +483,11 @@ def pull(
             raise typer.Exit(1)
 
         rf_path = os.path.relpath(resolved_local, target_dir).replace("\\", "/")
+        if not sync_hidden and _is_hidden_path(rf_path):
+            logger.error(
+                f"Remote file '{rf_path}' is in a hidden dot-directory. Pass --sync-hidden to pull it."
+            )
+            raise typer.Exit(1)
         if not any(rf_path.endswith(ext) for ext in VALID_EXTENSIONS):
             logger.error(
                 f"File '{rf_path}' has an extension not supported by Looker."
@@ -474,6 +513,8 @@ def pull(
         remote_paths = set()
         for rf in existing_remote:
             rf_path = _get_file_id(rf)
+            if not sync_hidden and _is_hidden_path(rf_path):
+                continue
             if not any(rf_path.endswith(ext) for ext in VALID_EXTENSIONS):
                 logger.warning(
                     f"Remote file '{rf_path}' has an extension not supported by Looker."
@@ -511,15 +552,19 @@ def pull(
             logger.info(f"Pulled file: {rf_path}")
 
         logger.info("Cleaning up local orphans not present on the Looker instance...")
-        for root, _, files in os.walk(target_dir):
-            if ".git" in root.split(os.sep):
-                continue
+        for root, dirs, files in os.walk(target_dir):
+            if not sync_hidden:
+                dirs[:] = [d for d in dirs if not d.startswith(".")]
+            else:
+                dirs[:] = [d for d in dirs if d != ".git"]
             for file in files:
                 if file in (".gitignore", ".DS_Store"):
                     continue
+                full_path = os.path.join(root, file)
+                rel_path = os.path.relpath(full_path, target_dir).replace("\\", "/")
+                if not sync_hidden and _is_hidden_path(rel_path):
+                    continue
                 if any(file.endswith(ext) for ext in VALID_EXTENSIONS):
-                    full_path = os.path.join(root, file)
-                    rel_path = os.path.relpath(full_path, target_dir).replace("\\", "/")
                     if (
                         rel_path not in remote_paths
                         and not rel_path.endswith(".gitkeep")

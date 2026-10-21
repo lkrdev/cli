@@ -229,6 +229,7 @@ def discover_strings_files(root: Path) -> dict[str, tuple[str, dict[str, Any]]]:
         if (
             not f.is_file()
             or f.name.endswith(".snap.strings.json")
+            or f.name.endswith(".snap.json.md")
             or "__snapshots__" in f.parts
         ):
             continue
