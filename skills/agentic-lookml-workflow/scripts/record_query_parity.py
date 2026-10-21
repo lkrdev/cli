@@ -28,24 +28,15 @@ def compare_row_sets(sql_rows, looker_rows):
     if len(sql_rows) != len(looker_rows):
         return False, [f"Row count mismatch: SQL={len(sql_rows)}, Looker={len(looker_rows)}"]
     mismatches = []
-    for idx, (sr, lr) in enumerate(zip(sql_rows, looker_rows, strict=False)):
+    for idx, (sr, lr) in enumerate(zip(sql_rows, looker_rows)):
         sn, ln = _norm_row(sr), _norm_row(lr)
         if len(sn) != len(ln):
             mismatches.append(f"Row {idx} column count mismatch: SQL={len(sn)}, Looker={len(ln)}")
             continue
-        if set(sn) == set(ln):
-            pairs = [(k, sn.get(k), ln.get(k)) for k in sn]
-        else:
-            shared = [k for k in sn if k in ln]
-            rem_s = [k for k in sn if k not in ln]
-            rem_l = [k for k in ln if k not in sn]
-            pairs = [
-                *((k, sn[k], ln[k]) for k in shared),
-                *(
-                    (f"{sk}->{lk}", sn[sk], ln[lk])
-                    for sk, lk in zip(rem_s, rem_l, strict=False)
-                ),
-            ]
+        pairs = [(k, sn[k], ln[k]) for k in sn if k in ln] + [
+            (f"{sk}->{lk}", sn[sk], ln[lk])
+            for sk, lk in zip([k for k in sn if k not in ln], [k for k in ln if k not in sn])
+        ]
         for col, sv, lv in pairs:
             if sv != lv:
                 mismatches.append(f"Row {idx} ({col}): SQL={sv}, Looker={lv}")

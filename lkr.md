@@ -348,6 +348,7 @@ $ lkr tools lookml push [OPTIONS] {folder_name}
 * `--reset / --no-reset`: Reset developer workspace to production before pushing  [default: reset]
 * `--message <str>`: Commit message when deploying  [default: push from lkr cli]
 * `--sync-hidden, --include-hidden, --sync-dot-directories`: Enable syncing of hidden dot-directories (e.g. .agents/, .github/)
+* `--only-changed`: Only upload files whose content changed since the last pull/push
 * `--help`: Show this message and exit.
 
 #### `lkr tools lookml pull`

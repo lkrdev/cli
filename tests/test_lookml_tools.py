@@ -159,6 +159,7 @@ def test_push_warning(tmp_path, mock_sdk, mock_auth):
         mock_warn.assert_any_call(
             "Remote file 'remote_unsupported.abc' has an extension not supported by Looker."
         )
+        mock_sdk.delete_file.assert_not_called()
 
 
 def test_pull_warning(tmp_path, mock_sdk, mock_auth):
@@ -560,4 +561,65 @@ def test_push_and_pull_skip_dot_directories_unless_sync_hidden(tmp_path, mock_sd
         )
         assert res_pull_hidden.exit_code == 0
         assert (pull_dir / ".agents" / "skills" / "remote_doc.md").exists()
+
+
+def test_push_only_changed_and_skills_lock_ignored(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "sync_project"
+    project_dir.mkdir()
+    (project_dir / "skills-lock.json").write_text('{"skills": {}}')
+
+    remote_files = {
+        "orders.view.lkml": "view: orders {}",
+        "users.view.lkml": "view: users {}",
+        "skills-lock.json": '{"skills": {}}',
+    }
+    mock_sdk.all_project_files.side_effect = lambda **_kw: [
+        {"id": k} for k in remote_files
+    ]
+    mock_sdk.get_file_content.side_effect = lambda file_path, **_kw: remote_files[
+        file_path
+    ]
+
+    with (
+        patch("lkr.tools.lookml.get_auth", return_value=mock_auth),
+        patch("lkr.tools.lookml.logger.warning") as mock_warn,
+    ):
+        pull_res = runner.invoke(app, ["tools", "lookml", "pull", str(project_dir)])
+        assert pull_res.exit_code == 0
+
+        # Modify one file, add one new file, leave users.view.lkml untouched
+        (project_dir / "orders.view.lkml").write_text("view: orders { dimension: id {} }")
+        (project_dir / "new.explore.lkml").write_text("explore: orders {}")
+
+        mock_sdk.update_file.reset_mock()
+        mock_sdk.delete_file.reset_mock()
+
+        push_res = runner.invoke(
+            app,
+            ["tools", "lookml", "push", str(project_dir), "--no-reset", "--only-changed"],
+        )
+        assert push_res.exit_code == 0
+
+        pushed_paths = {
+            call.kwargs["file_content"].path
+            for call in mock_sdk.update_file.call_args_list
+        }
+        assert pushed_paths == {"orders.view.lkml", "new.explore.lkml"}
+        mock_sdk.delete_file.assert_not_called()
+        for call in mock_warn.call_args_list:
+            assert "skills-lock.json" not in str(call)
+
+        # Switching Looker instance base_url must not collide with prior sync cache
+        mock_sdk.auth = MagicMock(settings=MagicMock(base_url="https://staging.looker.com"))
+        mock_sdk.update_file.reset_mock()
+        push_staging = runner.invoke(
+            app,
+            ["tools", "lookml", "push", str(project_dir), "--no-reset", "--only-changed"],
+        )
+        assert push_staging.exit_code == 0
+        staging_pushed = {
+            call.kwargs["file_content"].path
+            for call in mock_sdk.update_file.call_args_list
+        }
+        assert staging_pushed == {"orders.view.lkml", "users.view.lkml", "new.explore.lkml"}
 

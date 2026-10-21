@@ -48,21 +48,14 @@ def compare_row_sets(sql_rows, looker_rows):
     if len(sql_rows) != len(looker_rows):
         return False, [f"Row count mismatch: SQL={len(sql_rows)}, Looker={len(looker_rows)}"]
     mismatches = []
-    for idx, (sr, lr) in enumerate(zip(sql_rows, looker_rows, strict=False)):
+    for idx, (sr, lr) in enumerate(zip(sql_rows, looker_rows)):
         sn, ln = _norm_row(sr), _norm_row(lr)
         if len(sn) != len(ln):
             mismatches.append(f"Row {idx} column count mismatch: SQL={len(sn)}, Looker={len(ln)}")
             continue
-        pairs = [
-            *((k, sn[k], ln[k]) for k in sn if k in ln),
-            *(
-                (f"{sk}->{lk}", sn[sk], ln[lk])
-                for sk, lk in zip(
-                    [k for k in sn if k not in ln],
-                    [k for k in ln if k not in sn],
-                    strict=False,
-                )
-            ),
+        pairs = [(k, sn[k], ln[k]) for k in sn if k in ln] + [
+            (f"{sk}->{lk}", sn[sk], ln[lk])
+            for sk, lk in zip([k for k in sn if k not in ln], [k for k in ln if k not in sn])
         ]
         for col, sv, lv in pairs:
             if sv != lv:
@@ -198,4 +191,4 @@ def main():
     return data
 
 
-result = main()
+main()
