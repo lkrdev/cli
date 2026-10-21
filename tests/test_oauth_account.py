@@ -443,3 +443,62 @@ def test_add_access_token_and_reuse_isolated_dev_prod(temp_db, monkeypatch):
         auth_dev._get_current_auth()
 
 
+def test_add_access_token_env_vars_only_until_expiry(temp_db, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import MagicMock
+
+    from looker_sdk.error import SDKError
+    from typer.testing import CliRunner
+
+    from lkr.auth_service import ApiKeyAuth, DbOAuthSession, get_auth, init_sdk
+    from lkr.main import app
+
+    monkeypatch.setattr("lkr.auth_service.os.path.expanduser", lambda _p: temp_db)
+    monkeypatch.setenv("LOOKERSDK_BASE_URL", "https://acme.cloud.looker.com")
+    monkeypatch.setenv("LOOKERSDK_CLIENT_ID", "env-id")
+    monkeypatch.setenv("LOOKERSDK_CLIENT_SECRET", "env-secret")
+
+    api_key_calls = []
+
+    def fake_init_api_key_sdk(api_key, use_production=True):
+        api_key_calls.append((api_key.client_id, use_production))
+        sdk = MagicMock()
+        sdk.auth.token = AccessToken(
+            access_token="env-minted-tok", token_type="Bearer", expires_in=3600
+        )
+        return sdk
+
+    monkeypatch.setattr("lkr.auth.main.init_api_key_sdk", fake_init_api_key_sdk)
+    monkeypatch.setattr("lkr.auth_service.init_api_key_sdk", fake_init_api_key_sdk)
+
+    runner = CliRunner()
+    assert runner.invoke(app, ["auth", "add-access-token"]).exit_code == 0
+    assert len(api_key_calls) == 1
+
+    # Reused across direct LkrCtxObj(), init_sdk(), and CLI auth list without minting again
+    auth = get_auth(LkrCtxObj())
+    assert isinstance(auth, SqlLiteAuth)
+    sdk = init_sdk()
+    assert isinstance(sdk.auth, DbOAuthSession)
+    assert sdk.auth.token.access_token == "env-minted-tok"
+    assert len(api_key_calls) == 1
+    list_res = runner.invoke(app, ["auth", "list"])
+    assert list_res.exit_code == 0 and "token-prod-acme" in list_res.output
+
+    # Refreshless token never POSTs empty refresh_token to /api/token
+    with pytest.raises(SDKError, match="Access token has expired"):
+        sdk.auth._login({})
+
+    # Within looker_sdk's 10s lag_time window: treated as expired, deleted, and falls back to API key
+    near_expiry = (datetime.now(UTC) + timedelta(seconds=5)).isoformat()
+    auth.conn.execute(
+        "UPDATE auth SET expires_at = ?, refresh_expires_at = ? WHERE instance_name = 'token-prod-acme'",
+        (near_expiry, near_expiry),
+    )
+    auth.conn.commit()
+
+    assert isinstance(get_auth(LkrCtxObj()), ApiKeyAuth)
+    init_sdk()
+    assert len(api_key_calls) == 2
+    assert runner.invoke(app, ["auth", "list"]).exit_code == 1
+

@@ -6,6 +6,7 @@ from looker_sdk.rtl.auth_token import AccessToken, AuthToken
 
 from lkr.auth.oauth import OAuth2PKCE
 from lkr.auth_service import (
+    ApiKeyAuth,
     ApiKeyAuthSession,
     SqlLiteAuth,
     get_auth,
@@ -35,7 +36,9 @@ group = typer.Typer(name="auth", help="Authentication commands for LookML Reposi
 def callback(ctx: typer.Context):
     if ctx.invoked_subcommand in ("whoami", "add-access-token"):
         return
-    if ctx.obj["ctx_lkr"].use_sdk == "api_key":
+    if ctx.obj["ctx_lkr"].use_sdk == "api_key" and (
+        ctx.invoked_subcommand == "login" or isinstance(get_auth(ctx), ApiKeyAuth)
+    ):
         logger.error("API key authentication is not supported for auth commands")
         raise typer.Exit(1)
 

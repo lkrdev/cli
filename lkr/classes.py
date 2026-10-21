@@ -40,6 +40,7 @@ class LkrCtxObj(BaseModel):
 
     def __init__(self, api_key: LookerApiKey | None = None, *args, **kwargs):
         super().__init__(*args, api_key=api_key, **kwargs)
-        if not self.api_key:
-            self.api_key = LookerApiKey.from_env()
+        self.api_key = self.api_key or LookerApiKey.from_env()
+        if not self.base_url and self.api_key:
+            self.base_url = self.api_key.base_url
 

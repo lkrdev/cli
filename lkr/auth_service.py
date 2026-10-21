@@ -9,6 +9,7 @@ from typing import Union
 
 import requests
 import typer
+from looker_sdk.error import SDKError
 from looker_sdk.rtl import serialize
 from looker_sdk.rtl.api_settings import ApiSettings, SettingsConfig
 from looker_sdk.rtl.auth_session import AuthSession, CryptoHash, OAuthSession
@@ -54,6 +55,9 @@ def is_auth_expired(e: Exception) -> bool:
     return "invalid_grant" in str(e) or "token expired" in str(e)
 
 
+ACCESS_TOKEN_LAG = timedelta(seconds=15)
+
+
 def get_auth(
     ctx: Union["typer.Context", LkrCtxObj],
 ) -> Union["SqlLiteAuth", "ApiKeyAuth"]:
@@ -65,14 +69,11 @@ def get_auth(
             logger.error("No Looker context found")
             raise typer.Exit(1)
     if lkr_ctx.use_sdk == "api_key" and lkr_ctx.api_key:
-        if not lkr_ctx.force_oauth and lkr_ctx.base_url:
-            sql_auth = SqlLiteAuth(lkr_ctx)
-            if sql_auth._get_access_token_auth():
-                return sql_auth
+        if (sql_auth := SqlLiteAuth(lkr_ctx))._get_access_token_auth():
+            return sql_auth
         logger.info("Using API key authentication")
         return ApiKeyAuth(lkr_ctx.api_key, use_production=lkr_ctx.use_production)
-    else:
-        return SqlLiteAuth(lkr_ctx)
+    return SqlLiteAuth(lkr_ctx)
 
 
 class ApiKeyApiSettings(ApiSettings):
@@ -158,6 +159,8 @@ class DbOAuthSession(OAuthSession):
         self.use_production = use_production
 
     def _login(self, *args, **kwargs):
+        if not self.token.refresh_token:
+            raise SDKError("Access token has expired, run lkr auth add-access-token")
         prev_refresh_token = self.token.refresh_token
         super()._login(*args, **kwargs)
         self.token.refresh_token = self.token.refresh_token or prev_refresh_token
@@ -316,9 +319,10 @@ class CurrentAuth(BaseModel):
     def valid_refresh_token(self) -> bool:
         if not self.refresh_expires_at:
             return False
-        return datetime.fromisoformat(self.refresh_expires_at).astimezone(
-            UTC
-        ) > datetime.now(UTC)
+        cutoff = datetime.now(UTC) + (
+            timedelta(0) if self.refresh_token else ACCESS_TOKEN_LAG
+        )
+        return datetime.fromisoformat(self.refresh_expires_at).astimezone(UTC) > cutoff
 
     @computed_field
     @property
@@ -612,10 +616,10 @@ class SqlLiteAuth:
         self.conn.commit()
 
     def list_auth(self) -> list[tuple[str, str, bool, bool]]:
-        now_iso = datetime.now(UTC).isoformat()
+        cutoff_iso = (datetime.now(UTC) + ACCESS_TOKEN_LAG).isoformat()
         cursor = self.conn.execute(
             "SELECT instance_name, base_url, current_instance, use_production FROM auth WHERE (refresh_token IS NOT NULL AND refresh_token != '') OR expires_at > ? ORDER BY instance_name ASC",
-            (now_iso,),
+            (cutoff_iso,),
         )
         rows = cursor.fetchall()
         return [
