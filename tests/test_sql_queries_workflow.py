@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 from typing import Any
 
@@ -296,5 +297,24 @@ def test_pre_gate_initializes_sql_and_validates_and_checks_parity():
     assert q0["query_id"] == "101"
     assert q0["explore_url"] == "https://example.looker.com/x/slug_101"
     assert q0["parity_status"] == "matched"
+    assert q0["sql"] == "SELECT id, count FROM orders WHERE status = 'Complete'"
     assert created_sql == [{"connection_name": "thelook_conn", "sql": "SELECT id, count FROM orders WHERE status = 'Complete'"}]
     assert len(created_looker_queries) == 1
+
+    # Verify that modified SQL regenerates SQL Runner queries and invalid JSON does not crash
+    ns2: dict[str, Any] = {
+        "raw_sql": "SELECT id, count FROM orders WHERE status = 'Cancelled';",
+        "connection_name": "thelook_conn",
+        "data_json": json.dumps(res),
+        "base_url": "https://example.looker.com",
+        "validate": "false",
+        "inline_queries_json": "{invalid_json",
+        "create_sql_query": lambda body: {"slug": "sql_slug_2"},
+        "create_query": lambda body: {"id": "102", "slug": "slug_102"},
+        "run_sql_query": lambda **_kw: "[]",
+        "run_inline_query": lambda **_kw: "[]",
+    }
+    exec(compile(source, str(script_path), "exec"), ns2)  # noqa: S102
+    res2: dict[str, Any] = ns2["result"]
+    assert res2["queries"][0]["sql_query_id"] == "sql_slug_2"
+    assert res2["queries"][0]["sql"] == "SELECT id, count FROM orders WHERE status = 'Cancelled'"

@@ -103,7 +103,7 @@ def main():
         created_queries = []
         for idx, stmt in enumerate(split_sql_statements(sql_input)):
             existing = existing_queries.get(idx)
-            if existing and existing.get("sql_query_id"):
+            if existing and existing.get("sql_query_id") and existing.get("sql") == stmt:
                 created_queries.append(existing)
             else:
                 body = {"sql": stmt}
@@ -120,6 +120,7 @@ def main():
                     "explore_url": None,
                     "inline_query": None,
                     "parity_status": "pending",
+                    "sql": stmt,
                 })
         data["queries"] = created_queries
 
@@ -140,12 +141,16 @@ def main():
 
     # 3. Register inline queries and check parity
     try:
-        payloads = (
-            json.loads(inline_queries_json)  # ty: ignore[unresolved-reference]
-            if isinstance(inline_queries_json, str)  # ty: ignore[unresolved-reference]
-            else (inline_queries_json or {})  # ty: ignore[unresolved-reference]
-        )
+        raw_payloads = inline_queries_json  # ty: ignore[unresolved-reference]
     except NameError:
+        raw_payloads = {}
+    try:
+        payloads = (
+            json.loads(raw_payloads)
+            if isinstance(raw_payloads, str)
+            else (raw_payloads or {})
+        )
+    except (json.JSONDecodeError, TypeError):
         payloads = {}
 
     all_matched = True
