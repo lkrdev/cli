@@ -371,9 +371,8 @@ Execute the LookML validator, Explore schema generation (`lkr schema generate` a
 
 1. Push the Bronze files to Looker development mode (`lkr --dev tools lookml push --no-reset`).
 2. Generate the strongly-typed Explore query JSON Schema offline from local LookML using `lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" -m "$MODEL_NAME" -e "$EXPLORE_NAME" -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json"` followed by `lkr schema generate -m "$MODEL_NAME" -e "$EXPLORE_NAME" --explore-file "./data/$RUN_ID/explore_${EXPLORE_NAME}.json" -o "./data/$RUN_ID/schema_${EXPLORE_NAME}.json"`. Use the generated schema's `fields`, `filters`, `sorts`, `pivots`, and `dynamic_fields` definitions to construct `run_inline_query` payloads and LookML `test:` `explore_source:` blocks, and pre-validate every inline query locally via `lkr schema validate --schema-file "./data/$RUN_ID/schema_${EXPLORE_NAME}.json" --query "$INLINE_QUERY_JSON"`.
-3. For every query in `input.sql`, create a SQL Runner query using [init_sql_queries.py](../agentic-lookml-workflow/scripts/init_sql_queries.py) to capture the SQL query ID and interactive SQL Runner URL (`/sql/:sql_id`).
-4. Run [record_query_parity.py](../agentic-lookml-workflow/scripts/record_query_parity.py) with `--var validate="true"` via `lkr --dev code-mode sandbox --dev-mode` to execute Looker's `validate_project` and confirm that Looker's generated query returns the same rows as SQL Runner. If syntax errors, broken references, or parity mismatches exist, resolve them before writing any tests.
-5. Never author LookML data tests on top of a model that fails validation or diverges from the user's SQL query results. Both checks must pass before writing tests and finalizing Silver modeling.
+3. Run [pre_gate.py](../agentic-lookml-workflow/scripts/pre_gate.py) with `--var validate="true"` via `lkr --dev code-mode sandbox` to initialize SQL Runner queries, execute Looker's `validate_project`, and confirm that Looker's generated query returns the same rows as SQL Runner in a single sandbox invocation. If syntax errors, broken references, or parity mismatches exist, resolve them before writing any tests.
+4. Never author LookML data tests on top of a model that fails validation or diverges from the user's SQL query results. Both checks must pass before writing tests and finalizing Silver modeling.
 
 ### Silver layer testing rule
 
@@ -487,9 +486,9 @@ test: orders_users_join_path_metrics {
   include: "tests/**/*.test.lkml"
   ```
 - Target every new or additional test with `lkr code-mode` before committing and pushing to the pull request. Looker's `run_lookml_test(project_id, file_id=None, test=None, model=None)` endpoint (inspectable via `lkr code-mode sandbox --code="return lookup('run_lookml_test')"` or `help('lookml_test')`) filters test execution by `file_id`, `test`, and `model`.
-- After pushing new or modified `.test.lkml` files to the developer branch (`lkr --dev tools lookml push --no-reset`), target each new or additional test directly via `lkr code-mode sandbox --dev-mode` before committing or opening the pull request:
+- After pushing new or modified `.test.lkml` files to the developer branch (`lkr --dev tools lookml push --no-reset`), target each new or additional test directly via `lkr --dev code-mode sandbox` before committing or opening the pull request:
   ```bash
-  lkr --base-url="$BASE_URL" --dev code-mode sandbox --dev-mode \
+  lkr --base-url="$BASE_URL" --dev code-mode sandbox \
     --code='return run_lookml_test(project_id="my_project", file_id="tests/silver/orders.test.lkml", test="orders_fact_metrics_at_fixed_date")'
   ```
 - Pass `--var file_ids="..."` and `--var test_names="..."` when running `validate_and_commit_branch.py` so only the targeted tests are evaluated before committing. Commit is blocked if any targeted test fails.

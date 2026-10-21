@@ -5,6 +5,7 @@ on:
     paths:
       - "**/*.lkml"
       - "**/*.lookml"
+      - "**/*.snap.json.md"
       - "**/*.snap.strings.json"
       - "**/*.snap.json"
       - "**/data.json"
@@ -62,9 +63,9 @@ jobs:
           if [[ -n "$BASE_REF" ]] && git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1; then
             rm -rf /tmp/base-branch
             git worktree add --detach /tmp/base-branch "origin/$BASE_REF"
-            if [[ -d "/tmp/base-branch/${LOOKML_DIR#./}" ]] && find "/tmp/base-branch/${LOOKML_DIR#./}" \( -name "*.lkml" -o -name "*.snap.strings.json" -o -name "*.snap.json" \) 2>/dev/null | grep -q .; then
+            if [[ -d "/tmp/base-branch/${LOOKML_DIR#./}" ]] && find "/tmp/base-branch/${LOOKML_DIR#./}" \( -name "*.lkml" -o -name "*.snap.json.md" -o -name "*.snap.strings.json" -o -name "*.snap.json" \) 2>/dev/null | grep -q .; then
               BASE_ARGS=(--base-path "/tmp/base-branch/${LOOKML_DIR#./}")
-            elif find "/tmp/base-branch" \( -name "*.lkml" -o -name "*.snap.strings.json" -o -name "*.snap.json" \) 2>/dev/null | grep -q .; then
+            elif find "/tmp/base-branch" \( -name "*.lkml" -o -name "*.snap.json.md" -o -name "*.snap.strings.json" -o -name "*.snap.json" \) 2>/dev/null | grep -q .; then
               BASE_ARGS=(--base-path "/tmp/base-branch")
             fi
           fi
@@ -136,7 +137,7 @@ jobs:
         run: |
           SCRIPT_DIR=".agents/skills/agentic-lookml-workflow/scripts"
           [[ ! -d "$SCRIPT_DIR" ]] && SCRIPT_DIR="skills/agentic-lookml-workflow/scripts"
-          OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode \
+          OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox \
             --file="$SCRIPT_DIR/validate_and_commit_branch.py" \
             --var project_id="$PROJECT_ID")
           echo "$OUT"
@@ -171,8 +172,8 @@ jobs:
           fi
           SCRIPT_DIR=".agents/skills/agentic-lookml-workflow/scripts"
           [[ ! -d "$SCRIPT_DIR" ]] && SCRIPT_DIR="skills/agentic-lookml-workflow/scripts"
-          OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox --dev-mode \
-            --file="$SCRIPT_DIR/record_query_parity.py" \
+          OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox \
+            --file="$SCRIPT_DIR/pre_gate.py" \
             --var data_json="$DATA_PAYLOAD")
           echo "$OUT"
           echo "$OUT" | sed -n '/^{/,$p' | jq -e '.passed == true' >/dev/null

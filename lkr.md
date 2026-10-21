@@ -347,6 +347,7 @@ $ lkr tools lookml push [OPTIONS] {folder_name}
 * `--deploy`: Commit and deploy to production after push
 * `--reset / --no-reset`: Reset developer workspace to production before pushing  [default: reset]
 * `--message <str>`: Commit message when deploying  [default: push from lkr cli]
+* `--sync-hidden, --include-hidden, --sync-dot-directories`: Enable syncing of hidden dot-directories (e.g. .agents/, .github/)
 * `--help`: Show this message and exit.
 
 #### `lkr tools lookml pull`
@@ -370,6 +371,7 @@ $ lkr tools lookml pull [OPTIONS] {folder_name}
 * `-f, --file <str>`: Single file relative path to pull from Looker
 * `--deploy`: Commit and deploy to production on Looker after pull
 * `--message <str>`: Commit message when deploying  [default: pull from lkr cli then commit and deploy]
+* `--sync-hidden, --include-hidden, --sync-dot-directories`: Enable syncing of hidden dot-directories (e.g. .agents/, .github/)
 * `--help`: Show this message and exit.
 
 #### `lkr tools lookml deploy`
@@ -540,7 +542,6 @@ $ lkr code-mode sandbox [OPTIONS]
 
 * `-c, --code <str>`: Execute Python code directly in the sandbox
 * `-f, --file <str>`: Execute Python code from a file in the sandbox
-* `--dev-mode`: Run in dev mode
 * `--allow-update-session`: Allow calling update_session inside code-mode
 * `-v, --var <str>`: Inject variable as key=value pair (e.g. -v project=my_project)
 * `--help`: Show this message and exit.

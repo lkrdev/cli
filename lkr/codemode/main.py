@@ -117,7 +117,7 @@ def run_python_code(
                 raise RuntimeError(
                     "update_session is disabled in code-mode by default because calling update_session "
                     "affects anyone using this OAuth token/session. "
-                    "Use --dev-mode on the CLI with Client ID and Client Secret auth, "
+                    "Use --dev on the CLI with Client ID and Client Secret auth, "
                     "login to an OAuth account pinned to dev, "
                     "or pass --allow-update-session to explicitly allow calling update_session."
                 )
@@ -218,7 +218,10 @@ def sandbox(
         None, "--file", "-f", help="Execute Python code from a file in the sandbox"
     ),
     dev_mode: bool = typer.Option(
-        False, "--dev-mode", help="Run in dev mode"
+        False,
+        "--dev-mode",
+        help="Deprecated: Use global 'lkr --dev' instead.",
+        hidden=True,
     ),
     allow_update_session: bool = typer.Option(
         False,
@@ -269,6 +272,11 @@ def sandbox(
         if (ctx and ctx.obj and "ctx_lkr" in ctx.obj)
         else LkrCtxObj(force_oauth=False)
     )
+    if dev_mode:
+        logger.warning(
+            "DeprecationWarning: '--dev-mode' on sandbox is deprecated and will be removed in a future release. Use global 'lkr --dev code-mode sandbox' instead."
+        )
+        ctx_lkr.use_production = False
     result = run_python_code(
         code_to_run,
         dev_mode=dev_mode,

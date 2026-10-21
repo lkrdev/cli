@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+from typing import Any
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "skills" / "agentic-lookml-workflow" / "scripts"
 
@@ -158,6 +159,42 @@ def test_init_sql_queries_defaults_to_connection_name():
     assert called_bodies == [{"connection_name": "bq_conn", "sql": "SELECT 1"}]
 
 
+def test_init_branch_prefers_remote_ref_over_ref():
+    script_path = SCRIPTS_DIR / "init_branch.py"
+    source = script_path.read_text()
+    assert "globals(" not in source
+
+    updated_branches = []
+
+    def fake_update_git_branch(project_id, body):
+        updated_branches.append((project_id, body))
+        return body
+
+    ns: dict[str, Any] = {
+        "project_id": "agentic-thelook",
+        "ts_utc": "20261021_070000_000",
+        "me": lambda: {"id": "42"},
+        "project": lambda **_kw: {"git_production_branch_name": "main", "git_remote_url": "git@github.com:org/repo.git"},
+        "reset_project_to_production": lambda **_kw: None,
+        "create_developer_copy": lambda **_kw: None,
+        "all_git_branches": lambda **_kw: [
+            {"name": "main", "is_production": True, "ref": "local_stale_sha", "remote_ref": "origin_latest_sha"},
+            {"name": "feature", "is_production": False, "ref": "feat_sha", "remote_ref": "feat_remote_sha"},
+        ],
+        "git_branch": lambda **_kw: {"name": "main", "ref": "local_stale_sha"},
+        "create_git_branch": lambda **_kw: None,
+        "update_git_branch": fake_update_git_branch,
+    }
+    exec(compile(source, str(script_path), "exec"), ns)  # noqa: S102
+    result: dict[str, Any] = ns["main"]()
+    assert result["production_ref"] == "origin_latest_sha"
+    assert updated_branches == [
+        ("agentic-thelook", {"name": "20261021_070000_000_42", "ref": "origin_latest_sha"}),
+        ("agentic-thelook", {"name": "20261021_070000_000_42", "ref": "origin_latest_sha"}),
+    ]
+
+
+
 def test_validate_and_commit_pushes_branch_to_remote():
     script_path = SCRIPTS_DIR / "validate_and_commit_branch.py"
     source = script_path.read_text()
@@ -214,6 +251,54 @@ def test_record_query_parity_compare_row_sets_matches_aliased_count():
     )
     assert ok2 is True
     assert diffs2 == []
+
+
+def test_pre_gate_initializes_sql_and_validates_and_checks_parity():
+    script_path = SCRIPTS_DIR / "pre_gate.py"
+    source = script_path.read_text()
+    assert "globals(" not in source
+    assert "locals(" not in source
+
+    created_sql = []
+    created_looker_queries = []
+
+    def fake_create_sql_query(body):
+        created_sql.append(body)
+        return {"slug": "sql_slug_1"}
+
+    def fake_create_query(body):
+        created_looker_queries.append(body)
+        return {"id": "101", "slug": "slug_101", "share_url": "https://example.looker.com/x/slug_101"}
+
+    ns: dict[str, Any] = {
+        "raw_sql": "SELECT id, count FROM orders WHERE status = 'Complete';",
+        "connection_name": "thelook_conn",
+        "data_json": '{"project_id": "thelook"}',
+        "base_url": "https://example.looker.com",
+        "validate": "true",
+        "validate_project": lambda **_kw: {"errors": []},
+        "inline_queries_json": '{"0": {"model": "thelook", "view": "orders", "fields": ["orders.id", "orders.count"]}}',
+        "create_sql_query": fake_create_sql_query,
+        "create_query": fake_create_query,
+        "run_sql_query": lambda **_kw: '[{"id": 1, "count": 10}]',
+        "run_inline_query": lambda **_kw: '[{"orders.id": 1, "orders.count": 10}]',
+    }
+    exec(compile(source, str(script_path), "exec"), ns)  # noqa: S102
+    res: dict[str, Any] = ns["result"]
+
+    assert res["passed"] is True
+    assert res["all_queries_matched"] is True
+    assert len(res["queries"]) == 1
+    q0 = res["queries"][0]
+    assert q0["query_index"] == 0
+    assert q0["sql_query_id"] == "sql_slug_1"
+    assert q0["sql_runner_url"] == "https://example.looker.com/sql/sql_slug_1"
+    assert q0["query_id"] == "101"
+    assert q0["explore_url"] == "https://example.looker.com/x/slug_101"
+    assert q0["parity_status"] == "matched"
+    assert created_sql == [{"connection_name": "thelook_conn", "sql": "SELECT id, count FROM orders WHERE status = 'Complete'"}]
+    assert len(created_looker_queries) == 1
+
 
 
 

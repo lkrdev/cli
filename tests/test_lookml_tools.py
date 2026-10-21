@@ -481,7 +481,7 @@ def test_push_and_pull_include_snap_strings_json_and_skip_generic_json(tmp_path,
     (project_dir / "ignored.json").write_text("{}")
     snap_dir = project_dir / "__snapshots__"
     snap_dir.mkdir()
-    snap_file = snap_dir / "manifest.snap.strings.json"
+    snap_file = snap_dir / "manifest.snap.json.md"
     snap_file.write_text("{}")
     legacy_snap = snap_dir / "legacy.snap.json"
     legacy_snap.write_text("{}")
@@ -501,8 +501,66 @@ def test_push_and_pull_include_snap_strings_json_and_skip_generic_json(tmp_path,
         assert pushed_paths == {
             "orders.view.lkml",
             "en.strings.json",
-            "__snapshots__/manifest.snap.strings.json",
+            "__snapshots__/manifest.snap.json.md",
         }
+
+
+def test_push_and_pull_skip_dot_directories_unless_sync_hidden(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+    (project_dir / "main.view.lkml").write_text("view: main {}")
+    agent_dir = project_dir / ".agents" / "skills"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "doc.md").write_text("# Doc")
+
+    mock_sdk.all_project_files.return_value = [
+        {"id": "main.view.lkml"},
+        {"id": ".agents/skills/remote_doc.md"},
+    ]
+    mock_sdk.get_file_content.return_value = "content"
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
+        # 1. Push without --sync-hidden ignores .agents
+        mock_sdk.update_file.reset_mock()
+        res_push_default = runner.invoke(
+            app, ["tools", "lookml", "push", str(project_dir), "--no-reset"]
+        )
+        assert res_push_default.exit_code == 0
+        pushed = {
+            call.kwargs["file_content"].path
+            for call in mock_sdk.update_file.call_args_list
+        }
+        assert ".agents/skills/doc.md" not in pushed
+        assert "main.view.lkml" in pushed
+
+        # 2. Push with --sync-hidden includes .agents
+        mock_sdk.update_file.reset_mock()
+        res_push_hidden = runner.invoke(
+            app, ["tools", "lookml", "push", str(project_dir), "--no-reset", "--sync-hidden"]
+        )
+        assert res_push_hidden.exit_code == 0
+        pushed_hidden = {
+            call.kwargs["file_content"].path
+            for call in mock_sdk.update_file.call_args_list
+        }
+        assert ".agents/skills/doc.md" in pushed_hidden
+
+        # 3. Pull without --sync-hidden ignores remote dot-directories
+        pull_dir = tmp_path / "pull_project"
+        res_pull_default = runner.invoke(
+            app, ["tools", "lookml", "pull", str(pull_dir)]
+        )
+        assert res_pull_default.exit_code == 0
+        assert (pull_dir / "main.view.lkml").exists()
+        assert not (pull_dir / ".agents" / "skills" / "remote_doc.md").exists()
+
+        # 4. Pull with --sync-hidden pulls remote dot-directories
+        res_pull_hidden = runner.invoke(
+            app, ["tools", "lookml", "pull", str(pull_dir), "--sync-hidden"]
+        )
+        assert res_pull_hidden.exit_code == 0
+        assert (pull_dir / ".agents" / "skills" / "remote_doc.md").exists()
+
 
 
 
