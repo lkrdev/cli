@@ -1,9 +1,12 @@
 import base64
 import fnmatch
+import hashlib
 import json
 import os
 import re
+import tempfile
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated, Any
 
 import requests
@@ -45,6 +48,33 @@ VALID_EXTENSIONS = (
     ".md",
     ".gitkeep",
 )
+
+IGNORED_FILES = (".gitignore", ".DS_Store", "skills-lock.json")
+
+
+def _hash_content(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _sync_cache(lookml_dir: str, project_id: str) -> Path:
+    d = Path(tempfile.gettempdir()) / f"lkr_lookml_sync_{getattr(os, 'getuid', lambda: 'user')()}"
+    d.mkdir(mode=0o700, exist_ok=True)
+    return d / f"{_hash_content(f'{os.path.abspath(lookml_dir)}:{project_id}')}.json"
+
+
+def _load_sync_hashes(lookml_dir: str, project_id: str) -> dict[str, str]:
+    try:
+        data = json.loads(_sync_cache(lookml_dir, project_id).read_text("utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_sync_hashes(lookml_dir: str, project_id: str, hashes: dict[str, str]) -> None:
+    try:
+        _sync_cache(lookml_dir, project_id).write_text(json.dumps(hashes), "utf-8")
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"Sync cache write notice: {e}")
 
 
 def _get_file_id(f: Any) -> str:
@@ -220,6 +250,13 @@ def push(
             help="Enable syncing of hidden dot-directories (e.g. .agents/, .github/)",
         ),
     ] = False,
+    only_changed: Annotated[
+        bool,
+        typer.Option(
+            "--only-changed",
+            help="Only upload files whose content changed since the last pull/push",
+        ),
+    ] = False,
 ):
     """
     Push local files to Looker, removing files on the instance that aren't being pushed.
@@ -303,7 +340,7 @@ def push(
             else:
                 dirs[:] = [d for d in dirs if d != ".git"]
             for file in files:
-                if file in (".gitignore", ".DS_Store"):
+                if file in IGNORED_FILES:
                     continue
                 full_path = os.path.join(root, file)
                 rel_path = os.path.relpath(full_path, lookml_dir).replace("\\", "/")
@@ -322,11 +359,32 @@ def push(
                         f"Local file '{file}' has an extension not supported by Looker and will be skipped."
                     )
 
+    prior_hashes = _load_sync_hashes(lookml_dir, project_id) if (only_changed or file_opt) else {}
+    cached_hashes = prior_hashes if (only_changed and not reset) else {}
+    existing_remote = (
+        (sdk.all_project_files(project_id=project_id) or [])
+        if (only_changed and not file_opt and cached_hashes)
+        else None
+    )
+    remote_set = {_get_file_id(rf) for rf in (existing_remote or [])}
+
     successfully_pushed_paths = set()
+    uploaded_files = []
+    new_hashes = dict(prior_hashes) if file_opt else {}
     for f in files_to_push:
         structured_path = f["path"]
         root_path = f["root_name"]
         content = f["content"]
+        file_hash = _hash_content(content)
+
+        if (
+            only_changed
+            and structured_path in remote_set
+            and cached_hashes.get(structured_path) == file_hash
+        ):
+            successfully_pushed_paths.add(structured_path)
+            new_hashes[structured_path] = file_hash
+            continue
 
         try:
             logger.info(f"Uploading/Overwriting remote file: {structured_path}")
@@ -351,6 +409,8 @@ def push(
                         file_content=file_content,
                     )
             successfully_pushed_paths.add(structured_path)
+            new_hashes[structured_path] = file_hash
+            uploaded_files.append(f)
             continue
         except Exception as struct_err:  # noqa: BLE001
             logger.debug(
@@ -376,18 +436,24 @@ def push(
                 file_content=root_file_content,
             )
         successfully_pushed_paths.add(root_path)
+        new_hashes[root_path] = _hash_content(content)
+        uploaded_files.append(f)
 
     if not file_opt:
         logger.info("Retrieving remote file inventory to enforce one-way mirror...")
-        existing_remote = sdk.all_project_files(project_id=project_id) or []
+        if existing_remote is None:
+            existing_remote = sdk.all_project_files(project_id=project_id) or []
         for rf in existing_remote:
             rf_path = _get_file_id(rf)
             if not sync_hidden and _is_hidden_path(rf_path):
+                continue
+            if os.path.basename(rf_path) in IGNORED_FILES:
                 continue
             if not any(rf_path.endswith(ext) for ext in VALID_EXTENSIONS):
                 logger.warning(
                     f"Remote file '{rf_path}' has an extension not supported by Looker."
                 )
+                continue
             if (
                 rf_path not in successfully_pushed_paths
                 and not rf_path.endswith(".gitkeep")
@@ -399,8 +465,12 @@ def push(
                 except Exception as dpe:  # noqa: BLE001
                     logger.debug(f"Deletion notice for {rf_path}: {dpe}")
 
+    _save_sync_hashes(lookml_dir, project_id, new_hashes)
+
     _ensure_model_configuration(
-        sdk=sdk, project_id=project_id, files_to_push=files_to_push
+        sdk=sdk,
+        project_id=project_id,
+        files_to_push=uploaded_files if only_changed else files_to_push,
     )
 
     logger.info("Push completed successfully.")
@@ -503,6 +573,9 @@ def pull(
         os.makedirs(os.path.dirname(resolved_local), exist_ok=True)
         with open(resolved_local, "w", encoding="utf-8") as f:
             f.write(content)
+        hashes = _load_sync_hashes(target_dir, project_id)
+        hashes[rf_path] = _hash_content(content)
+        _save_sync_hashes(target_dir, project_id, hashes)
         logger.info(f"Pulled file: {rf_path}")
     else:
         logger.info(
@@ -511,9 +584,12 @@ def pull(
         existing_remote = sdk.all_project_files(project_id=project_id) or []
 
         remote_paths = set()
+        synced_hashes: dict[str, str] = {}
         for rf in existing_remote:
             rf_path = _get_file_id(rf)
             if not sync_hidden and _is_hidden_path(rf_path):
+                continue
+            if os.path.basename(rf_path) in IGNORED_FILES:
                 continue
             if not any(rf_path.endswith(ext) for ext in VALID_EXTENSIONS):
                 logger.warning(
@@ -545,11 +621,14 @@ def pull(
                 continue
 
             remote_paths.add(rf_path)
+            synced_hashes[rf_path] = _hash_content(content)
 
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
             with open(local_path, "w", encoding="utf-8") as f:
                 f.write(content)
             logger.info(f"Pulled file: {rf_path}")
+
+        _save_sync_hashes(target_dir, project_id, synced_hashes)
 
         logger.info("Cleaning up local orphans not present on the Looker instance...")
         for root, dirs, files in os.walk(target_dir):
@@ -558,7 +637,7 @@ def pull(
             else:
                 dirs[:] = [d for d in dirs if d != ".git"]
             for file in files:
-                if file in (".gitignore", ".DS_Store"):
+                if file in IGNORED_FILES:
                     continue
                 full_path = os.path.join(root, file)
                 rel_path = os.path.relpath(full_path, target_dir).replace("\\", "/")

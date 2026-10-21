@@ -3,7 +3,16 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pydantic_monty
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "skills" / "agentic-lookml-workflow" / "scripts"
+
+
+def _run_monty(path: Path, vars_: dict[str, str], externals: dict[str, Any]) -> Any:
+    header = "\n".join(f"{k} = {json.dumps(v)}" for k, v in vars_.items())
+    code = f"{header}\n{path.read_text()}" if header else path.read_text()
+    with pydantic_monty.Monty() as m, m.checkout() as session:
+        return session.feed_run(code, external_lookup=externals)
 
 
 def _load_module(name: str, path: Path):
@@ -162,63 +171,76 @@ def test_init_sql_queries_defaults_to_connection_name():
 
 def test_init_branch_prefers_remote_ref_over_ref():
     script_path = SCRIPTS_DIR / "init_branch.py"
-    source = script_path.read_text()
-    assert "globals(" not in source
+    created_branches = []
+    looked_up_branches = []
 
-    updated_branches = []
+    def fake_find_git_branch(project_id, branch_name):
+        looked_up_branches.append((project_id, branch_name))
+        return {"name": branch_name, "is_production": True, "ref": "local_stale_sha", "remote_ref": "origin_latest_sha"}
 
-    def fake_update_git_branch(project_id, body):
-        updated_branches.append((project_id, body))
+    def fake_create_git_branch(project_id, body):
+        created_branches.append((project_id, body))
         return body
 
-    ns: dict[str, Any] = {
-        "project_id": "agentic-thelook",
-        "ts_utc": "20261021_070000_000",
-        "me": lambda: {"id": "42"},
-        "project": lambda **_kw: {"git_production_branch_name": "main", "git_remote_url": "git@github.com:org/repo.git"},
-        "reset_project_to_production": lambda **_kw: None,
-        "create_developer_copy": lambda **_kw: None,
-        "all_git_branches": lambda **_kw: [
-            {"name": "main", "is_production": True, "ref": "local_stale_sha", "remote_ref": "origin_latest_sha"},
-            {"name": "feature", "is_production": False, "ref": "feat_sha", "remote_ref": "feat_remote_sha"},
-        ],
-        "git_branch": lambda **_kw: {"name": "main", "ref": "local_stale_sha"},
-        "create_git_branch": lambda **_kw: None,
-        "update_git_branch": fake_update_git_branch,
-    }
-    exec(compile(source, str(script_path), "exec"), ns)  # noqa: S102
-    result: dict[str, Any] = ns["main"]()
+    result = _run_monty(
+        script_path,
+        {"project_id": "agentic-thelook", "ts_utc": "20261021_070000_000"},
+        {
+            "me": lambda: {"id": "42"},
+            "project": lambda **_kw: {
+                "git_production_branch_name": "main",
+                "git_remote_url": "git@github.com:org/repo.git",
+            },
+            "reset_project_to_production": lambda **_kw: None,
+            "create_developer_copy": lambda **_kw: None,
+            "find_git_branch": fake_find_git_branch,
+            "git_branch": lambda **_kw: {"name": "main", "ref": "local_stale_sha"},
+            "create_git_branch": fake_create_git_branch,
+        },
+    )
     assert result["production_ref"] == "origin_latest_sha"
-    assert updated_branches == [
-        ("agentic-thelook", {"name": "20261021_070000_000_42", "ref": "origin_latest_sha"}),
+    assert looked_up_branches == [("agentic-thelook", "main")]
+    assert created_branches == [
         ("agentic-thelook", {"name": "20261021_070000_000_42", "ref": "origin_latest_sha"}),
     ]
 
 
-
-def test_validate_and_commit_pushes_branch_to_remote():
+def test_validate_and_commit_pushes_branch_to_remote_and_pairs_tests():
     script_path = SCRIPTS_DIR / "validate_and_commit_branch.py"
-    source = script_path.read_text()
-    assert "globals(" not in source
-
     pushed_paths = []
+    test_calls = []
 
     def fake_post(path, **_kw):
         pushed_paths.append(path)
         return ""
 
-    ns = {
-        "project_id": "agentic-thelook",
-        "commit_message": "feat(lookml): refactor SQL queries",
-        "skip_tests": "true",
-        "validate_project": lambda **_kw: {"errors": []},
-        "run_lookml_test": lambda **_kw: [],
-        "commit": lambda **_kw: {},
-        "post": fake_post,
-        "encode_path_param": lambda s: s,
-        "git_branch": lambda **_kw: {"name": "20261020_093734_975_1", "ref": "abc1234"},
-    }
-    exec(compile(source, str(script_path), "exec"), ns)  # noqa: S102
+    def fake_run_lookml_test(**kw):
+        test_calls.append((kw.get("file_id"), kw.get("test")))
+        return [{"test_name": kw.get("test"), "success": True}]
+
+    res = _run_monty(
+        script_path,
+        {
+            "project_id": "agentic-thelook",
+            "file_ids": "tests/bronze/a.test.lkml,tests/silver/b.test.lkml",
+            "test_names": "test_a,test_b",
+            "commit_message": "feat(lookml): refactor SQL queries",
+        },
+        {
+            "validate_project": lambda **_kw: {"errors": []},
+            "run_lookml_test": fake_run_lookml_test,
+            "commit": lambda **_kw: {},
+            "post": fake_post,
+            "encode_path_param": lambda s: s,
+            "git_branch": lambda **_kw: {"name": "20261020_093734_975_1", "ref": "abc1234"},
+        },
+    )
+    assert res["passed"] is True
+    assert res["committed"] is True
+    assert test_calls == [
+        ("tests/bronze/a.test.lkml", "test_a"),
+        ("tests/silver/b.test.lkml", "test_b"),
+    ]
     assert pushed_paths == ["/projects/agentic-thelook/push_branch"]
 
 
@@ -271,21 +293,24 @@ def test_pre_gate_initializes_sql_and_validates_and_checks_parity():
         created_looker_queries.append(body)
         return {"id": "101", "slug": "slug_101", "share_url": "https://example.looker.com/x/slug_101"}
 
-    ns: dict[str, Any] = {
-        "raw_sql": "SELECT id, count FROM orders WHERE status = 'Complete';",
-        "connection_name": "thelook_conn",
-        "data_json": '{"project_id": "thelook"}',
-        "base_url": "https://example.looker.com",
-        "validate": "true",
-        "validate_project": lambda **_kw: {"errors": []},
-        "inline_queries_json": '{"0": {"model": "thelook", "view": "orders", "fields": ["orders.id", "orders.count"]}}',
-        "create_sql_query": fake_create_sql_query,
-        "create_query": fake_create_query,
-        "run_sql_query": lambda **_kw: '[{"id": 1, "count": 10}]',
-        "run_inline_query": lambda **_kw: '[{"orders.id": 1, "orders.count": 10}]',
-    }
-    exec(compile(source, str(script_path), "exec"), ns)  # noqa: S102
-    res: dict[str, Any] = ns["result"]
+    res: dict[str, Any] = _run_monty(
+        script_path,
+        {
+            "raw_sql": "SELECT id, count AS total_cnt FROM orders WHERE status = 'Complete';",
+            "connection_name": "thelook_conn",
+            "data_json": '{"project_id": "thelook"}',
+            "base_url": "https://example.looker.com",
+            "validate": "true",
+            "inline_queries_json": '{"0": {"model": "thelook", "view": "orders", "fields": ["orders.id", "orders.count"]}}',
+        },
+        {
+            "validate_project": lambda **_kw: {"errors": []},
+            "create_sql_query": fake_create_sql_query,
+            "create_query": fake_create_query,
+            "run_sql_query": lambda **_kw: '[{"id": 1, "total_cnt": 10}]',
+            "run_inline_query": lambda **_kw: '[{"orders.id": 1, "orders.count": 10}]',
+        },
+    )
 
     assert res["passed"] is True
     assert res["all_queries_matched"] is True
@@ -297,24 +322,27 @@ def test_pre_gate_initializes_sql_and_validates_and_checks_parity():
     assert q0["query_id"] == "101"
     assert q0["explore_url"] == "https://example.looker.com/x/slug_101"
     assert q0["parity_status"] == "matched"
-    assert q0["sql"] == "SELECT id, count FROM orders WHERE status = 'Complete'"
-    assert created_sql == [{"connection_name": "thelook_conn", "sql": "SELECT id, count FROM orders WHERE status = 'Complete'"}]
+    assert q0["sql"] == "SELECT id, count AS total_cnt FROM orders WHERE status = 'Complete'"
+    assert created_sql == [{"connection_name": "thelook_conn", "sql": "SELECT id, count AS total_cnt FROM orders WHERE status = 'Complete'"}]
     assert len(created_looker_queries) == 1
 
     # Verify that modified SQL regenerates SQL Runner queries and invalid JSON does not crash
-    ns2: dict[str, Any] = {
-        "raw_sql": "SELECT id, count FROM orders WHERE status = 'Cancelled';",
-        "connection_name": "thelook_conn",
-        "data_json": json.dumps(res),
-        "base_url": "https://example.looker.com",
-        "validate": "false",
-        "inline_queries_json": "{invalid_json",
-        "create_sql_query": lambda body: {"slug": "sql_slug_2"},
-        "create_query": lambda body: {"id": "102", "slug": "slug_102"},
-        "run_sql_query": lambda **_kw: "[]",
-        "run_inline_query": lambda **_kw: "[]",
-    }
-    exec(compile(source, str(script_path), "exec"), ns2)  # noqa: S102
-    res2: dict[str, Any] = ns2["result"]
+    res2: dict[str, Any] = _run_monty(
+        script_path,
+        {
+            "raw_sql": "SELECT id, count FROM orders WHERE status = 'Cancelled';",
+            "connection_name": "thelook_conn",
+            "data_json": json.dumps(res),
+            "base_url": "https://example.looker.com",
+            "validate": "false",
+            "inline_queries_json": "{invalid_json",
+        },
+        {
+            "create_sql_query": lambda body: {"slug": "sql_slug_2"},
+            "create_query": lambda body: {"id": "102", "slug": "slug_102"},
+            "run_sql_query": lambda **_kw: "[]",
+            "run_inline_query": lambda **_kw: "[]",
+        },
+    )
     assert res2["queries"][0]["sql_query_id"] == "sql_slug_2"
     assert res2["queries"][0]["sql"] == "SELECT id, count FROM orders WHERE status = 'Cancelled'"

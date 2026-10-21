@@ -31,13 +31,20 @@ def main():
     if errors:
         return {"passed": False, "committed": False, "errors": errors, "failed_tests": []}
 
+    targets = (
+        list(zip(f_ids, t_names))
+        if f_ids and len(f_ids) == len(t_names)
+        else [(f_ids[0] if len(f_ids) == 1 else None, t) for t in t_names]
+        if t_names
+        else [(f, None) for f in (f_ids or [None])]
+    )
+
     test_results = (
         []
         if s_tests
         else [
             r
-            for f in (f_ids or [None])
-            for t in (t_names or [None])
+            for f, t in targets
             for r in (run_lookml_test(project_id=p_id, file_id=f, test=t) or [])  # ty: ignore[unresolved-reference]
         ]
     )
