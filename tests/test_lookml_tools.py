@@ -561,10 +561,3 @@ def test_push_and_pull_skip_dot_directories_unless_sync_hidden(tmp_path, mock_sd
         assert res_pull_hidden.exit_code == 0
         assert (pull_dir / ".agents" / "skills" / "remote_doc.md").exists()
 
-
-
-
-
-
-
-

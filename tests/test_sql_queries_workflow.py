@@ -298,9 +298,3 @@ def test_pre_gate_initializes_sql_and_validates_and_checks_parity():
     assert q0["parity_status"] == "matched"
     assert created_sql == [{"connection_name": "thelook_conn", "sql": "SELECT id, count FROM orders WHERE status = 'Complete'"}]
     assert len(created_looker_queries) == 1
-
-
-
-
-
-
