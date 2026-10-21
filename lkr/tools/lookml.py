@@ -56,23 +56,31 @@ def _hash_content(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def _sync_cache(lookml_dir: str, project_id: str) -> Path:
+def _sdk_base_url(sdk: Any) -> str:
+    s = getattr(getattr(sdk, "auth", None), "settings", None) or getattr(sdk, "settings", None)
+    url = getattr(s, "base_url", "")
+    return url.rstrip("/") if isinstance(url, str) else ""
+
+
+def _sync_cache(lookml_dir: str, project_id: str, base_url: str = "") -> Path:
     d = Path(tempfile.gettempdir()) / f"lkr_lookml_sync_{getattr(os, 'getuid', lambda: 'user')()}"
     d.mkdir(mode=0o700, exist_ok=True)
-    return d / f"{_hash_content(f'{os.path.abspath(lookml_dir)}:{project_id}')}.json"
+    return d / f"{_hash_content(f'{os.path.abspath(lookml_dir)}:{project_id}:{base_url}')}.json"
 
 
-def _load_sync_hashes(lookml_dir: str, project_id: str) -> dict[str, str]:
+def _load_sync_hashes(lookml_dir: str, project_id: str, base_url: str = "") -> dict[str, str]:
     try:
-        data = json.loads(_sync_cache(lookml_dir, project_id).read_text("utf-8"))
+        data = json.loads(_sync_cache(lookml_dir, project_id, base_url).read_text("utf-8"))
         return data if isinstance(data, dict) else {}
     except Exception:  # noqa: BLE001
         return {}
 
 
-def _save_sync_hashes(lookml_dir: str, project_id: str, hashes: dict[str, str]) -> None:
+def _save_sync_hashes(
+    lookml_dir: str, project_id: str, hashes: dict[str, str], base_url: str = ""
+) -> None:
     try:
-        _sync_cache(lookml_dir, project_id).write_text(json.dumps(hashes), "utf-8")
+        _sync_cache(lookml_dir, project_id, base_url).write_text(json.dumps(hashes), "utf-8")
     except Exception as e:  # noqa: BLE001
         logger.debug(f"Sync cache write notice: {e}")
 
@@ -359,7 +367,10 @@ def push(
                         f"Local file '{file}' has an extension not supported by Looker and will be skipped."
                     )
 
-    prior_hashes = _load_sync_hashes(lookml_dir, project_id) if (only_changed or file_opt) else {}
+    base_url = _sdk_base_url(sdk)
+    prior_hashes = (
+        _load_sync_hashes(lookml_dir, project_id, base_url) if (only_changed or file_opt) else {}
+    )
     cached_hashes = prior_hashes if (only_changed and not reset) else {}
     existing_remote = (
         (sdk.all_project_files(project_id=project_id) or [])
@@ -465,7 +476,7 @@ def push(
                 except Exception as dpe:  # noqa: BLE001
                     logger.debug(f"Deletion notice for {rf_path}: {dpe}")
 
-    _save_sync_hashes(lookml_dir, project_id, new_hashes)
+    _save_sync_hashes(lookml_dir, project_id, new_hashes, base_url)
 
     _ensure_model_configuration(
         sdk=sdk,
@@ -538,6 +549,7 @@ def pull(
     sdk: ExtendedLooker40SDK = auth.get_current_sdk()
     project_id = _resolve_project_id(folder_name, project_id_opt)
 
+    base_url = _sdk_base_url(sdk)
     target_dir = os.path.abspath(folder_name)
     os.makedirs(target_dir, exist_ok=True)
 
@@ -573,9 +585,9 @@ def pull(
         os.makedirs(os.path.dirname(resolved_local), exist_ok=True)
         with open(resolved_local, "w", encoding="utf-8") as f:
             f.write(content)
-        hashes = _load_sync_hashes(target_dir, project_id)
+        hashes = _load_sync_hashes(target_dir, project_id, base_url)
         hashes[rf_path] = _hash_content(content)
-        _save_sync_hashes(target_dir, project_id, hashes)
+        _save_sync_hashes(target_dir, project_id, hashes, base_url)
         logger.info(f"Pulled file: {rf_path}")
     else:
         logger.info(
@@ -628,7 +640,7 @@ def pull(
                 f.write(content)
             logger.info(f"Pulled file: {rf_path}")
 
-        _save_sync_hashes(target_dir, project_id, synced_hashes)
+        _save_sync_hashes(target_dir, project_id, synced_hashes, base_url)
 
         logger.info("Cleaning up local orphans not present on the Looker instance...")
         for root, dirs, files in os.walk(target_dir):

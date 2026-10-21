@@ -609,3 +609,17 @@ def test_push_only_changed_and_skills_lock_ignored(tmp_path, mock_sdk, mock_auth
         for call in mock_warn.call_args_list:
             assert "skills-lock.json" not in str(call)
 
+        # Switching Looker instance base_url must not collide with prior sync cache
+        mock_sdk.auth = MagicMock(settings=MagicMock(base_url="https://staging.looker.com"))
+        mock_sdk.update_file.reset_mock()
+        push_staging = runner.invoke(
+            app,
+            ["tools", "lookml", "push", str(project_dir), "--no-reset", "--only-changed"],
+        )
+        assert push_staging.exit_code == 0
+        staging_pushed = {
+            call.kwargs["file_content"].path
+            for call in mock_sdk.update_file.call_args_list
+        }
+        assert staging_pushed == {"orders.view.lkml", "users.view.lkml", "new.explore.lkml"}
+
