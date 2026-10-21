@@ -322,7 +322,10 @@ class CurrentAuth(BaseModel):
         cutoff = datetime.now(UTC) + (
             timedelta(0) if self.refresh_token else ACCESS_TOKEN_LAG
         )
-        return datetime.fromisoformat(self.refresh_expires_at).astimezone(UTC) > cutoff
+        dt = datetime.fromisoformat(self.refresh_expires_at)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt > cutoff
 
     @computed_field
     @property
