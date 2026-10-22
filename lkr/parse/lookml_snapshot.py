@@ -20,6 +20,7 @@ from lkr.parse.lookml import (
     LookmlView,
     parse_lookml,
 )
+from lkr.parse.lookml_to_api import parse_lookml_to_api
 
 VALID_SNAPSHOT_OBJECTS = ("tests", "access", "measures", "connections", "manifest")
 
@@ -426,48 +427,48 @@ def extract_access_snapshot(
     }
 
 
+def _extract_measures_with_sources(
+    project: LookmlProject,
+    model_filter: str | None = None,
+) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
+    """Extract Explore-indexed measure picker labels via `lookml-to-api --exclude-hidden` and source files."""
+    measures_out: dict[str, dict[str, str]] = {}
+    source_files: dict[str, str] = {}
+    api = parse_lookml_to_api(
+        project=project, model=model_filter, exclude_hidden=True
+    )
+
+    for exp in sorted(
+        api.lookml_model_explores.values(), key=lambda e: (e.model_name, e.name)
+    ):
+        exp_lbl = exp.label or exp.name
+        for f in exp.fields.measures:
+            key = f"{exp.model_name}.{exp.name}.{f.name}"
+            if f.source_file:
+                source_files[key] = f.source_file
+            entry: dict[str, str] = {
+                "explore_label": exp_lbl,
+                "view_label": f.view_label,
+                "label": f.label_short,
+            }
+            if f.field_group_label is not None:
+                entry["group_label"] = f.field_group_label
+            if f.field_group_variant and (
+                f.field_group_label is not None
+                or f.field_group_variant != f.label_short
+            ):
+                entry["group_item_label"] = f.field_group_variant
+            measures_out[key] = entry
+
+    return dict(sorted(measures_out.items())), source_files
+
+
 def extract_measures_snapshot(
     project: LookmlProject,
     model_filter: str | None = None,
-) -> dict[str, Any]:
-    """Extract and normalize measure labels across model views."""
-    measures_out: dict[str, Any] = {}
-    for model_name, model_obj in sorted((project.model or {}).items()):
-        if model_filter and model_name != model_filter:
-            continue
-        for v_name, v_val in sorted((model_obj.view or {}).items()):
-            for v_obj in v_val if isinstance(v_val, list) else [v_val]:
-                if not isinstance(v_obj, LookmlView):
-                    continue
-                measures = v_obj.measure or {}
-                if isinstance(measures, list):
-                    measures_dict = {
-                        getattr(x, "name_", None) or f"unnamed_{i}": x
-                        for i, x in enumerate(measures)
-                        if x
-                    }
-                elif isinstance(measures, dict):
-                    measures_dict = measures
-                else:
-                    measures_dict = {
-                        getattr(measures, "name_", "unnamed"): measures
-                    }
-                for fld_name, fld_obj in sorted(measures_dict.items()):
-                    if not isinstance(fld_obj, LookmlFieldProperties) or fld_obj.label is None:
-                        continue
-                    f_path, line_no = _find_position(
-                        project.positions,
-                        f"{v_name}.view",
-                        ["view", v_name, "measure", fld_name],
-                    )
-                    measures_out[f"{model_name}.{v_name}.{fld_name}"] = {
-                        "model": model_name,
-                        "view": v_name,
-                        "field": fld_name,
-                        "label": fld_obj.label,
-                        "file": f_path,
-                        "line": line_no,
-                    }
+) -> dict[str, dict[str, str]]:
+    """Extract Explore-level measure picker labels (`explore_label`, `view_label`, `group_label`, `group_item_label`, `label`)."""
+    measures_out, _ = _extract_measures_with_sources(project, model_filter=model_filter)
     return measures_out
 
 
@@ -775,6 +776,10 @@ def find_material_changes(
                     _record_file(f_sub)
                 else:
                     _walk(sv, c[k], sub, f_here)
+            if path.startswith("measures."):
+                for k in sorted(set(c) - set(s) - set(_META_KEYS)):
+                    changes.append(f"{path}.{k}: added ({c[k]!r})")
+                    _record_file(f_here)
             return
         if isinstance(s, list) and isinstance(c, list) and path == "manifest.includes":
             for item in s:
@@ -934,7 +939,12 @@ def run_lookml_snapshot(
                     if k != model and not k.startswith(f"{model}.")
                 }
                 for k, v in current_data.items():
-                    if isinstance(v, dict) and isinstance(existing.get(k), dict):
+                    if (
+                        k != model
+                        and not k.startswith(f"{model}.")
+                        and isinstance(v, dict)
+                        and isinstance(existing.get(k), dict)
+                    ):
                         merged[k] = {
                             **{
                                 sk: sv
@@ -986,6 +996,24 @@ def run_lookml_snapshot(
                 obj_name, saved_data, current_data, files_out=material_change_files
             )
             if obj_material:
+                if (
+                    obj_name == "measures"
+                    and isinstance(saved_data, dict)
+                    and isinstance(current_data, dict)
+                ):
+                    _, curr_sources = _extract_measures_with_sources(
+                        project, model_filter=model
+                    )
+                    base_sources = (
+                        _extract_measures_with_sources(base_project, model_filter=model)[1]
+                        if base_project is not None
+                        else {}
+                    )
+                    for k, sv in sorted(saved_data.items()):
+                        if k not in current_data or current_data[k] != sv:
+                            src = curr_sources.get(k) or base_sources.get(k)
+                            if src and src not in material_change_files:
+                                material_change_files.append(src)
                 snap_rel = f"__snapshots__/{obj_name}.snap.json.md"
                 if snap_rel not in material_change_files:
                     material_change_files.append(snap_rel)

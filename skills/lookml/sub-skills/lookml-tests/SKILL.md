@@ -61,21 +61,23 @@ test: orders_pk_is_unique {
 }
 ```
 
-### B. Accuracy Tests
-Validate specific measure values against known constants or expectations.
+### B. Accuracy & State-Machine Immutability
+Validate specific measure values against known constants **only** when the underlying slice is genuinely immutable:
+- **Terminal / monotonic states** (`is_sold: "yes"` anchored on a past `sold_date`, completed orders anchored on `completed_date`): Safe for deterministic equality assertions (`round(${view.measure}, 2) = 125.50`).
+- **Open / mutable states** (`is_sold: "no"` / `sold_at IS NULL`, open orders, active carts, unpaid invoices): Filtering by a historical `created_date` (`2024-01-01`) does **not** make an open-state metric immutable—an unsold item from `2024-01-01` can sell tomorrow, flipping `is_sold: "no" -> "yes"` and breaking hardcoded equality assertions. Never assert frozen point-in-time `= <constant>` values on mutable open-state metrics; verify exact numbers via PR-time SQL parity checks instead, or assert structural invariants (`>= 0`, `<= ${total_cost}`) when a LookML test is required.
 
-**Example: Revenue is Positive**
+**Example: Structural Invariant (Non-Negativity)**
 ```lookml
-test: revenue_is_positive {
+test: revenue_is_non_negative {
   explore_source: orders {
     column: total_revenue {}
     filters: {
       field: orders.created_date
-      value: "yesterday"
+      value: "2024-01-01"
     }
   }
 
-  assert: revenue_greater_than_zero {
+  assert: revenue_greater_than_or_equal_zero {
     expression: ${orders.total_revenue} >= 0 ;;
   }
 }

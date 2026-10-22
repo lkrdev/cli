@@ -76,7 +76,7 @@ flowchart TD
      --var project_id="$PROJECT_ID" \
      -c 'deploy_to_production(project_id=project_id)'
    ```
-7. Verify that the GitHub repository has the required Actions secrets and variables configured for `.github/workflows/lookml-pr-checks.yml` (`LOOKERSDK_BASE_URL`, `LOOKERSDK_CLIENT_ID`, `LOOKERSDK_CLIENT_SECRET`, and `LOOKER_PROJECT_NAME`, plus optional `LOOKML_REVIEWERS` — `setup_repo.sh` and `create_github_pr.sh` automatically sync missing `LOOKERSDK_*` and `LOOKER_PROJECT_NAME` secrets from the active environment or `.env` via `gh secret set`):
+7. Verify that the GitHub repository has the required Actions secrets and variables configured for `.github/workflows/lookml-pr-checks.yml` (`LOOKERSDK_BASE_URL`, `LOOKERSDK_CLIENT_ID`, `LOOKERSDK_CLIENT_SECRET`, and `LOOKER_PROJECT_NAME`, plus optional `LOOKML_REVIEWERS`). Secret bootstrapping from local environment variables or `.env` is strictly opt-in during one-time repository setup (`bash .agents/skills/agentic-lookml-workflow/scripts/setup_repo.sh --sync-secrets`) and never runs automatically during PR creation:
    ```bash
    gh secret list
    gh variable list

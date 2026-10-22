@@ -347,8 +347,8 @@ def test_snapshot_allow_additions_passes_on_new_tests_asserts_columns_and_measur
     )
 
     # Now add:
-    # 1. A label to the previously unlabeled measure `count`
-    # 2. A brand-new measure `active_users` with a label
+    # 1. A brand-new measure `active_users` on existing `users` explore
+    # 2. A brand-new visible explore `user_directory`
     # 3. A new column, derived_column, and assert to existing `test_user_id_unique`
     # 4. A brand-new test `test_user_count_positive`
     (sample_lookml_project / "users.view.lkml").write_text(
@@ -366,7 +366,6 @@ def test_snapshot_allow_additions_passes_on_new_tests_asserts_columns_and_measur
         "  }\n"
         "  measure: count {\n"
         "    type: count\n"
-        '    label: "User Count"\n'
         "  }\n"
         "  measure: total_users {\n"
         "    type: count_distinct\n"
@@ -389,6 +388,10 @@ def test_snapshot_allow_additions_passes_on_new_tests_asserts_columns_and_measur
         "}\n"
         "explore: users {\n"
         "  required_access_grants: [pii_access]\n"
+        "}\n"
+        "explore: user_directory {\n"
+        "  from: users\n"
+        '  label: "User Directory"\n'
         "}\n"
         "test: test_user_id_unique {\n"
         "  explore_source: users {\n"
@@ -506,20 +509,23 @@ def test_snapshot_allow_additions_fails_on_material_changes(
     assert res4.success is False
     assert res4.requires_review is True
     assert any(
-        "measures.shop.users.total_revenue.label" in c
+        "measures.shop.users.users.total_revenue.label: changed from 'Total Revenue' to 'Gross Revenue'"
+        in c
         for c in res4.material_changes
     )
 
-    # 5. Remove measure label -> requires review
+    # 5. Hide or remove existing measure -> requires review
     view_file.write_text(
-        orig_view.replace('label: "Total Revenue"', ""),
+        orig_view.replace(
+            'label: "Total Revenue"', 'label: "Total Revenue"\n    hidden: yes'
+        ),
         encoding="utf-8",
     )
     res5, _ = run_lookml_snapshot(path=sample_lookml_project, allow_additions=True)
     assert res5.success is False
     assert res5.requires_review is True
     assert any(
-        "measures.shop.users.total_revenue: removed" in c
+        "measures.shop.users.users.total_revenue: removed" in c
         for c in res5.material_changes
     )
 
@@ -648,11 +654,17 @@ def test_snapshot_measures_separate_and_skips_empty_access(tmp_path: Path):
     proj_dir = tmp_path / "no_grants"
     proj_dir.mkdir()
     (proj_dir / "orders.view.lkml").write_text(
-        'view: orders {\n  measure: total_revenue { type: sum sql: ${TABLE}.rev ;; label: "Total Revenue" }\n}\n',
+        "view: orders {\n"
+        "  measure: count { type: count }\n"
+        '  measure: total_revenue { type: sum sql: ${TABLE}.rev ;; label: "Total Revenue" }\n'
+        "}\n",
         encoding="utf-8",
     )
     (proj_dir / "shop.model.lkml").write_text(
-        'connection: "bq"\ninclude: "*.view.lkml"\nexplore: orders {}\n',
+        'connection: "bq"\n'
+        'include: "*.view.lkml"\n'
+        "explore: orders_base { view_name: orders hidden: yes }\n"
+        "explore: orders { extends: [orders_base] view_name: orders hidden: no }\n",
         encoding="utf-8",
     )
 
@@ -660,6 +672,21 @@ def test_snapshot_measures_separate_and_skips_empty_access(tmp_path: Path):
     assert res.success is True
     snap_dir = proj_dir / "__snapshots__"
     assert (snap_dir / "measures.snap.json.md").exists()
+    measures_snap = json.loads(
+        (snap_dir / "measures.snap.json.md").read_text(encoding="utf-8")
+    )
+    assert measures_snap == {
+        "shop.orders.orders.count": {
+            "explore_label": "Orders",
+            "label": "Count",
+            "view_label": "Orders",
+        },
+        "shop.orders.orders.total_revenue": {
+            "explore_label": "Orders",
+            "label": "Total Revenue",
+            "view_label": "Orders",
+        },
+    }
     assert (snap_dir / "connections.snap.json.md").exists()
     assert not (snap_dir / "access.snap.json.md").exists()
     assert not (snap_dir / "tests.snap.json.md").exists()
@@ -675,4 +702,61 @@ def test_snapshot_measures_separate_and_skips_empty_access(tmp_path: Path):
     upd_res, _ = run_lookml_snapshot(path=proj_dir, update=True)
     assert upd_res.success is True
     assert not stale_access.exists()
+
+
+def test_snapshot_measures_indexed_by_explore_with_join_aliases_and_field_scoping(
+    tmp_path: Path,
+):
+    proj_dir = tmp_path / "explore_scoping"
+    proj_dir.mkdir()
+    (proj_dir / "orders.view.lkml").write_text(
+        "view: orders {\n"
+        '  measure: total_sales { type: sum sql: ${TABLE}.amt ;; label: "Gross Sales" group_label: "Revenue" group_item_label: "Gross" }\n'
+        '  measure: secret_margin { type: sum sql: ${TABLE}.m ;; label: "Secret Margin" }\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    (proj_dir / "users.view.lkml").write_text(
+        "view: users {\n"
+        '  measure: avg_age { type: average sql: ${TABLE}.age ;; label: "Average Age" }\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    (proj_dir / "shop.model.lkml").write_text(
+        'connection: "bq"\n'
+        'include: "*.view.lkml"\n'
+        "explore: orders {\n"
+        '  label: "Customer Orders"\n'
+        "  fields: [ALL_FIELDS*, -orders.secret_margin]\n"
+        "  join: buyers {\n"
+        "    from: users\n"
+        '    view_label: "Buyers"\n'
+        "    sql_on: ${orders.user_id} = ${buyers.id} ;;\n"
+        "    relationship: many_to_one\n"
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    res, _ = run_lookml_snapshot(path=proj_dir)
+    assert res.success is True
+    measures_snap = json.loads(
+        (proj_dir / "__snapshots__" / "measures.snap.json.md").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert measures_snap == {
+        "shop.orders.buyers.avg_age": {
+            "explore_label": "Customer Orders",
+            "label": "Average Age",
+            "view_label": "Buyers",
+        },
+        "shop.orders.orders.total_sales": {
+            "explore_label": "Customer Orders",
+            "group_item_label": "Gross",
+            "group_label": "Revenue",
+            "label": "Gross Sales",
+            "view_label": "Orders",
+        },
+    }
 

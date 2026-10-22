@@ -9,28 +9,6 @@ RUN_ID=$(jq -r '.run_id' "$DATA_JSON")
 REPO=$(jq -r '.git_remote_url' "$DATA_JSON")
 HEAD_BRANCH=$(jq -r '.branch_name' "$DATA_JSON")
 BASE_BRANCH=$(jq -r '.production_branch // "main"' "$DATA_JSON")
-PROJECT_ID=$(jq -r '.project_id // empty' "$DATA_JSON")
-
-EXISTING_SECRETS=$(gh secret list --repo "$REPO" --json name --jq '.[].name' 2>/dev/null || true)
-S_BASE="${LOOKERSDK_BASE_URL:-${BASE_URL:-}}"
-S_ID="${LOOKERSDK_CLIENT_ID:-}"
-S_SECRET="${LOOKERSDK_CLIENT_SECRET:-}"
-S_PROJ="${LOOKER_PROJECT_NAME:-${PROJECT_ID:-}}"
-if [[ -f ".env" ]]; then
-  [[ -z "$S_BASE" ]] && S_BASE=$(grep -E '^(export )?(LOOKERSDK_BASE_URL|BASE_URL)=' .env | head -n 1 | cut -d= -f2- | tr -d "\"'" || true)
-  [[ -z "$S_ID" ]] && S_ID=$(grep -E '^(export )?LOOKERSDK_CLIENT_ID=' .env | head -n 1 | cut -d= -f2- | tr -d "\"'" || true)
-  [[ -z "$S_SECRET" ]] && S_SECRET=$(grep -E '^(export )?LOOKERSDK_CLIENT_SECRET=' .env | head -n 1 | cut -d= -f2- | tr -d "\"'" || true)
-  [[ -z "$S_PROJ" ]] && S_PROJ=$(grep -E '^(export )?(LOOKER_PROJECT_NAME|PROJECT_ID)=' .env | head -n 1 | cut -d= -f2- | tr -d "\"'" || true)
-fi
-for pair in "LOOKERSDK_BASE_URL:$S_BASE" "LOOKERSDK_CLIENT_ID:$S_ID" "LOOKERSDK_CLIENT_SECRET:$S_SECRET" "LOOKER_PROJECT_NAME:$S_PROJ"; do
-  k="${pair%%:*}"
-  v="${pair#*:}"
-  if [[ -n "$v" ]] && ! echo "$EXISTING_SECRETS" | grep -qxF "$k"; then
-    printf '%s' "$v" | gh secret set "$k" --repo "$REPO" 2>/dev/null \
-      || printf '%s' "$v" | env -u GH_TOKEN -u GITHUB_TOKEN gh secret set "$k" --repo "$REPO" 2>/dev/null \
-      || true
-  fi
-done
 
 if [[ -d "$SESSION_DIR/lookml" && ! -f "$SESSION_DIR/snapshot_check.json" ]]; then
   lkr parse lookml snapshot --path "$SESSION_DIR/lookml" --allow-additions --format json --output "$SESSION_DIR/snapshot_check.json" || true

@@ -27,7 +27,7 @@ description: Use this skill to create or modify LookML Dimensions. Covers basic 
 ## 2. Advanced Features
 
 -   `group_label`: Group related fields in the field picker.
--   `drill_fields`: List of fields to show when drilling into this dimension.
+-   `drill_fields`: *(Out of scope for now — omit unless explicitly requested by the user, and do not flag missing drill paths in reviews.)* List of fields to show when drilling into this dimension.
 -   `link`: Create external links (e.g., Google, Salesforce) or internal links.
 -   `html`: formatting using Liquid (e.g., color coding).
 

@@ -92,9 +92,15 @@ And in `silver/explores/inventory_items.explore.lkml`, the Quick Start `query:` 
 
 - **Automated parity (`pre_gate.py`):** Queries raw `result_format="json"` (no `apply_formatting=True`) and aligns comparison scale to `k` decimal places whenever `input.sql` projects outer `ROUND(..., k)` (`8892021.4041` matches SQL `8892021.4` at `k=2`), while enforcing 4-decimal precision on unrounded columns. Never add SQL `ROUND(...)` in LookML just to pass `pre_gate.py`.
 - **Formatted API queries (`apply_formatting=true`):** Available on `run_inline_query` / `run_query` when an interactive caller needs rendered `value_format` strings (`"$8,892,021.40"`), but never used in `pre_gate.py` or LookML tests.
-- **LookML data tests (`tests/`):** Keep measures unrounded and round inside the test assertion expression:
+- **LookML data tests (`tests/`):** Keep measures unrounded and round inside the test assertion expression—**only** for immutable or terminal-state metrics (for example, `order_items.total_sale_price` or `is_sold: "yes"` anchored on a past `sold_date`). Never assert frozen point-in-time `= <constant>` values on open/mutable states like `is_sold: "no"` (`sunk_dusty_shelf_cost`, `unsold_retail_value`), because unsold historical items can still sell later; rely on `pre_gate.py` parity at PR time or assert structural invariants instead:
   ```lookml
-  assert: sunk_dusty_shelf_cost_matches {
-    expression: round(${inventory_items.sunk_dusty_shelf_cost}, 2) = 3102.45 ;;
+  # Terminal / immutable metric -> equality assertion (rounded in LookML expression)
+  assert: total_sale_price_matches {
+    expression: round(${order_items.total_sale_price}, 2) = 4520.25 ;;
+  }
+
+  # Open / mutable state (filters: [is_sold: "no"]) -> structural invariant ONLY (never frozen = constant)
+  assert: sunk_dusty_shelf_cost_non_negative {
+    expression: ${inventory_items.sunk_dusty_shelf_cost} >= 0 ;;
   }
   ```

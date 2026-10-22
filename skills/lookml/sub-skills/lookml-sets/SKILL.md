@@ -9,7 +9,9 @@ metadata:
 
 # LookML Sets
 
-Sets are reusable lists of fields (dimensions, measures, and filters) defined within a view or a model. They are primarily used to group fields together for various purposes such as drill-down paths, explore field visibility, and more.
+> **Scope note:** Authoring or modifying `drill_fields:` (and drill-only `detail` / `drill_set` sets) is **out of scope for now**. Use `set:` primarily for Explore-level field visibility and exclusions (`fields: [ALL_FIELDS*, -view.unmapped_col]`) unless the user explicitly asks for `drill_fields:`. Do not flag missing drill sets during reviews.
+
+Sets are reusable lists of fields (dimensions, measures, and filters) defined within a view or a model. They are primarily used to group fields together for various purposes such as Explore field visibility, exclusions, and (when explicitly requested) drill-down paths.
 
 ## Syntax
 

@@ -579,6 +579,7 @@ def _expand_view_for_explore(
     base_alias: str,
     project_name: str | None,
     model_obj: LookmlModel,
+    exclude_hidden: bool = False,
 ) -> tuple[
     list[ApiLookmlModelExploreField],
     list[ApiLookmlModelExploreField],
@@ -644,6 +645,8 @@ def _expand_view_for_explore(
         is_hidden = bool(
             getattr(fobj, "hidden", False) or view_obj.fields_hidden_by_default
         )
+        if exclude_hidden and is_hidden:
+            continue
         raw_syn = getattr(fobj, "synonyms", None)
         f_synonyms = (
             [raw_syn]
@@ -737,38 +740,41 @@ def _expand_view_for_explore(
                         map_layer_name=fobj.map_layer_name,
                     )
                 )
-                view_set_fields.extend(
-                    [
-                        full_name,
-                        f"{full_name}_bin_level",
-                        f"{full_name}_latitude_min",
-                        f"{full_name}_latitude_max",
-                        f"{full_name}_longitude_min",
-                        f"{full_name}_longitude_max",
-                    ]
-                )
-                for suffix, m_type in (
-                    ("latitude_min", "min"),
-                    ("latitude_max", "max"),
-                    ("longitude_min", "min"),
-                    ("longitude_max", "max"),
-                ):
-                    m_fname = f"{fname}_{suffix}"
-                    m_full = _qualify_field_ref(m_fname, view_alias)
-                    m_short = fobj.label or _titleize(m_fname.split(".", 1)[-1])
-                    meas.append(
-                        _mk(
-                            category="measure",
-                            ft=m_type,
-                            name=m_full,
-                            short=m_short,
-                            hidden=True,
-                            sql=m_full,
-                            tags=None,
-                            synonyms=None,
-                            field_group_variant=m_short,
-                        )
+                if exclude_hidden:
+                    view_set_fields.append(full_name)
+                else:
+                    view_set_fields.extend(
+                        [
+                            full_name,
+                            f"{full_name}_bin_level",
+                            f"{full_name}_latitude_min",
+                            f"{full_name}_latitude_max",
+                            f"{full_name}_longitude_min",
+                            f"{full_name}_longitude_max",
+                        ]
                     )
+                    for suffix, m_type in (
+                        ("latitude_min", "min"),
+                        ("latitude_max", "max"),
+                        ("longitude_min", "min"),
+                        ("longitude_max", "max"),
+                    ):
+                        m_fname = f"{fname}_{suffix}"
+                        m_full = _qualify_field_ref(m_fname, view_alias)
+                        m_short = fobj.label or _titleize(m_fname.split(".", 1)[-1])
+                        meas.append(
+                            _mk(
+                                category="measure",
+                                ft=m_type,
+                                name=m_full,
+                                short=m_short,
+                                hidden=True,
+                                sql=m_full,
+                                tags=None,
+                                synonyms=None,
+                                field_group_variant=m_short,
+                            )
+                        )
             else:
                 sug, enums, cases, tier_sql = (
                     _build_tier_metadata(fobj)
@@ -889,6 +895,8 @@ def _expand_view_for_explore(
                 or (f"{base_dg_title} Date" if dg_type == "time" else base_dg_title)
             )
             for tf in tfs:
+                if exclude_hidden and tf == "raw":
+                    continue
                 tf_fname = fname if tf == "yesno" else f"{fname}_{tf}"
                 if not _allowed({fname.lower(), tf_fname.lower()}):
                     continue
@@ -943,6 +951,8 @@ def _expand_view_for_explore(
                 fg_label = fobj.group_label or fobj.label or f"{base_m_title} Date"
                 m_filters = _extract_measure_filters(fobj.filters, view_alias)
                 for tf in tfs:
+                    if exclude_hidden and tf == "raw":
+                        continue
                     tf_fname = fname if tf == "yesno" else f"{fname}_{tf}"
                     if not _allowed({fname.lower(), tf_fname.lower()}):
                         continue
@@ -1291,6 +1301,7 @@ def _build_explore_from_assembled(
     exp_base_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
     exp_ref_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
     project_name: str | None,
+    exclude_hidden: bool = False,
 ) -> ApiLookmlModelExplore:
     model_views: dict[str, LookmlView] = {}
     for k, v in (model_obj.view or {}).items():
@@ -1345,6 +1356,7 @@ def _build_explore_from_assembled(
             base_alias=base_alias,
             project_name=project_name,
             model_obj=model_obj,
+            exclude_hidden=exclude_hidden,
         )
         all_dims.extend(d)
         all_meas.extend(m)
@@ -1378,6 +1390,7 @@ def _build_explore_from_assembled(
             base_alias=base_alias,
             project_name=project_name,
             model_obj=model_obj,
+            exclude_hidden=exclude_hidden,
         )
         all_dims.extend(d)
         all_meas.extend(m)
@@ -1599,20 +1612,17 @@ def lookml_to_all_lookml_models(
     *,
     project: LookmlProject | None = None,
     model: str | None = None,
+    exclude_hidden: bool = False,
     manifest: Path | str | None = None,
     constants: dict[str, str] | None = None,
 ) -> list[ApiLookmlModel]:
     """Generate the `all_lookml_models` SDK payload from LookML."""
-    proj = (
-        project.with_defaults()
-        if project
-        else parse_lookml(
-            path=path,
-            file=file,
-            lookml=lookml,
-            manifest=manifest,
-            constants=constants,
-        ).apply_defaults()
+    proj = project or parse_lookml(
+        path=path,
+        file=file,
+        lookml=lookml,
+        manifest=manifest,
+        constants=constants,
     )
     project_name = _resolve_project_name(proj)
     out: list[ApiLookmlModel] = []
@@ -1626,6 +1636,8 @@ def lookml_to_all_lookml_models(
         for e_name in _ordered_model_explore_names(m_name, m_obj, proj):
             e_obj = (m_obj.explore or {}).get(e_name)
             if not isinstance(e_obj, LookmlExplore):
+                continue
+            if exclude_hidden and e_obj.hidden:
                 continue
             bv_name = e_obj.from_ or e_obj.view_name or e_name
             bv = m_views.get(bv_name)
@@ -1667,6 +1679,7 @@ def lookml_to_lookml_model_explore(
     lookml: str | None = None,
     *,
     project: LookmlProject | None = None,
+    exclude_hidden: bool = False,
     manifest: Path | str | None = None,
     constants: dict[str, str] | None = None,
 ) -> ApiLookmlModelExplore:
@@ -1710,6 +1723,7 @@ def lookml_to_lookml_model_explore(
         exp_base_decls,
         exp_ref_decls,
         project_name,
+        exclude_hidden=exclude_hidden,
     )
 
 
@@ -1720,6 +1734,7 @@ def parse_lookml_to_api(
     *,
     model: str | None = None,
     explore: str | None = None,
+    exclude_hidden: bool = False,
     project: LookmlProject | None = None,
     manifest: Path | str | None = None,
     constants: dict[str, str] | None = None,
@@ -1736,7 +1751,9 @@ def parse_lookml_to_api(
             constants=constants,
         ).apply_defaults()
     )
-    all_models = lookml_to_all_lookml_models(project=proj, model=model)
+    all_models = lookml_to_all_lookml_models(
+        project=proj, model=model, exclude_hidden=exclude_hidden
+    )
     view_base_decls, view_ref_decls = _collect_declarations(proj, "view", LookmlView)
     exp_base_decls, exp_ref_decls = _collect_declarations(
         proj, "explore", LookmlExplore
@@ -1753,6 +1770,8 @@ def parse_lookml_to_api(
             e_obj = (m_obj.explore or {}).get(e_name)
             if not isinstance(e_obj, LookmlExplore):
                 continue
+            if exclude_hidden and e_obj.hidden:
+                continue
             explores_map[f"{m_name}::{e_name}"] = _build_explore_from_assembled(
                 m_name,
                 m_obj,
@@ -1763,6 +1782,7 @@ def parse_lookml_to_api(
                 exp_base_decls,
                 exp_ref_decls,
                 project_name,
+                exclude_hidden=exclude_hidden,
             )
 
     return LookmlToApiResult(
