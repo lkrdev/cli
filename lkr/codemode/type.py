@@ -74,12 +74,18 @@ def _annotation_to_prop(ann, description: str | None = None) -> dict:
         and not issubclass(origin, (str, bytes))
     )
     leaf = next((a for a in get_args(ann) if a is not type(None)), ann) if is_arr else ann
-    ref = getattr(leaf, "__forward_arg__", None) or (
-        leaf.__name__
-        if inspect.isclass(leaf)
-        and (issubclass(leaf, BaseModel) or leaf.__module__ == sdk_models.__name__)
-        and not issubclass(leaf, (enum.Enum, Sequence, Mapping))
-        else None
+    ref = (
+        leaf
+        if isinstance(leaf, str)
+        and leaf not in ("str", "bytes", "int", "float", "bool", "list", "dict", "set", "tuple", "Any", "None")
+        else getattr(leaf, "__forward_arg__", None)
+        or (
+            leaf.__name__
+            if inspect.isclass(leaf)
+            and (issubclass(leaf, BaseModel) or leaf.__module__ == sdk_models.__name__)
+            and not issubclass(leaf, (enum.Enum, Sequence, Mapping))
+            else None
+        )
     )
     ptype = (
         "object"
