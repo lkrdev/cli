@@ -27,37 +27,64 @@ def split_sql_statements(raw_sql: str) -> list[str]:
     return [s.strip() for s in "".join(out).split("\0") if s.strip()]
 
 
-def normalize_val(v):
+def normalize_val(v, digits=4):
     if v is None or isinstance(v, bool):
         return v
     if isinstance(v, (int, float)):
-        return round(float(v), 4)
+        return round(float(v), digits)
     if isinstance(v, str):
         try:
-            return round(float(v.strip()), 4)
+            return round(float(v.strip()), digits)
         except ValueError:
             return v.strip()
     return str(v)
 
 
-def _norm_row(row):
-    return {k.split(".")[-1]: normalize_val(v) for k, v in row.items()}
+# ponytail: paren scan for Monty sandbox (no sqlglot); pass AST scales from lkr parse sql if expressions wrap ROUND
+def _round_scales(sql: str) -> dict[str, int]:
+    scales: dict[str, int] = {}
+    clean = re.sub(r"--[^\n]*|/\*[\s\S]*?\*/", " ", re.sub(r"'[^'\\]*(?:\\.[^'\\]*)*'", "''", sql or ""))
+    for m in re.finditer(r"(?i)\bROUND\s*\(", clean):
+        depth, comma, i = 1, -1, m.end()
+        while i < len(clean) and depth:
+            if clean[i] == "(":
+                depth += 1
+            elif clean[i] == ")":
+                depth -= 1
+            elif clean[i] == "," and depth == 1:
+                comma = i if comma < 0 else -2
+            i += 1
+        if depth or comma == -2:
+            continue
+        arg2 = clean[comma + 1 : i - 1].strip() if comma > 0 else "0"
+        am = re.match(
+            r'^\s*(?:(?i:AS)\s+)?(?:`([^`]+)`|"([^"]+)"|([A-Za-z_]\w*))\s*(?:,|\)|;|$|(?i:FROM|WHERE|GROUP|ORDER|LIMIT|HAVING|QUALIFY|UNION)\b)',
+            clean[i:],
+        )
+        alias = am and (am.group(1) or am.group(2) or am.group(3))
+        if alias and re.match(r"^[+-]?\d+$", arg2) and alias.upper() not in {"FROM", "ASC", "DESC"}:
+            scales[alias.lower()] = int(arg2)
+    return scales
 
 
-def compare_row_sets(sql_rows, looker_rows):
+def compare_row_sets(sql_rows, looker_rows, sql: str = ""):
     if len(sql_rows) != len(looker_rows):
         return False, [f"Row count mismatch: SQL={len(sql_rows)}, Looker={len(looker_rows)}"]
+    scales = _round_scales(sql)
     mismatches = []
     for idx, (sr, lr) in enumerate(zip(sql_rows, looker_rows)):
-        sn, ln = _norm_row(sr), _norm_row(lr)
-        if len(sn) != len(ln):
-            mismatches.append(f"Row {idx} column count mismatch: SQL={len(sn)}, Looker={len(ln)}")
+        sr_leaf = {k.split(".")[-1]: v for k, v in sr.items()}
+        lr_leaf = {k.split(".")[-1]: v for k, v in lr.items()}
+        if len(sr_leaf) != len(lr_leaf):
+            mismatches.append(f"Row {idx} column count mismatch: SQL={len(sr_leaf)}, Looker={len(lr_leaf)}")
             continue
-        pairs = [(k, sn[k], ln[k]) for k in sn if k in ln] + [
-            (f"{sk}->{lk}", sn[sk], ln[lk])
-            for sk, lk in zip([k for k in sn if k not in ln], [k for k in ln if k not in sn])
+        pairs = [(k, k, sr_leaf[k], lr_leaf[k]) for k in sr_leaf if k in lr_leaf] + [
+            (f"{sk}->{lk}", sk, sr_leaf[sk], lr_leaf[lk])
+            for sk, lk in zip([k for k in sr_leaf if k not in lr_leaf], [k for k in lr_leaf if k not in sr_leaf])
         ]
-        for col, sv, lv in pairs:
+        for col, sk, raw_sv, raw_lv in pairs:
+            digits = scales.get(sk.lower(), 4)
+            sv, lv = normalize_val(raw_sv, digits), normalize_val(raw_lv, digits)
             if sv != lv:
                 mismatches.append(f"Row {idx} ({col}): SQL={sv}, Looker={lv}")
     return not mismatches, mismatches[:5]
@@ -177,7 +204,7 @@ def main():
                 else run_query(query_id=q["query_id"], result_format="json")  # ty: ignore[unresolved-reference]
             )
             l_rows = json.loads(l_raw) if isinstance(l_raw, str) else (l_raw or [])
-            matched, mismatches = compare_row_sets(s_rows, l_rows)
+            matched, mismatches = compare_row_sets(s_rows, l_rows, sql=str(q.get("sql") or ""))
             q["parity_status"] = "matched" if matched else "mismatched"
             q["mismatches"] = mismatches
             all_matched = all_matched and matched
