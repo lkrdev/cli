@@ -72,11 +72,11 @@ def compare_row_sets(sql_rows, looker_rows, sql: str = "", looker_fields: list[s
     if len(sql_rows) != len(looker_rows):
         return False, [f"Row count mismatch: SQL={len(sql_rows)}, Looker={len(looker_rows)}"]
     scales = _round_scales(sql)
-    f_leaves = [f.split(".")[-1] for f in (looker_fields or [])]
+    f_leaves = [f.split(".")[-1].lower() for f in (looker_fields or [])]
     mismatches = []
     for idx, (sr, lr) in enumerate(zip(sql_rows, looker_rows)):
-        sr_leaf = {k.split(".")[-1]: v for k, v in sr.items()}
-        raw_lr = {k.split(".")[-1]: v for k, v in lr.items()}
+        sr_leaf = {k.split(".")[-1].lower(): v for k, v in sr.items()}
+        raw_lr = {k.split(".")[-1].lower(): v for k, v in lr.items()}
         lr_leaf = {k: raw_lr[k] for k in [k for k in f_leaves if k in raw_lr] + list(raw_lr)}
         if len(sr_leaf) != len(lr_leaf):
             mismatches.append(f"Row {idx} column count mismatch: SQL={len(sr_leaf)}, Looker={len(lr_leaf)}")

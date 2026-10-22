@@ -67,9 +67,9 @@ def main():
     files = all_project_files(project_id=project_id) or []  # ty: ignore[unresolved-reference]
     paths = [str(f.get("path") or f.get("id") or "").lstrip("/") for f in files if isinstance(f, dict)]
     existing_bronze = {
-        p.rsplit("/", 1)[-1][:-10] for p in paths if p.startswith("bronze/") and p.endswith(".view.lkml")
+        p.rsplit("/", 1)[-1][:-10].lower() for p in paths if p.startswith("bronze/") and p.endswith(".view.lkml")
     }
-    missing = [{"schema": s, "table_name": t, "base_view": True} for s, t in wanted if t not in existing_bronze]
+    missing = [{"schema": s, "table_name": t, "base_view": True} for s, t in wanted if t.lower() not in existing_bronze]
     model_files = [p for p in paths if p.endswith(".model.lkml") and "/" not in p]
     if not missing or not model_files:
         return out

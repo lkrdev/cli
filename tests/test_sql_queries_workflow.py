@@ -561,7 +561,7 @@ def test_pre_gate_orders_unmatched_columns_by_inline_query_fields_not_json_dict_
         SCRIPTS_DIR / "pre_gate.py",
         {
             "raw_sql": (
-                "SELECT COUNT(*) AS total_click_events, "
+                "SELECT COUNT(*) AS COUNT, "
                 "COUNT(DISTINCT session_id) AS unique_chaotic_sessions, "
                 "COUNT(DISTINCT user_id) AS distinct_clicking_humans FROM events;"
             ),
@@ -582,7 +582,7 @@ def test_pre_gate_orders_unmatched_columns_by_inline_query_fields_not_json_dict_
             "create_query": lambda body: {"id": "301", "slug": "slug_301"},
             "run_sql_query": lambda **_kw: json.dumps([
                 {
-                    "total_click_events": 2426072,
+                    "COUNT": 2426072,
                     "unique_chaotic_sessions": 681596,
                     "distinct_clicking_humans": 80168,
                 }
@@ -618,7 +618,7 @@ def test_init_branch_pre_generates_only_missing_bronze_views_before_pull():
                     {
                         "ctes": [{"name": "recent_events", "sql": "SELECT * FROM events"}],
                         "tables": [
-                            {"name": "orders", "db": "thelook_ecommerce", "catalog": "bigquery-public-data"},
+                            {"name": "ORDERS", "db": "thelook_ecommerce", "catalog": "bigquery-public-data"},
                             {"name": "events", "db": "thelook_ecommerce", "catalog": "bigquery-public-data"},
                             {"name": "recent_events", "db": None, "catalog": None},
                         ],
