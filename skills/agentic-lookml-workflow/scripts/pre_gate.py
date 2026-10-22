@@ -68,14 +68,16 @@ def _round_scales(sql: str) -> dict[str, int]:
     return scales
 
 
-def compare_row_sets(sql_rows, looker_rows, sql: str = ""):
+def compare_row_sets(sql_rows, looker_rows, sql: str = "", looker_fields: list[str] | None = None):
     if len(sql_rows) != len(looker_rows):
         return False, [f"Row count mismatch: SQL={len(sql_rows)}, Looker={len(looker_rows)}"]
     scales = _round_scales(sql)
+    f_leaves = [f.split(".")[-1].lower() for f in (looker_fields or [])]
     mismatches = []
     for idx, (sr, lr) in enumerate(zip(sql_rows, looker_rows)):
-        sr_leaf = {k.split(".")[-1]: v for k, v in sr.items()}
-        lr_leaf = {k.split(".")[-1]: v for k, v in lr.items()}
+        sr_leaf = {k.split(".")[-1].lower(): v for k, v in sr.items()}
+        raw_lr = {k.split(".")[-1].lower(): v for k, v in lr.items()}
+        lr_leaf = {k: raw_lr[k] for k in [k for k in f_leaves if k in raw_lr] + list(raw_lr)}
         if len(sr_leaf) != len(lr_leaf):
             mismatches.append(f"Row {idx} column count mismatch: SQL={len(sr_leaf)}, Looker={len(lr_leaf)}")
             continue
@@ -205,7 +207,20 @@ def main():
                 else run_query(query_id=q["query_id"], result_format="json")  # ty: ignore[unresolved-reference]
             )
             l_rows = json.loads(l_raw) if isinstance(l_raw, str) else (l_raw or [])
-            matched, mismatches = compare_row_sets(s_rows, l_rows, sql=str(q.get("sql") or ""))
+            raw_df = active_q.get("dynamic_fields") if isinstance(active_q, dict) else None
+            dfs = (
+                json.loads(raw_df)
+                if isinstance(raw_df, str) and raw_df.strip().startswith("[")
+                else (raw_df if isinstance(raw_df, list) else [])
+            )
+            q_fields = [str(f) for f in ((active_q.get("fields") if isinstance(active_q, dict) else None) or [])] + [
+                str(d.get("table_calculation") or d.get("measure") or d.get("dimension"))
+                for d in dfs
+                if isinstance(d, dict) and (d.get("table_calculation") or d.get("measure") or d.get("dimension"))
+            ]
+            matched, mismatches = compare_row_sets(
+                s_rows, l_rows, sql=str(q.get("sql") or ""), looker_fields=q_fields
+            )
             q["parity_status"] = "matched" if matched else "mismatched"
             q["mismatches"] = mismatches
             all_matched = all_matched and matched

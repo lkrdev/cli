@@ -34,13 +34,20 @@ sync_model_includes() {
     local file_pattern="${glob_check##*/}"
     local glob_pat="${inc#*:}"
     local inc_line="include: \"$glob_pat\""
-    local single_star_line="include: \"${glob_pat/\*\*\//}\""
     if [[ -d "$search_dir" ]] && find "$search_dir" -name "$file_pattern" 2>/dev/null | grep -q .; then
-      if ! grep -qxF "$inc_line" "$model_file" 2>/dev/null && ! grep -qxF "$single_star_line" "$model_file" 2>/dev/null; then
-        echo "$inc_line" >> "$model_file"
-      fi
+      grep -qxF "$inc_line" "$model_file" 2>/dev/null || echo "$inc_line" >> "$model_file"
     fi
   done
+  awk '
+    /^[[:space:]]*include:[[:space:]]*["'\'']\/(bronze|silver|gold|tests)(\/explores)?\/\*\.(view|refinement|explore|test)\.lkml["'\''][[:space:]]*$/ {
+      sub(/\/\*\./, "/**/*."); gsub(/'\''/, "\"")
+    }
+    /^[[:space:]]*include:/ {
+      key = $0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+      if (seen[key]++) next
+    }
+    { print }
+  ' "$model_file" > "${model_file}.tmp" && mv "${model_file}.tmp" "$model_file"
 }
 
 # Fast-path model-include sync when LOOKML_DIR or --skip-preflight is used

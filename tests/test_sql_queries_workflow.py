@@ -513,7 +513,7 @@ def test_setup_repo_skip_preflight_and_opt_in_secrets_and_preflight_fast_path(tm
     (lookml_dir / "bronze" / "explores" / "orders_base.explore.lkml").write_text("", encoding="utf-8")
     model_file = lookml_dir / "agentic_thelook.model.lkml"
     model_file.write_text(
-        'connection: "bq"\ninclude: "/bronze/explores/*.explore.lkml"\n',
+        'connection: "bq"\ninclude: "/bronze/explores/*.explore.lkml"\ninclude: "/bronze/explores/**/*.explore.lkml"\n',
         encoding="utf-8",
     )
 
@@ -525,8 +525,9 @@ def test_setup_repo_skip_preflight_and_opt_in_secrets_and_preflight_fast_path(tm
     )
     assert spy_log.read_text(encoding="utf-8") == ""
     assert not (work_dir / ".github").exists()
-    # Does not append duplicate **/*.explore.lkml when *.explore.lkml is already present
-    assert model_file.read_text(encoding="utf-8").count(".explore.lkml") == 1
+    model_text = model_file.read_text(encoding="utf-8")
+    assert model_text.count(".explore.lkml") == 1
+    assert 'include: "/bronze/explores/**/*.explore.lkml"' in model_text
 
     # 3. Full setup_repo.sh without --sync-secrets does NOT call gh secret, with --sync-secrets DOES
     (work_dir / ".agents" / "skills").mkdir(parents=True)
@@ -553,3 +554,99 @@ def test_setup_repo_skip_preflight_and_opt_in_secrets_and_preflight_fast_path(tm
         check=True,
     )
     assert "gh secret set LOOKERSDK_BASE_URL" in spy_log.read_text(encoding="utf-8")
+
+
+def test_pre_gate_orders_unmatched_columns_by_inline_query_fields_not_json_dict_order():
+    res: dict[str, Any] = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {
+            "raw_sql": (
+                "SELECT COUNT(*) AS COUNT, "
+                "COUNT(DISTINCT session_id) AS unique_chaotic_sessions, "
+                "COUNT(DISTINCT user_id) AS distinct_clicking_humans FROM events;"
+            ),
+            "connection_name": "bq_conn",
+            "data_json": '{"project_id": "agentic-thelook"}',
+            "base_url": "https://example.looker.com",
+            "validate": "false",
+            "inline_queries_json": json.dumps({
+                "0": {
+                    "model": "agentic_thelook",
+                    "view": "events",
+                    "fields": ["events.count", "events.unique_sessions", "events.distinct_users"],
+                }
+            }),
+        },
+        {
+            "create_sql_query": lambda body: {"slug": "sql_ev"},
+            "create_query": lambda body: {"id": "301", "slug": "slug_301"},
+            "run_sql_query": lambda **_kw: json.dumps([
+                {
+                    "COUNT": 2426072,
+                    "unique_chaotic_sessions": 681596,
+                    "distinct_clicking_humans": 80168,
+                }
+            ]),
+            # Looker JSON keys returned in scrambled alphabetical order vs fields list
+            "run_inline_query": lambda **_kw: json.dumps([
+                {
+                    "events.distinct_users": 80168,
+                    "events.count": 2426072,
+                    "events.unique_sessions": 681596,
+                }
+            ]),
+        },
+    )
+    assert res["passed"] is True
+    assert res["queries"][0]["parity_status"] == "matched"
+
+
+def test_init_branch_pre_generates_only_missing_bronze_views_before_pull():
+    generated_calls = []
+
+    def fake_generate(**kw):
+        generated_calls.append(kw)
+        return {"new_files": [{"path": "bronze/events.view.lkml"}]}
+
+    res: dict[str, Any] = _run_monty(
+        SCRIPTS_DIR / "init_branch.py",
+        {
+            "project_id": "agentic-thelook",
+            "ts_utc": "20261022_220000_000",
+            "parsed_sql_json": json.dumps({
+                "queries": [
+                    {
+                        "ctes": [{"name": "recent_events", "sql": "SELECT * FROM events"}],
+                        "tables": [
+                            {"name": "ORDERS", "db": "thelook_ecommerce", "catalog": "bigquery-public-data"},
+                            {"name": "events", "db": "thelook_ecommerce", "catalog": "bigquery-public-data"},
+                            {"name": "recent_events", "db": None, "catalog": None},
+                        ],
+                    }
+                ]
+            }),
+        },
+        {
+            "me": lambda: {"id": "1"},
+            "project": lambda **_kw: {"git_production_branch_name": "main", "git_remote_url": "git@github.com:o/r.git"},
+            "reset_project_to_production": lambda **_kw: None,
+            "create_developer_copy": lambda **_kw: None,
+            "find_git_branch": lambda **_kw: {"remote_ref": "sha1"},
+            "git_branch": lambda **_kw: {"ref": "sha1"},
+            "create_git_branch": lambda **_kw: {},
+            "all_project_files": lambda **_kw: [
+                {"path": "agentic_thelook.model.lkml"},
+                {"path": "bronze/orders.view.lkml"},
+            ],
+            "get_file_content": lambda **_kw: 'connection: "bigquery_public"\n',
+            "create_project_directory": lambda **_kw: None,
+            "generate_lookml_with_new_files": fake_generate,
+        },
+    )
+    assert res["generated_bronze_files"] == ["bronze/events.view.lkml"]
+    assert len(generated_calls) == 1
+    assert generated_calls[0]["connection"] == "bigquery_public"
+    assert generated_calls[0]["model_name"] == "agentic_thelook"
+    assert generated_calls[0]["body"] == {
+        "tables": [{"schema": "bigquery-public-data.thelook_ecommerce", "table_name": "events", "base_view": True}]
+    }
