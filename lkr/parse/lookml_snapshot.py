@@ -439,8 +439,21 @@ def extract_measures_snapshot(
             for v_obj in v_val if isinstance(v_val, list) else [v_val]:
                 if not isinstance(v_obj, LookmlView):
                     continue
-                for fld_name, fld_obj in sorted((v_obj.measure or {}).items()):
-                    if fld_obj.label is None:
+                measures = v_obj.measure or {}
+                if isinstance(measures, list):
+                    measures_dict = {
+                        getattr(x, "name_", None) or f"unnamed_{i}": x
+                        for i, x in enumerate(measures)
+                        if x
+                    }
+                elif isinstance(measures, dict):
+                    measures_dict = measures
+                else:
+                    measures_dict = {
+                        getattr(measures, "name_", "unnamed"): measures
+                    }
+                for fld_name, fld_obj in sorted(measures_dict.items()):
+                    if not isinstance(fld_obj, LookmlFieldProperties) or fld_obj.label is None:
                         continue
                     f_path, line_no = _find_position(
                         project.positions,
