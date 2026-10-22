@@ -1,4 +1,4 @@
-"""Jest-style LookML snapshot testing to guard tests, access controls, connections, and manifest."""
+"""Jest-style LookML snapshot testing to guard tests, access controls, measure labels, connections, and manifest."""
 
 import difflib
 import fnmatch
@@ -21,7 +21,7 @@ from lkr.parse.lookml import (
     parse_lookml,
 )
 
-VALID_SNAPSHOT_OBJECTS = ("tests", "access", "connections", "manifest")
+VALID_SNAPSHOT_OBJECTS = ("tests", "access", "measures", "connections", "manifest")
 
 
 class LookmlSnapshotResult(BaseModel):
@@ -59,6 +59,16 @@ def strip_positions(
     if isinstance(val, list):
         return [strip_positions(x, keys) for x in val]
     return val
+
+
+def _is_empty_snapshot(data: Any) -> bool:
+    return not data or (
+        isinstance(data, dict)
+        and (
+            data.get("present") is False
+            or all(isinstance(v, (dict, list)) and not v for v in data.values())
+        )
+    )
 
 
 def _resolve_project_name(project: LookmlProject, path: Path) -> str:
@@ -373,7 +383,6 @@ def extract_access_snapshot(
                             fields_dict = {
                                 getattr(collection, "name_", "unnamed"): collection
                             }
-
                         for fld_name, fld_obj in sorted(fields_dict.items()):
                             if not isinstance(fld_obj, LookmlFieldProperties):
                                 continue
@@ -390,20 +399,13 @@ def extract_access_snapshot(
                                     fld_allowed_vals = [str(k) for k in raw_av]
                                 fld_allowed_vals.sort()
 
-                            fld_label = (
-                                fld_obj.label if field_type == "measure" else None
-                            )
-                            if (
-                                fld_req_grants
-                                or fld_allowed_vals
-                                or fld_label is not None
-                            ):
+                            if fld_req_grants or fld_allowed_vals:
                                 f_path, line_no = _find_position(
                                     positions,
                                     view_file_hint,
                                     ["view", v_name, field_type, fld_name],
                                 )
-                                field_entry: dict[str, Any] = {
+                                fields_out[f"{model_name}.{v_name}.{fld_name}"] = {
                                     "model": model_name,
                                     "view": v_name,
                                     "field": fld_name,
@@ -415,11 +417,6 @@ def extract_access_snapshot(
                                     "file": f_path,
                                     "line": line_no,
                                 }
-                                if fld_label is not None:
-                                    field_entry["label"] = fld_label
-                                fields_out[f"{model_name}.{v_name}.{fld_name}"] = (
-                                    field_entry
-                                )
 
     return {
         "access_grants": grants_out,
@@ -427,6 +424,38 @@ def extract_access_snapshot(
         "views": views_out,
         "fields": fields_out,
     }
+
+
+def extract_measures_snapshot(
+    project: LookmlProject,
+    model_filter: str | None = None,
+) -> dict[str, Any]:
+    """Extract and normalize measure labels across model views."""
+    measures_out: dict[str, Any] = {}
+    for model_name, model_obj in sorted((project.model or {}).items()):
+        if model_filter and model_name != model_filter:
+            continue
+        for v_name, v_val in sorted((model_obj.view or {}).items()):
+            for v_obj in v_val if isinstance(v_val, list) else [v_val]:
+                if not isinstance(v_obj, LookmlView):
+                    continue
+                for fld_name, fld_obj in sorted((v_obj.measure or {}).items()):
+                    if fld_obj.label is None:
+                        continue
+                    f_path, line_no = _find_position(
+                        project.positions,
+                        f"{v_name}.view",
+                        ["view", v_name, "measure", fld_name],
+                    )
+                    measures_out[f"{model_name}.{v_name}.{fld_name}"] = {
+                        "model": model_name,
+                        "view": v_name,
+                        "field": fld_name,
+                        "label": fld_obj.label,
+                        "file": f_path,
+                        "line": line_no,
+                    }
+    return measures_out
 
 
 def extract_connections_snapshot(
@@ -507,6 +536,8 @@ def extract_snapshot_for_object(
         return extract_tests_snapshot(project, model_filter=model_filter)
     if obj_name == "access":
         return extract_access_snapshot(project, model_filter=model_filter)
+    if obj_name == "measures":
+        return extract_measures_snapshot(project, model_filter=model_filter)
     if obj_name == "connections":
         return extract_connections_snapshot(project, model_filter=model_filter)
     if obj_name == "manifest":
@@ -798,11 +829,19 @@ def run_lookml_snapshot(
     proj_name = _resolve_project_name(project, resolved_path)
     snapshot_dir = resolved_path / "__snapshots__"
 
-    def _write_snap(target: Path, data: Any) -> None:
-        snapshot_dir.mkdir(parents=True, exist_ok=True)
-        target.write_text(
-            json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+    def _sync_snap(target: Path, read_target: Path, data: Any) -> bool:
+        if not _is_empty_snapshot(data):
+            snapshot_dir.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            return True
+        existed = target.exists() or read_target.exists()
+        target.unlink(missing_ok=True)
+        read_target.unlink(missing_ok=True)
+        if snapshot_dir.exists() and not any(snapshot_dir.iterdir()):
+            snapshot_dir.rmdir()
+        return existed
 
     written_count = 0
     updated_count = 0
@@ -895,18 +934,30 @@ def run_lookml_snapshot(
                         merged[k] = v
                 current_data = merged
 
+        current_empty = _is_empty_snapshot(current_data)
+
         if saved_data is None and not read_snap_file.exists():
-            if ci_mode:
+            if current_empty:
+                passed_count += 1
+                continue
+            if allow_additions:
+                saved_data = {}
+            elif ci_mode:
                 failed_count += 1
                 diff_reports.append(
                     f"FAIL {obj_name} ({snap_file})\n  Snapshot file missing in CI mode: {snap_file.name}"
                 )
+                continue
             else:
-                _write_snap(snap_file, current_data)
+                _sync_snap(snap_file, read_snap_file, current_data)
                 written_count += 1
-        elif update and not allow_additions:
-            _write_snap(snap_file, current_data)
-            updated_count += 1
+                continue
+
+        if update and not allow_additions:
+            if _sync_snap(snap_file, read_snap_file, current_data):
+                updated_count += 1
+            else:
+                passed_count += 1
         else:
             if saved_data is None:
                 try:
@@ -929,8 +980,7 @@ def run_lookml_snapshot(
 
             if allow_additions:
                 if not obj_material:
-                    if update:
-                        _write_snap(snap_file, current_data)
+                    if update and _sync_snap(snap_file, read_snap_file, current_data):
                         updated_count += 1
                     else:
                         passed_count += 1
@@ -945,7 +995,9 @@ def run_lookml_snapshot(
                     diff_reports.append(
                         f"FAIL {obj_name} ({snap_file})\n{mat_str}\n{diff_str}"
                     )
-            elif strip_positions(saved_data) == strip_positions(current_data):
+            elif (
+                current_empty and _is_empty_snapshot(saved_data)
+            ) or strip_positions(saved_data) == strip_positions(current_data):
                 passed_count += 1
             else:
                 failed_count += 1

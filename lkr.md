@@ -737,7 +737,7 @@ $ lkr parse lookml user-attributes [OPTIONS]
 
 #### `lkr parse lookml snapshot`
 
-Jest-style LookML snapshot testing to guard tests, access controls, connections, and manifest changes.
+Jest-style LookML snapshot testing to guard tests, access controls, measure labels, connections, and manifest changes.
 
 **Usage**:
 
@@ -750,7 +750,7 @@ $ lkr parse lookml snapshot [OPTIONS]
 * `-p, --path <path>`: Path to LookML directory to snapshot  [required]
 * `-u, --update`: Update snapshots in place with received data
 * `--ci`: CI mode: fail on missing or mismatched snapshots without writing
-* `--only <str>`: Comma-separated list of objects to snapshot (tests, access, connections, manifest)
+* `--only <str>`: Comma-separated list of objects to snapshot (tests, access, measures, connections, manifest)
 * `-m, --model <str>`: Optional model name filter for snapshot
 * `--format <console|json>`: Output format: console or json  [default: console]
 * `-o, --output <path>`: Optional output file path
