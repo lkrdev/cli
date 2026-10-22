@@ -108,6 +108,11 @@ The `sql` parameter behaves differently strictly based on the field type.
 | **Filter** | (Rarely used) | No | N/A |
 | **Parameter** | (None) | No | N/A |
 
+## 4. Field Metadata: `synonyms` vs. `alias`
+
+- **`synonyms: ["..."]` (Semantic NLQ / Conversational Analytics metadata):** Exposes alternative domain terms, acronyms (`"GMV"`, `"AOV"`), or standalone-honest SQL column names in `lookml_model_explore` API metadata without cluttering the Explore UI picker or creating duplicate fields (requires New LookML Runtime). Every synonym must hold standalone with zero Explore `WHERE` filters (never put a `WHERE`-filtered name on an unfiltered field, and skip thesaurus filler already covered by `label:`).
+- **`alias: [old_field_name]` (Backward-compatible rename redirect only):** Keeps pre-existing Look, dashboard, `/x/` URL, and API query references working when an already-committed LookML field is renamed (on `dimension_group`, put `alias: [old_group]` on the group itself). Never add `alias:` to brand-new fields, never collide with an existing field name on the view, and never reference aliased names inside LookML (`${...}`, `filters:`, `query:`, or `test:`).
+
 ## Reference Skills
 
 For detailed standards on specific field types, refer to:

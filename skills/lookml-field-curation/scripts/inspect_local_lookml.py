@@ -193,6 +193,7 @@ def extract_curation_metadata(
                         "dimension_group": dg_str,
                         "sql_column": sql_col,
                         "description": desc,
+                        "synonyms": list(d.get("synonyms") or []),
                     }
                     v_entry["dimension_groups"].append(dg_entry)
                     v_entry["all_columns_for_enrichment"].append(dg_entry)
@@ -205,6 +206,7 @@ def extract_curation_metadata(
                 "label_short": label_short,
                 "type": dtype,
                 "description": desc,
+                "synonyms": list(d.get("synonyms") or []),
                 "hidden": hidden,
                 "suggestable": suggestable,
                 "primary_key": pk,
@@ -293,6 +295,7 @@ def extract_curation_metadata(
                 "label_short": label_short,
                 "type": str(m.get("type") or "string"),
                 "description": desc,
+                "synonyms": list(m.get("synonyms") or []),
                 "hidden": hidden,
                 "sql": sql_str,
                 "referenced_fields": [

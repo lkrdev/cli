@@ -612,12 +612,14 @@ def _expand_view_for_explore(
             explore_fields_spec, view_alias, cands, views_by_alias, base_alias
         )
 
-    def _record_aliases(raw_alias: list[str] | str | None, full_name: str) -> None:
-        if not raw_alias:
-            return
-        for a in raw_alias if isinstance(raw_alias, list) else [raw_alias]:
-            if a:
-                aliases.append(ApiLookmlModelExploreAlias(name=str(a), value=full_name))
+    def _record_aliases(
+        raw: list[str] | str | None, full: str, pre: str = "", suf: str = ""
+    ) -> None:
+        aliases.extend(
+            ApiLookmlModelExploreAlias(name=f"{pre}{a}{suf}", value=full)
+            for a in (raw if isinstance(raw, list) else [raw])
+            if a
+        )
 
     decl_items: list[tuple[int, int, int, int, str, str, str, Any]] = []
     seq = 0
@@ -860,6 +862,7 @@ def _expand_view_for_explore(
                     if not _allowed({fname.lower(), tf_fname.lower()}):
                         continue
                     full_name = _qualify_field_ref(tf_fname, view_alias)
+                    _record_aliases(fobj.alias, full_name, pre=f"{iv}s_")
                     tf_variant = _titleize(f"{iv}s")
                     dims.append(
                         _mk(
@@ -901,6 +904,9 @@ def _expand_view_for_explore(
                 if not _allowed({fname.lower(), tf_fname.lower()}):
                     continue
                 full_name = _qualify_field_ref(tf_fname, view_alias)
+                _record_aliases(
+                    fobj.alias, full_name, suf="" if tf == "yesno" else f"_{tf}"
+                )
                 tf_variant = "Yes / No" if tf == "yesno" else _titleize(tf)
                 short_lbl = fobj.label or (
                     f"{base_dg_title} (Yes / No)"
@@ -957,6 +963,9 @@ def _expand_view_for_explore(
                     if not _allowed({fname.lower(), tf_fname.lower()}):
                         continue
                     m_full = _qualify_field_ref(tf_fname, view_alias)
+                    _record_aliases(
+                        fobj.alias, m_full, suf="" if tf == "yesno" else f"_{tf}"
+                    )
                     tf_variant = "Yes / No" if tf == "yesno" else _titleize(tf)
                     short_lbl = fobj.label or (
                         f"{base_m_title} (Yes / No)"
@@ -1050,6 +1059,7 @@ def _expand_view_for_explore(
             if not _allowed({fname.lower()}):
                 continue
             full_name = _qualify_field_ref(fname, view_alias)
+            _record_aliases(fobj.alias, full_name)
             base_short = fobj.label or _titleize(fname.split(".", 1)[-1])
             ptype = fobj.type or "string"
             esc = (
@@ -1433,7 +1443,8 @@ def _build_explore_from_assembled(
     for lst in (all_dims, all_meas, all_filts, all_params):
         lst.sort(key=lambda f: (f.view_label, f.label_short))
     all_aliases = sorted(
-        {a.name: a for a in all_aliases}.values(), key=lambda a: a.name
+        {(a.name, a.value): a for a in all_aliases}.values(),
+        key=lambda a: (a.name, a.value),
     )
 
     scopes = list(
@@ -1561,6 +1572,28 @@ def _build_explore_from_assembled(
         index_fields = list(dict.fromkeys(index_fields))
 
     dup_errors = _find_duplicate_explore_fields(all_dims, all_meas, views_by_alias)
+    active_names = {f.name for f in (*all_dims, *all_meas, *all_filts, *all_params)}
+    by_q_alias: dict[str, set[str]] = {}
+    for a in all_aliases:
+        by_q_alias.setdefault(
+            _qualify_field_ref(a.name, a.value.split(".", 1)[0]), set()
+        ).add(a.value)
+    for qa, vals in sorted(by_q_alias.items()):
+        if qa in active_names or len(vals) > 1:
+            in_active = qa in active_names
+            flds = sorted({qa, *vals} if in_active else vals)
+            dup_errors.append(
+                {
+                    "type": "alias_collision",
+                    "alias": qa,
+                    "fields": flds,
+                    "message": (
+                        f"Alias '{qa}' on {sorted(vals)} collides with existing field '{qa}'."
+                        if in_active
+                        else f"Duplicate alias '{qa}' claimed by multiple fields: {flds}."
+                    ),
+                }
+            )
 
     return ApiLookmlModelExplore(
         id=f"{model_name}::{explore_name}",

@@ -197,6 +197,7 @@ view: orders {
 
   measure: total_revenue {
     type: sum
+    synonyms: ["GMV", "gross sales"]
     sql: ${net_amount} ;;
   }
 }
@@ -242,6 +243,7 @@ def test_local_lookml_to_api_and_sandbox_pipeline() -> None:
     assert reasons["orders.metadata_json"] == "raw_json_or_payload_column"
     assert reasons["orders._fivetran_synced"] == "system_or_etl_audit_column"
     assert reasons["orders.total_revenue"] == "measure_missing_description"
+    assert orders_view["measures"][0]["synonyms"] == ["GMV", "gross sales"]
 
     profile_vars = exp_meta["sandbox_vars"]["profile_string_fields"]
     enrich_vars = exp_meta["sandbox_vars"]["enrich_partition_clustering"]
