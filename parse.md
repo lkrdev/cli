@@ -9,7 +9,7 @@
 | `lkr parse sql` | Parse semicolon-delimited SQL queries (`--sql` or `--file`) into structured AST tables, columns, joins, CTEs, and aggregations. |
 | `lkr parse lookml` | Parse a LookML project directory (`--path`), file (`--file`), or inline string (`--lookml`) with model assembly, extensions/refinements, and source file/line positions. |
 | `lkr parse sql-lookml-compare` | Map SQL queries (`--sql` / `--sql-file`) to LookML views, dimensions, measures, and explores (`--path` / `--lookml-file` / `--lookml`) with exact source file and line numbers. |
-| `lkr parse lookml-to-api` | Generate offline Looker SDK `all_lookml_models` and `lookml_model_explore` responses directly from local LookML files. |
+| `lkr parse lookml-to-api` | Generate offline Looker SDK `all_lookml_models` and `lookml_model_explore` responses directly from local LookML files (pass `--exclude-hidden` to skip hidden explores and hidden fields). |
 | `lkr parse lookml-database-compare` | Compile physical database tables and columns referenced across LookML explores and bidirectionally validate them against the database schema. |
 
 ---

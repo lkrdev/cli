@@ -3013,7 +3013,72 @@ def test_lookml_to_api_duplicate_field_logic_and_count_star_matching(tmp_path: P
     assert eq.coverage == "exact"
 
 
+def test_parse_lookml_to_api_exclude_hidden_flag(tmp_path: Path):
+    from typer.testing import CliRunner
 
+    from lkr.main import app
 
+    runner = CliRunner()
+    lkml = """
+    view: orders {
+      sql_table_name: ecomm.orders ;;
+      dimension: id {
+        primary_key: yes
+        hidden: yes
+        type: number
+        sql: ${TABLE}.id ;;
+      }
+      dimension: status {
+        type: string
+        sql: ${TABLE}.status ;;
+      }
+      dimension_group: created {
+        type: time
+        timeframes: [raw, date, month]
+        sql: ${TABLE}.created_at ;;
+      }
+      dimension: store_loc {
+        type: location
+        sql_latitude: ${TABLE}.lat ;;
+        sql_longitude: ${TABLE}.lon ;;
+      }
+      measure: count {
+        type: count
+      }
+      measure: internal_cost {
+        type: sum
+        hidden: yes
+        sql: ${TABLE}.cost ;;
+      }
+    }
+    explore: orders_base {
+      view_name: orders
+      hidden: yes
+    }
+    explore: orders {
+      extends: [orders_base]
+      view_name: orders
+      hidden: no
+    }
+    """
+    (tmp_path / "shop.model.lkml").write_text('connection: "bq"\n' + lkml, encoding="utf-8")
 
+    res = runner.invoke(
+        app,
+        ["parse", "lookml-to-api", "--path", str(tmp_path), "--exclude-hidden"],
+    )
+    assert res.exit_code == 0, res.output
+    payload = json.loads(res.output)
+
+    assert [e["name"] for e in payload["all_lookml_models"][0]["explores"]] == ["orders"]
+    assert list(payload["lookml_model_explores"].keys()) == ["shop::orders"]
+
+    fields = payload["lookml_model_explores"]["shop::orders"]["fields"]
+    dim_names = [d["name"] for d in fields["dimensions"]]
+    meas_names = [m["name"] for m in fields["measures"]]
+
+    assert "orders.id" not in dim_names
+    assert "orders.created_raw" not in dim_names
+    assert {"orders.status", "orders.created_date", "orders.created_month", "orders.store_loc"} <= set(dim_names)
+    assert meas_names == ["orders.count"]
 

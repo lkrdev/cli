@@ -2,8 +2,9 @@
 """Unified pre-modeling and pre-test verification gate.
 
 Initializes SQL Runner queries from raw_sql, validates the LookML project,
-registers explore queries from inline_queries_json, and checks query parity
-against SQL Runner in a single code-mode sandbox invocation.
+registers explore queries from inline_queries_json, checks query parity
+against SQL Runner, and optionally executes test_queries_json baseline
+slices in a single code-mode sandbox invocation.
 """
 
 import json
@@ -212,6 +213,32 @@ def main():
             q["parity_status"] = "error"
             q["mismatches"] = [str(e)]
             all_matched = False
+
+    # 4. Run optional test-slice baseline queries (raw unformatted JSON for .test.lkml assertions)
+    try:
+        raw_tq = test_queries_json  # ty: ignore[unresolved-reference]
+    except NameError:
+        raw_tq = {}
+    try:
+        parsed_tq = json.loads(raw_tq) if isinstance(raw_tq, str) else (raw_tq or {})
+    except (json.JSONDecodeError, TypeError):
+        parsed_tq = {}
+
+    test_queries = (
+        {str(k): v for k, v in parsed_tq.items() if isinstance(v, dict)}
+        if isinstance(parsed_tq, dict)
+        else {}
+    )
+
+    if test_queries and not val_errors:
+        test_results = {}
+        for t_key, t_body in test_queries.items():
+            try:
+                t_raw = run_inline_query(result_format="json", body=t_body)  # ty: ignore[unresolved-reference]
+                test_results[t_key] = json.loads(t_raw) if isinstance(t_raw, str) else (t_raw or [])
+            except Exception as e:
+                test_results[t_key] = {"error": str(e)}
+        data["test_query_results"] = test_results
 
     data["passed"] = all_matched and not val_errors
     data["all_queries_matched"] = all_matched

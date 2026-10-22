@@ -9,6 +9,8 @@ metadata:
 
 # Instructions
 
+> **Scope note:** Authoring or modifying `drill_fields:` on dimensions or measures is **out of scope for now**. Do not add unrequested `drill_fields:` and do not flag missing drill paths during reviews.
+
 ## 1. Field Types Overview
 
 LookML fields are the building blocks of your data model. Each type serves a specific purpose in generating SQL.

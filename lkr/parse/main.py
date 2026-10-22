@@ -618,6 +618,13 @@ def lookml_to_api_command(
         str | None,
         typer.Option("--explore", "-e", help="Optional LookML explore name filter"),
     ] = None,
+    exclude_hidden: Annotated[
+        bool,
+        typer.Option(
+            "--exclude-hidden",
+            help="Exclude hidden explores and hidden fields from output",
+        ),
+    ] = False,
     validate: Annotated[
         bool,
         typer.Option(
@@ -640,6 +647,7 @@ def lookml_to_api_command(
         lookml=lookml,
         model=model,
         explore=explore,
+        exclude_hidden=exclude_hidden,
         manifest=manifest,
         constants=_parse_constant_overrides(constant),
     )

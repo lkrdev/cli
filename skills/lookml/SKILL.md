@@ -9,6 +9,8 @@ description: >
 
 # LookML Reference (`lookml`)
 
+> **Scope note:** Authoring or modifying `drill_fields:` (and drill-only `set:` blocks) is **out of scope for now**. Do not add unrequested `drill_fields:` when generating or refining LookML, and do not flag missing drill paths during reviews.
+
 Index of LookML authoring sub-skills from [looker-open-source/looker-skills](https://github.com/looker-open-source/looker-skills) located in `sub-skills/*/SKILL.md`:
 
 | Sub-skill | Reference files | Description |

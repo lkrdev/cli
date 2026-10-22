@@ -738,6 +738,7 @@ $ lkr parse lookml-to-api [OPTIONS]
 * `-l, --lookml <str>`: Inline LookML string
 * `-m, --model <str>`: Optional LookML model name filter
 * `-e, --explore <str>`: Optional LookML explore name filter
+* `--exclude-hidden`: Exclude hidden explores and hidden fields from output
 * `--validate`: Fail with non-zero exit code if duplicate field logic is detected on any explore view
 * `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
 * `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)

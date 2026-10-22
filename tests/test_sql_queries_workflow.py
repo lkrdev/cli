@@ -423,3 +423,133 @@ def test_pre_gate_aligns_outer_sql_round_scale_without_loosening_unrounded_colum
         )
         assert res_strict["passed"] is False
         assert res_strict["queries"][0]["parity_status"] == "mismatched"
+
+
+def test_pre_gate_executes_optional_test_queries_json_in_same_sandbox_call():
+    script_path = SCRIPTS_DIR / "pre_gate.py"
+    inline_calls = []
+
+    def fake_run_inline_query(result_format, body, **kw):
+        assert "apply_formatting" not in kw
+        assert result_format == "json"
+        inline_calls.append(body)
+        if body.get("view") == "orders_base":
+            return '[{"orders.total_revenue": 4520.2519, "orders.count": 84}]'
+        return '[{"orders.id": 1, "orders.count": 10}]'
+
+    res: dict[str, Any] = _run_monty(
+        script_path,
+        {
+            "raw_sql": "SELECT id, count FROM orders;",
+            "connection_name": "bq_conn",
+            "data_json": '{"project_id": "thelook"}',
+            "base_url": "https://example.looker.com",
+            "validate": "true",
+            "inline_queries_json": '{"0": {"model": "thelook", "view": "orders", "fields": ["orders.id", "orders.count"]}}',
+            "test_queries_json": json.dumps({
+                "orders_base": {
+                    "model": "thelook",
+                    "view": "orders_base",
+                    "fields": ["orders.total_revenue", "orders.count"],
+                    "filters": {"orders.created_date": "2024-01-01"},
+                }
+            }),
+        },
+        {
+            "validate_project": lambda **_kw: {"errors": []},
+            "create_sql_query": lambda body: {"slug": "sql_1"},
+            "create_query": lambda body: {"id": "101", "slug": "slug_101"},
+            "run_sql_query": lambda **_kw: '[{"id": 1, "count": 10}]',
+            "run_inline_query": fake_run_inline_query,
+        },
+    )
+    assert res["passed"] is True
+    assert res["test_query_results"] == {
+        "orders_base": [{"orders.total_revenue": 4520.2519, "orders.count": 84}]
+    }
+    assert len(inline_calls) == 2
+
+
+def test_setup_repo_skip_preflight_and_opt_in_secrets_and_preflight_fast_path(tmp_path: Path):
+    import os
+    import subprocess
+
+    create_pr_src = (SCRIPTS_DIR / "create_github_pr.sh").read_text(encoding="utf-8")
+    assert "gh secret" not in create_pr_src
+
+    # Fake bin directory with spy uv, lkr, gh, jq
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    spy_log = tmp_path / "spy.log"
+    for cmd in ("uv", "lkr", "gh", "jq"):
+        p = bin_dir / cmd
+        p.write_text(
+            f'#!/usr/bin/env bash\necho "{cmd} $*" >> "{spy_log}"\nexit 0\n',
+            encoding="utf-8",
+        )
+        p.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+        "LOOKERSDK_BASE_URL": "https://example.looker.com",
+        "LOOKERSDK_CLIENT_ID": "cid",
+        "LOOKERSDK_CLIENT_SECRET": "csecret",
+        "PROJECT_ID": "agentic-thelook",
+    }
+
+    # 1. Warm preflight.sh fast-paths without calling uv tool install or lkr --help
+    subprocess.run(["bash", str(SCRIPTS_DIR / "preflight.sh")], env=env, check=True)
+    log1 = spy_log.read_text(encoding="utf-8")
+    assert "uv tool install" not in log1
+    assert "lkr parse" not in log1
+    assert "gh auth token" in log1
+
+    # 2. setup_repo.sh with LOOKML_DIR / --skip-preflight only updates model includes (no gh secret, no .github)
+    spy_log.write_text("", encoding="utf-8")
+    work_dir = tmp_path / "repo"
+    lookml_dir = work_dir / "data" / "run1" / "lookml"
+    (lookml_dir / "bronze" / "explores").mkdir(parents=True)
+    (lookml_dir / "bronze" / "explores" / "orders_base.explore.lkml").write_text("", encoding="utf-8")
+    model_file = lookml_dir / "agentic_thelook.model.lkml"
+    model_file.write_text(
+        'connection: "bq"\ninclude: "/bronze/explores/*.explore.lkml"\n',
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        ["bash", str(SCRIPTS_DIR / "setup_repo.sh"), "--skip-preflight"],
+        cwd=work_dir,
+        env={**env, "LOOKML_DIR": str(lookml_dir), "MODEL_NAME": "agentic_thelook", "CONNECTION_NAME": "bq"},
+        check=True,
+    )
+    assert spy_log.read_text(encoding="utf-8") == ""
+    assert not (work_dir / ".github").exists()
+    # Does not append duplicate **/*.explore.lkml when *.explore.lkml is already present
+    assert model_file.read_text(encoding="utf-8").count(".explore.lkml") == 1
+
+    # 3. Full setup_repo.sh without --sync-secrets does NOT call gh secret, with --sync-secrets DOES
+    (work_dir / ".agents" / "skills").mkdir(parents=True)
+    for s in (
+        "agentic-lookml",
+        "agentic-lookml-workflow",
+        "generate-view-from-table",
+        "lkr-code-mode",
+        "lkr-project-helper",
+        "lookml",
+        "lookml-field-curation",
+    ):
+        (work_dir / ".agents" / "skills" / s).mkdir(parents=True, exist_ok=True)
+        (work_dir / ".agents" / "skills" / s / "SKILL.md").write_text("", encoding="utf-8")
+
+    subprocess.run(["bash", str(SCRIPTS_DIR / "setup_repo.sh")], cwd=work_dir, env=env, check=True)
+    assert "gh secret" not in spy_log.read_text(encoding="utf-8")
+
+    spy_log.write_text("", encoding="utf-8")
+    subprocess.run(
+        ["bash", str(SCRIPTS_DIR / "setup_repo.sh"), "--sync-secrets"],
+        cwd=work_dir,
+        env=env,
+        check=True,
+    )
+    assert "gh secret set LOOKERSDK_BASE_URL" in spy_log.read_text(encoding="utf-8")
