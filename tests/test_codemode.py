@@ -365,3 +365,45 @@ def test_cli_code_mode_sandbox_update_session_allowed():
     assert result.exit_code == 0
     assert "dev" in result.stdout
 
+
+def test_cli_code_mode_discovery_offline():
+    with patch("lkr.codemode.main.get_mcp_sdk", side_effect=AssertionError("should not authenticate")):
+        res_group_help = runner.invoke(app, ["code-mode", "--help"])
+        assert res_group_help.exit_code == 0
+        assert "lkr code-mode type WriteQuery" in res_group_help.stdout
+
+        res_default = runner.invoke(app, ["code-mode", "help"])
+        assert res_default.exit_code == 0
+        assert "SDK Access" in res_default.stdout
+        assert "lkr code-mode help run_inline_query" in res_default.stdout
+
+        res_exact = runner.invoke(app, ["code-mode", "help", "run_lookml_test"])
+        assert res_exact.exit_code == 0
+        assert "Function: run_lookml_test" in res_exact.stdout
+        assert "Optional[str]" in res_exact.stdout
+        assert "Sequence[LookmlTestResult]" in res_exact.stdout
+
+        res_exact_with_others = runner.invoke(app, ["code-mode", "help", "dashboard"])
+        assert res_exact_with_others.exit_code == 0
+        assert "Function: dashboard" in res_exact_with_others.stdout
+        assert "Other matches for 'dashboard':" in res_exact_with_others.stdout
+        assert "search_dashboards" in res_exact_with_others.stdout
+
+        res_pattern = runner.invoke(app, ["code-mode", "help", "*dashboard*"])
+        assert res_pattern.exit_code == 0
+        assert "Matches found for '*dashboard*':" in res_pattern.stdout
+
+        res_search = runner.invoke(app, ["code-mode", "search", "board_item"])
+        assert res_search.exit_code == 0
+        assert "Function: board_item" in res_search.stdout
+
+        res_search_none = runner.invoke(app, ["code-mode", "search", "zzz_no_such_method_xyz"])
+        assert res_search_none.exit_code == 0
+        assert "No matches found" in res_search_none.stdout
+
+        res_type = runner.invoke(app, ["code-mode", "type", "writequery"])
+        assert res_type.exit_code == 0
+        assert "Type: WriteQuery" in res_type.stdout
+        assert "model: string" in res_type.stdout
+
+

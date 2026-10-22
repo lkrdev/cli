@@ -244,9 +244,11 @@ def lookup_function(name: str, external_funcs: dict, sdk) -> str:
     def _get_type_str(t):
         if t == inspect._empty:
             return "Any"
-        if hasattr(t, '__name__'):
-            return t.__name__
-        return str(t)
+        return re.sub(
+            r"\b(?:looker_sdk\.(?:sdk\.api40\.models|rtl\.transport)|lkr\.extended_sdk_methods\.classes|typing)\.",
+            "",
+            inspect.formatannotation(t),
+        )
 
     try:
         sig = inspect.signature(method)
