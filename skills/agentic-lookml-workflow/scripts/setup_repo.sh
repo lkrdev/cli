@@ -29,10 +29,13 @@ sync_model_includes() {
     "gold/*.view.lkml:/gold/**/*.view.lkml" \
     "gold/explores/*.explore.lkml:/gold/explores/**/*.explore.lkml" \
     "tests/*.test.lkml:/tests/**/*.test.lkml"; do
+    local glob_check="${inc%%:*}"
+    local search_dir="$target_dir/${glob_check%/*}"
+    local file_pattern="${glob_check##*/}"
     local glob_pat="${inc#*:}"
     local inc_line="include: \"$glob_pat\""
     local single_star_line="include: \"${glob_pat/\*\*\//}\""
-    if find "$target_dir" -path "$target_dir/${inc%%:*}" 2>/dev/null | grep -q .; then
+    if [[ -d "$search_dir" ]] && find "$search_dir" -name "$file_pattern" 2>/dev/null | grep -q .; then
       if ! grep -qxF "$inc_line" "$model_file" 2>/dev/null && ! grep -qxF "$single_star_line" "$model_file" 2>/dev/null; then
         echo "$inc_line" >> "$model_file"
       fi

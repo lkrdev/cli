@@ -1617,6 +1617,7 @@ def lookml_to_all_lookml_models(
     constants: dict[str, str] | None = None,
 ) -> list[ApiLookmlModel]:
     """Generate the `all_lookml_models` SDK payload from LookML."""
+    # Reads only manifest/model/explore nav metadata; skips with_defaults() deep-copy.
     proj = project or parse_lookml(
         path=path,
         file=file,

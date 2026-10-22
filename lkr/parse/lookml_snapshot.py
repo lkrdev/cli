@@ -776,10 +776,6 @@ def find_material_changes(
                     _record_file(f_sub)
                 else:
                     _walk(sv, c[k], sub, f_here)
-            if path.startswith("measures."):
-                for k in sorted(set(c) - set(s) - set(_META_KEYS)):
-                    changes.append(f"{path}.{k}: added ({c[k]!r})")
-                    _record_file(f_here)
             return
         if isinstance(s, list) and isinstance(c, list) and path == "manifest.includes":
             for item in s:
