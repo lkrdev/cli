@@ -8,7 +8,7 @@ description: Use this skill to create or modify LookML Dimensions. Covers basic 
 ## 1. Core Standards
 
 1.  **Naming Convention**: Use `snake_case` for all dimension names.
-    -   **Boolean**: Prefix with `is_` or `has_` (e.g., `is_active`, `has_churned`).
+    -   **Boolean (`type: yesno`)**: Always use **positive polarity** prefixed with `is_` or `has_` (e.g., `is_active`, `is_sold` with `sql: ${sold_raw} IS NOT NULL ;;`, `has_churned`). Never define negated names (`is_not_sold`, `is_unsold`, `is_inactive`) and never create an opposite `type: yesno` field alongside an existing positive one—filter the single positive field with `"yes"` or `"no"` instead.
     -   **Dates**: Avoid "date" or "time" suffix (e.g., `created`, NOT `created_date`).
     -   **Logical**: Rename cryptic database columns to human-readable names (e.g., `product_n` -> `product_name`).
 2.  **Required Parameters**:

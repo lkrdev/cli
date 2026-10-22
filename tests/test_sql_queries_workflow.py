@@ -346,3 +346,80 @@ def test_pre_gate_initializes_sql_and_validates_and_checks_parity():
     )
     assert res2["queries"][0]["sql_query_id"] == "sql_slug_2"
     assert res2["queries"][0]["sql"] == "SELECT id, count FROM orders WHERE status = 'Cancelled'"
+
+
+def test_pre_gate_aligns_outer_sql_round_scale_without_loosening_unrounded_columns():
+    script_path = SCRIPTS_DIR / "pre_gate.py"
+    sql = (
+        "SELECT COUNT(id) AS unsold_units_on_shelf, "
+        "ROUND(SUM(cost), 2) AS sunk_dusty_shelf_cost, "
+        "ROUND(SUM(product_retail_price), 2) AS hypothetical_retail_value "
+        "FROM `bigquery-public-data.thelook_ecommerce.inventory_items` WHERE sold_at IS NULL;"
+    )
+    res: dict[str, Any] = _run_monty(
+        script_path,
+        {
+            "raw_sql": sql,
+            "connection_name": "bq_conn",
+            "data_json": '{"project_id": "agentic-thelook"}',
+            "base_url": "https://example.looker.com",
+            "validate": "false",
+            "inline_queries_json": json.dumps({
+                "0": {
+                    "model": "agentic_thelook",
+                    "view": "inventory_items",
+                    "fields": [
+                        "inventory_items.count",
+                        "inventory_items.sunk_dusty_shelf_cost",
+                        "inventory_items.unsold_retail_value",
+                    ],
+                }
+            }),
+        },
+        {
+            "create_sql_query": lambda body: {"slug": "sql_round"},
+            "create_query": lambda body: {"id": "201", "slug": "slug_201"},
+            "run_sql_query": lambda **_kw: json.dumps([
+                {
+                    "unsold_units_on_shelf": 308865,
+                    "sunk_dusty_shelf_cost": 8892021.4,
+                    "hypothetical_retail_value": 18500974.0,
+                }
+            ]),
+            "run_inline_query": lambda **_kw: json.dumps([
+                {
+                    "inventory_items.count": 308865,
+                    "inventory_items.sunk_dusty_shelf_cost": 8892021.4041,
+                    "inventory_items.unsold_retail_value": 18500973.9977,
+                }
+            ]),
+        },
+    )
+    assert res["passed"] is True
+    assert res["queries"][0]["parity_status"] == "matched"
+
+    # Without outer ROUND, with inner SUM(ROUND(...)), or with ROUND only in a SQL comment, 4-decimal precision stays enforced
+    for non_cosmetic_sql in (
+        "SELECT SUM(cost) AS sunk_dusty_shelf_cost FROM inventory_items;",
+        "SELECT SUM(ROUND(cost, 2)) AS sunk_dusty_shelf_cost FROM inventory_items;",
+        "-- SELECT ROUND(SUM(cost), 2) AS sunk_dusty_shelf_cost\nSELECT SUM(cost) AS sunk_dusty_shelf_cost FROM inventory_items;",
+    ):
+        res_strict: dict[str, Any] = _run_monty(
+            script_path,
+            {
+                "raw_sql": non_cosmetic_sql,
+                "connection_name": "bq_conn",
+                "data_json": '{"project_id": "agentic-thelook"}',
+                "base_url": "https://example.looker.com",
+                "validate": "false",
+                "inline_queries_json": '{"0": {"model": "m", "view": "v", "fields": ["v.sunk_dusty_shelf_cost"]}}',
+            },
+            {
+                "create_sql_query": lambda body: {"slug": "sql_strict"},
+                "create_query": lambda body: {"id": "202", "slug": "slug_202"},
+                "run_sql_query": lambda **_kw: '[{"sunk_dusty_shelf_cost": 8892021.4}]',
+                "run_inline_query": lambda **_kw: '[{"v.sunk_dusty_shelf_cost": 8892021.4041}]',
+            },
+        )
+        assert res_strict["passed"] is False
+        assert res_strict["queries"][0]["parity_status"] == "mismatched"
