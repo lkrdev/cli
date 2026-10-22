@@ -1,7 +1,11 @@
+import enum
 import inspect
 import json
 import os
+from collections.abc import Mapping, Sequence
+from typing import get_args, get_origin
 
+from looker_sdk.sdk.api40 import models as sdk_models
 from pydantic import BaseModel
 
 import lkr.extended_sdk_methods.classes as ext_classes
@@ -58,66 +62,82 @@ def _get_swagger_data():
     return _swagger_data
 
 
+def _annotation_to_prop(ann, description: str | None = None) -> dict:
+    while (args := [a for a in get_args(ann) if a is not type(None)]) and not (
+        inspect.isclass(o := get_origin(ann)) and issubclass(o, (Sequence, Mapping))
+    ):
+        ann = args[0]
+    origin = get_origin(ann)
+    is_arr = (
+        inspect.isclass(origin)
+        and issubclass(origin, Sequence)
+        and not issubclass(origin, (str, bytes))
+    )
+    leaf = next((a for a in get_args(ann) if a is not type(None)), ann) if is_arr else ann
+    ref = (
+        leaf
+        if isinstance(leaf, str)
+        and leaf not in ("str", "bytes", "int", "float", "bool", "list", "dict", "set", "tuple", "Any", "None")
+        else getattr(leaf, "__forward_arg__", None)
+        or (
+            leaf.__name__
+            if inspect.isclass(leaf)
+            and (issubclass(leaf, BaseModel) or leaf.__module__ == sdk_models.__name__)
+            and not issubclass(leaf, (enum.Enum, Sequence, Mapping))
+            else None
+        )
+    )
+    ptype = (
+        "object"
+        if inspect.isclass(m := (origin or leaf)) and issubclass(m, Mapping)
+        else {bool: "boolean", int: "integer", float: "float"}.get(leaf, "string")
+    )
+    prop: dict = {"description": description} if description else {}
+    target = {"$ref": f"#/definitions/{ref}"} if ref else {"type": ptype}
+    return {**prop, "type": "array", "items": target} if is_arr else {**prop, **target}
+
+
 def _get_ext_definitions() -> dict:
     global _ext_definitions_cache
     if _ext_definitions_cache is not None:
         return _ext_definitions_cache
 
+    swagger_defs = _get_swagger_data().get("definitions", {})
     ext_defs = {}
+
+    for name, cls in inspect.getmembers(sdk_models, predicate=inspect.isclass):
+        if cls.__module__ != sdk_models.__name__ or name in swagger_defs:
+            continue
+        if issubclass(cls, enum.Enum):
+            vals = [str(e.value) for e in cls if e.value != "invalid_api_enum_value"]
+            ext_defs[name] = {
+                "properties": {
+                    "values": {"type": "string", "description": ", ".join(vals)}
+                }
+            }
+        elif anns := getattr(cls, "__annotations__", None):
+            base_props = (
+                swagger_defs.get(name[5:], {}).get("properties", {})
+                if name.startswith("Write")
+                else {}
+            )
+            ext_defs[name] = {
+                "properties": {
+                    fname: base_props[fname]
+                    if fname in base_props
+                    else _annotation_to_prop(fann)
+                    for fname, fann in anns.items()
+                }
+            }
+
     for name, cls in inspect.getmembers(ext_classes, predicate=inspect.isclass):
         if issubclass(cls, BaseModel) and cls is not BaseModel:
-            properties = {}
-            for field_name, field in getattr(cls, 'model_fields', {}).items():
-                ann = field.annotation
-                origin = getattr(ann, '__origin__', None)
-                args = getattr(ann, '__args__', ())
-                
-                is_array = origin in (list, set)
-                
-                types_to_check = [ann]
-                if origin is not None:
-                    types_to_check = list(args)
-                    
-                ref_model = None
-                prop_type = "string"
-                
-                for t in types_to_check:
-                    if t is type(None):
-                        continue
-                    if inspect.isclass(t) and issubclass(t, BaseModel):
-                        ref_model = t
-                    elif t in (str, bytes):
-                        prop_type = "string"
-                    elif t in (int, float):
-                        prop_type = t.__name__
-                    elif t is bool:
-                        prop_type = "boolean"
-                    elif hasattr(t, '__origin__') and t.__origin__ in (list, set):
-                        is_array = True
-                        sub_args = getattr(t, '__args__', ())
-                        for sub_t in sub_args:
-                            if inspect.isclass(sub_t) and issubclass(sub_t, BaseModel):
-                                ref_model = sub_t
-                            elif sub_t is not type(None):
-                                prop_type = getattr(sub_t, '__name__', str(sub_t))
-                                
-                prop_dict = {}
-                if field.description:
-                    prop_dict['description'] = field.description
-                    
-                if is_array:
-                    prop_dict['type'] = 'array'
-                    if ref_model:
-                        prop_dict['items'] = {'$ref': f'#/definitions/{ref_model.__name__}'}
-                    else:
-                        prop_dict['items'] = {'type': prop_type}
-                elif ref_model:
-                    prop_dict['$ref'] = f'#/definitions/{ref_model.__name__}'
-                else:
-                    prop_dict['type'] = prop_type
-                    
-                properties[field_name] = prop_dict
-            ext_defs[name] = {'properties': properties}
+            ext_defs[name] = {
+                "properties": {
+                    fname: _annotation_to_prop(field.annotation, field.description)
+                    for fname, field in getattr(cls, "model_fields", {}).items()
+                }
+            }
     _ext_definitions_cache = ext_defs
     return ext_defs
 
@@ -125,9 +145,13 @@ def _get_ext_definitions() -> dict:
 def lookup_type(type_name: str) -> str:
     """Lookup the Type and all nested reference types from swagger.json."""
     swagger = _get_swagger_data()
-    definitions = dict(swagger.get('definitions', {}))
-    definitions.update(_get_ext_definitions())
+    definitions = dict(_get_ext_definitions())
+    definitions.update(swagger.get('definitions', {}))
     
+    if type_name not in definitions:
+        type_name = next(
+            (k for k in definitions if k.lower() == type_name.lower()), type_name
+        )
     if type_name not in definitions:
         return f"Type '{type_name}' not found."
         

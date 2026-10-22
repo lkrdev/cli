@@ -30,7 +30,7 @@ $ lkr [OPTIONS] COMMAND [ARGS]...
 * `mcp`
 * `observability`
 * `tools`
-* `code-mode`
+* `code-mode`: Discover Looker SDK methods/types offline...
 * `parse`: Parse SQL and LookML into structured...
 
 ## `lkr auth`
@@ -516,6 +516,16 @@ $ lkr tools agents list [OPTIONS]
 
 ## `lkr code-mode`
 
+Discover Looker SDK methods/types offline and run Python in the Monty sandbox.
+
+
+Examples:
+  lkr code-mode help &quot;*dashboard*&quot;
+  lkr code-mode help run_lookml_test
+  lkr code-mode search board_item
+  lkr code-mode type WriteQuery
+  lkr code-mode sandbox --code=&quot;return me()&quot;
+
 **Usage**:
 
 ```console
@@ -528,10 +538,20 @@ $ lkr code-mode [OPTIONS] COMMAND [ARGS]...
 
 **Commands**:
 
-* `sandbox`
-* `run`
+* `sandbox`: Execute Python code or a script file in...
+* `help`: Search SDK methods or show detailed...
+* `search`: Search SDK methods and types and return...
+* `type`: Inspect fields and types of Looker SDK...
+* `run`: Start the Code Mode MCP server over stdio.
 
 ### `lkr code-mode sandbox`
+
+Execute Python code or a script file in the Monty sandbox.
+
+
+Examples:
+  lkr code-mode sandbox --code=&quot;return me()&quot;
+  lkr --dev code-mode sandbox --file=script.py --var project_id=my_proj
 
 **Usage**:
 
@@ -547,7 +567,79 @@ $ lkr code-mode sandbox [OPTIONS]
 * `-v, --var <str>`: Inject variable as key=value pair (e.g. -v project=my_project)
 * `--help`: Show this message and exit.
 
+### `lkr code-mode help`
+
+Search SDK methods or show detailed signature/docstring if an exact method or type name is given.
+
+
+Examples:
+  lkr code-mode help                   # Show Code Mode overview &amp; recipes
+  lkr code-mode help &quot;*dashboard*&quot;     # Wildcard search across methods &amp; types
+  lkr code-mode help run_lookml_test   # Exact signature, docstring &amp; return type
+
+**Usage**:
+
+```console
+$ lkr code-mode help [OPTIONS] [PATTERN_OR_METHOD]
+```
+
+**Arguments**:
+
+* `[PATTERN_OR_METHOD]`: Search pattern (e.g. &#x27;*dashboard*&#x27;) or exact method/type name (e.g. &#x27;run_lookml_test&#x27;, &#x27;WriteQuery&#x27;).
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+### `lkr code-mode search`
+
+Search SDK methods and types and return full signatures and docstrings.
+
+
+Examples:
+  lkr code-mode search board_item
+  lkr code-mode search &quot;*lookml_test*&quot;
+
+**Usage**:
+
+```console
+$ lkr code-mode search [OPTIONS] {pattern}
+```
+
+**Arguments**:
+
+* `pattern`: Search pattern for SDK methods and types (supports * and ? wildcards).  [required]
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+### `lkr code-mode type`
+
+Inspect fields and types of Looker SDK models.
+
+
+Examples:
+  lkr code-mode type WriteQuery
+  lkr code-mode type LookmlTestResult
+
+**Usage**:
+
+```console
+$ lkr code-mode type [OPTIONS] {type_name}
+```
+
+**Arguments**:
+
+* `type_name`: Looker SDK model/type name to inspect (e.g. Dashboard, WriteQuery).  [required]
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
 ### `lkr code-mode run`
+
+Start the Code Mode MCP server over stdio.
 
 **Usage**:
 

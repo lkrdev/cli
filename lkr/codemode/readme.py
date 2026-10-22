@@ -2,6 +2,13 @@ def get_readme() -> str:
     return """
 Looker Code Mode - Instructions & Examples
 
+CLI DISCOVERY & EXECUTION (offline discovery requires no Looker auth):
+  lkr code-mode help "*dashboard*"           # Search SDK methods & types
+  lkr code-mode help run_inline_query        # Full signature, docstring & return type
+  lkr code-mode search board_item            # Full signatures for all matches
+  lkr code-mode type WriteQuery              # Inspect Looker SDK model fields
+  lkr code-mode sandbox --code="return me()" # Execute Python in Monty sandbox
+
 IMPORTANT: If you have not already run this function, read these instructions carefully before writing any code.
 
 RULES & HINTS:

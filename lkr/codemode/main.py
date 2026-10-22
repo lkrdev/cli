@@ -19,12 +19,25 @@ from lkr.codemode.examples import EXAMPLES
 from lkr.codemode.help import lookup_function, search_help, search_with_lookups
 from lkr.codemode.readme import get_readme
 from lkr.codemode.type import lookup_type, to_primitive
+from lkr.extended_sdk_methods import ExtendedLooker40SDK
 from lkr.logger import logger
 
 __all__ = ["group"]
 
 mcp = FastMCP("lkr:codemode")
-group = typer.Typer(no_args_is_help=True)
+group = typer.Typer(
+    no_args_is_help=True,
+    help=(
+        "Discover Looker SDK methods/types offline and run Python in the Monty sandbox.\n\n"
+        "\b\n"
+        "Examples:\n"
+        '  lkr code-mode help "*dashboard*"\n'
+        "  lkr code-mode help run_lookml_test\n"
+        "  lkr code-mode search board_item\n"
+        "  lkr code-mode type WriteQuery\n"
+        '  lkr code-mode sandbox --code="return me()"'
+    ),
+)
 ctx_lkr: LkrCtxObj | None = None
 class OSCapture:
     def __init__(self):
@@ -232,6 +245,13 @@ def sandbox(
         None, "--var", "-v", help="Inject variable as key=value pair (e.g. -v project=my_project)"
     ),
 ):
+    """Execute Python code or a script file in the Monty sandbox.
+
+    \b
+    Examples:
+      lkr code-mode sandbox --code="return me()"
+      lkr --dev code-mode sandbox --file=script.py --var project_id=my_proj
+    """
     if not code and not file:
         logger.error("Must specify either --code or --file")
         raise typer.Exit(1)
@@ -285,11 +305,95 @@ def sandbox(
     typer.echo(result)
 
 
+def _offline_sdk():
+    sdk = ExtendedLooker40SDK.__new__(ExtendedLooker40SDK)
+    return sdk, {
+        n: m for n, m in inspect.getmembers(sdk, inspect.ismethod) if not n.startswith("_")
+    }
+
+
+@group.command(name="help")
+def cli_help(
+    pattern_or_method: str | None = typer.Argument(
+        None,
+        metavar="[PATTERN_OR_METHOD]",
+        help="Search pattern (e.g. '*dashboard*') or exact method/type name (e.g. 'run_lookml_test', 'WriteQuery').",
+    ),
+):
+    """Search SDK methods or show detailed signature/docstring if an exact method or type name is given.
+
+    \b
+    Examples:
+      lkr code-mode help                   # Show Code Mode overview & recipes
+      lkr code-mode help "*dashboard*"     # Wildcard search across methods & types
+      lkr code-mode help run_lookml_test   # Exact signature, docstring & return type
+    """
+    if not pattern_or_method:
+        typer.echo(get_readme().strip())
+        return
+    sdk, funcs = _offline_sdk()
+    exact = lookup_function(pattern_or_method, funcs, sdk)
+    summary = search_help(pattern_or_method, funcs, sdk)
+    if exact.startswith(f"Function or type '{pattern_or_method}' not found."):
+        typer.echo(summary)
+        return
+    other = [
+        ln
+        for ln in summary.splitlines()[1:]
+        if f": {pattern_or_method.lower()} (" not in ln.lower()
+    ]
+    typer.echo(
+        exact.strip()
+        + (f"\n\nOther matches for '{pattern_or_method}':\n" + "\n".join(other) if other else "")
+    )
+
+
+@group.command(name="search")
+def cli_search(
+    pattern: str = typer.Argument(
+        ...,
+        help="Search pattern for SDK methods and types (supports * and ? wildcards).",
+    ),
+):
+    """Search SDK methods and types and return full signatures and docstrings.
+
+    \b
+    Examples:
+      lkr code-mode search board_item
+      lkr code-mode search "*lookml_test*"
+    """
+    sdk, funcs = _offline_sdk()
+    results = search_with_lookups(pattern, funcs, sdk)
+    typer.echo(
+        ("\n\n" + "-" * 40 + "\n\n").join(r.strip() for r in results)
+        if results
+        else f"No matches found for '{pattern}'."
+    )
+
+
+@group.command(name="type")
+def cli_type(
+    type_name: str = typer.Argument(
+        ...,
+        help="Looker SDK model/type name to inspect (e.g. Dashboard, WriteQuery).",
+    ),
+):
+    """Inspect fields and types of Looker SDK models.
+
+    \b
+    Examples:
+      lkr code-mode type WriteQuery
+      lkr code-mode type LookmlTestResult
+    """
+    typer.echo(lookup_type(type_name))
+
+
 @group.command(name="run")
 def run(
     ctx: typer.Context,
     debug: bool = typer.Option(False, help="Debug mode"),
 ):
+    """Start the Code Mode MCP server over stdio."""
     global ctx_lkr
     ctx_lkr = (
         ctx.obj.get("ctx_lkr")

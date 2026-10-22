@@ -39,9 +39,15 @@ uv run lkr --help
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli auth --help
 uv run lkr auth --help
 
-# Code-mode subcommands (sandbox, run)
+# Code-mode subcommands (sandbox, help, search, type, run)
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode --help
 uv run lkr code-mode --help
+
+# Offline SDK discovery via CLI (no Looker auth required)
+uv run lkr code-mode help run_lookml_test
+uv run lkr code-mode help "*dashboard*"
+uv run lkr code-mode search board_item
+uv run lkr code-mode type WriteQuery
 
 # Sandbox specific options (--code, --file, --var, --dev-mode)
 uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --help
@@ -174,9 +180,17 @@ uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli --force-oauth code-mode sandbox -
 - `LOOKERSDK_CLIENT_SECRET`: API3 client secret
 - `LOOKERSDK_VERIFY_SSL`: `true` or `false` (default: `true`)
 
-## SDK Discovery Builtins
+## SDK Discovery (CLI & Sandbox Builtins)
 
-Use these built-in sandbox functions to explore available Looker SDK methods, schemas, and types:
+Discover Looker SDK methods, signatures, docstrings, and models offline via first-class CLI subcommands (no Looker authentication required):
+
+| CLI Command | Description | Example |
+| :--- | :--- | :--- |
+| `lkr code-mode help [PATTERN_OR_METHOD]` | Show overview (no args), full signature/docstring for an exact method/type, or search matching methods/types | `lkr code-mode help run_lookml_test` |
+| `lkr code-mode search <PATTERN>` | Search SDK methods/types and print full signatures and docstrings | `lkr code-mode search board_item` |
+| `lkr code-mode type <TYPE_NAME>` | Inspect fields and nested types of a Looker SDK model | `lkr code-mode type Dashboard` |
+
+Inside the Monty sandbox, these built-in functions provide equivalent introspection:
 
 | Function | Description | Example |
 | :--- | :--- | :--- |
