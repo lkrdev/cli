@@ -20,7 +20,7 @@ These parameters control the display format of data in Looker. They do **not** a
 Looker provides built-in formats. Generally prefer these for consistency.
 
 **Common Built-in Formats:**
-- `decimal_0`, `decimal_1`, `decimal_2`: Number with 0, 1, or 2 decimal places.
+- `decimal_0`, `decimal_1`, `decimal_2`: Number with 0, 1, or 2 decimal places (`type: count` and `type: count_distinct` already render with thousands-separator commas by default unless the field is a primary key or its LookML name ends in `id`, `year`, or `decade`; add `decimal_0` only when `.xlsx` `#,##0` styling or a legitimate `*(id|year|decade)` field name requires it, applying equally to both `count` and `count_distinct`).
 - `usd`, `eur`, `gbp`: Currency formats (localized).
 - `percent_0`, `percent_1`, `percent_2`: Percentages.
 - `id`: Formats as a string, preventing comma separators for IDs.
