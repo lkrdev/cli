@@ -629,7 +629,7 @@ def lookml_to_api_command(
         bool,
         typer.Option(
             "--validate",
-            help="Fail with non-zero exit code if duplicate field logic is detected on any explore view",
+            help="Fail with non-zero exit code if duplicate field logic or alias collisions are detected",
         ),
     ] = False,
     manifest: ManifestOpt = None,

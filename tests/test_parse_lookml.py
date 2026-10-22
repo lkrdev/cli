@@ -3082,3 +3082,75 @@ def test_parse_lookml_to_api_exclude_hidden_flag(tmp_path: Path):
     assert {"orders.status", "orders.created_date", "orders.created_month", "orders.store_loc"} <= set(dim_names)
     assert meas_names == ["orders.count"]
 
+
+def test_lookml_to_api_alias_expansion_and_collision_validation(tmp_path: Path):
+    from typer.testing import CliRunner
+
+    from lkr.main import app
+    from lkr.parse import lookml_to_lookml_model_explore
+
+    runner = CliRunner()
+    valid_lkml = """
+    view: orders {
+      sql_table_name: ecomm.orders ;;
+      dimension_group: ordered {
+        alias: [created]
+        type: time
+        timeframes: [date, yesno]
+        sql: ${TABLE}.created_at ;;
+      }
+      dimension_group: ship_lag {
+        alias: [wait]
+        type: duration
+        intervals: [day]
+        sql_start: ${TABLE}.created_at ;;
+        sql_end: ${TABLE}.shipped_at ;;
+      }
+      measure: last_order {
+        alias: [latest]
+        type: time
+        timeframes: [date]
+        sql: MAX(${TABLE}.created_at) ;;
+      }
+      filter: cohort_filter {
+        alias: [old_cohort]
+        type: string
+      }
+      parameter: grain {
+        alias: [old_grain]
+        type: unquoted
+      }
+    }
+    explore: orders {}
+    """
+    exp = lookml_to_lookml_model_explore("inline", "orders", lookml=valid_lkml)
+    assert exp.errors is None
+    assert {(a.name, a.value) for a in exp.aliases} == {
+        ("created_date", "orders.ordered_date"),
+        ("created", "orders.ordered"),
+        ("days_wait", "orders.days_ship_lag"),
+        ("latest_date", "orders.last_order_date"),
+        ("old_cohort", "orders.cohort_filter"),
+        ("old_grain", "orders.grain"),
+    }
+
+    collide_lkml = """
+    view: orders {
+      sql_table_name: ecomm.orders ;;
+      dimension: status { sql: ${TABLE}.status ;; }
+      dimension: state { alias: [status] sql: ${TABLE}.state ;; }
+      measure: rev_a { alias: [rev] type: sum sql: ${TABLE}.a ;; }
+      measure: rev_b { alias: [rev] type: sum sql: ${TABLE}.b ;; }
+    }
+    explore: orders {}
+    """
+    (tmp_path / "m.model.lkml").write_text('connection: "bq"\n' + collide_lkml, encoding="utf-8")
+    res = runner.invoke(app, ["parse", "lookml-to-api", "--path", str(tmp_path), "--validate"])
+    assert res.exit_code == 1
+    bad_exp = lookml_to_lookml_model_explore("m", "orders", path=tmp_path)
+    assert bad_exp.errors is not None
+    by_alias = {e["alias"]: e for e in bad_exp.errors if e["type"] == "alias_collision"}
+    assert by_alias["orders.status"]["fields"] == ["orders.state", "orders.status"]
+    assert by_alias["orders.rev"]["fields"] == ["orders.rev_a", "orders.rev_b"]
+
+
