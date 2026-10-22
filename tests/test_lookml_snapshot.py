@@ -76,6 +76,7 @@ def test_snapshot_first_run_writes_files(sample_lookml_project: Path):
     snap_dir = sample_lookml_project / "__snapshots__"
     assert (snap_dir / "tests.snap.json.md").exists()
     assert (snap_dir / "access.snap.json.md").exists()
+    assert not (snap_dir / "measures.snap.json.md").exists()
     assert (snap_dir / "connections.snap.json.md").exists()
     assert (snap_dir / "manifest.snap.json.md").exists()
 
@@ -93,7 +94,7 @@ def test_snapshot_verify_passes(sample_lookml_project: Path):
     # Second run checks and passes
     res2 = runner.invoke(app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project)])
     assert res2.exit_code == 0
-    assert "4 snapshots passed" in res2.output
+    assert "5 snapshots passed" in res2.output
 
 
 def test_snapshot_line_shift_insensitivity(sample_lookml_project: Path):
@@ -107,7 +108,7 @@ def test_snapshot_line_shift_insensitivity(sample_lookml_project: Path):
     # Semantic equality check must pass despite line shift
     res = runner.invoke(app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project)])
     assert res.exit_code == 0
-    assert "4 snapshots passed" in res.output
+    assert "5 snapshots passed" in res.output
 
 
 def test_snapshot_sql_normalization_and_set_sorting(sample_lookml_project: Path):
@@ -134,7 +135,7 @@ def test_snapshot_sql_normalization_and_set_sorting(sample_lookml_project: Path)
 
     res = runner.invoke(app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project)])
     assert res.exit_code == 0
-    assert "4 snapshots passed" in res.output
+    assert "5 snapshots passed" in res.output
 
 
 def test_snapshot_mismatch_fails_with_jest_diff(sample_lookml_project: Path):
@@ -167,7 +168,7 @@ def test_snapshot_ci_flag_fails_on_missing_and_mismatch(sample_lookml_project: P
     # 3. In CI mode, matching snapshots pass
     res_pass = runner.invoke(app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project), "--ci"])
     assert res_pass.exit_code == 0
-    assert "4 snapshots passed" in res_pass.output
+    assert "5 snapshots passed" in res_pass.output
 
     # 4. In CI mode, mismatch fails with exit code 1
     conn_snap = snap_dir / "connections.snap.json.md"
@@ -438,7 +439,7 @@ def test_snapshot_allow_additions_passes_on_new_tests_asserts_columns_and_measur
     assert payload["success"] is True
     assert payload["requires_review"] is False
     assert payload["material_changes"] == []
-    assert payload["passed"] == 4
+    assert payload["passed"] == 5
 
 
 def test_snapshot_allow_additions_fails_on_material_changes(
@@ -505,7 +506,7 @@ def test_snapshot_allow_additions_fails_on_material_changes(
     assert res4.success is False
     assert res4.requires_review is True
     assert any(
-        "access.fields.shop.users.total_revenue.label" in c
+        "measures.shop.users.total_revenue.label" in c
         for c in res4.material_changes
     )
 
@@ -518,7 +519,7 @@ def test_snapshot_allow_additions_fails_on_material_changes(
     assert res5.success is False
     assert res5.requires_review is True
     assert any(
-        "access.fields.shop.users.total_revenue: removed" in c
+        "measures.shop.users.total_revenue: removed" in c
         for c in res5.material_changes
     )
 
@@ -615,7 +616,7 @@ def test_snapshot_codeowners_resolution_on_material_changes(
     assert res_view.requires_review is True
     assert "users.view.lkml" in res_view.material_change_files
     assert (
-        "__snapshots__/access.snap.json.md"
+        "__snapshots__/measures.snap.json.md"
         in res_view.material_change_files
     )
     assert res_view.required_reviewers == ["view-owner", "snap-owner"]
@@ -641,4 +642,37 @@ def test_snapshot_codeowners_resolution_on_material_changes(
         "org/data-eng",
         "snap-owner",
     ]
+
+
+def test_snapshot_measures_separate_and_skips_empty_access(tmp_path: Path):
+    proj_dir = tmp_path / "no_grants"
+    proj_dir.mkdir()
+    (proj_dir / "orders.view.lkml").write_text(
+        'view: orders {\n  measure: total_revenue { type: sum sql: ${TABLE}.rev ;; label: "Total Revenue" }\n}\n',
+        encoding="utf-8",
+    )
+    (proj_dir / "shop.model.lkml").write_text(
+        'connection: "bq"\ninclude: "*.view.lkml"\nexplore: orders {}\n',
+        encoding="utf-8",
+    )
+
+    res, _ = run_lookml_snapshot(path=proj_dir)
+    assert res.success is True
+    snap_dir = proj_dir / "__snapshots__"
+    assert (snap_dir / "measures.snap.json.md").exists()
+    assert (snap_dir / "connections.snap.json.md").exists()
+    assert not (snap_dir / "access.snap.json.md").exists()
+    assert not (snap_dir / "tests.snap.json.md").exists()
+    assert not (snap_dir / "manifest.snap.json.md").exists()
+
+    ci_res, _ = run_lookml_snapshot(path=proj_dir, ci=True)
+    assert ci_res.success is True
+    assert ci_res.passed == 5
+
+    # Stale empty access snapshot on disk is cleaned up on -u
+    stale_access = snap_dir / "access.snap.json.md"
+    stale_access.write_text('{"access_grants":{},"explores":{},"fields":{},"views":{}}\n', encoding="utf-8")
+    upd_res, _ = run_lookml_snapshot(path=proj_dir, update=True)
+    assert upd_res.success is True
+    assert not stale_access.exists()
 

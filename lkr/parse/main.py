@@ -356,7 +356,7 @@ def snapshot_command(
         str | None,
         typer.Option(
             "--only",
-            help="Comma-separated list of objects to snapshot (tests, access, connections, manifest)",
+            help="Comma-separated list of objects to snapshot (tests, access, measures, connections, manifest)",
         ),
     ] = None,
     model: Annotated[
@@ -390,7 +390,7 @@ def snapshot_command(
     manifest: ManifestOpt = None,
     constant: ConstantOpt = None,
 ) -> LookmlSnapshotResult:
-    """Jest-style LookML snapshot testing to guard tests, access controls, connections, and manifest changes."""
+    """Jest-style LookML snapshot testing to guard tests, access controls, measure labels, connections, and manifest changes."""
     result, console_output = run_lookml_snapshot(
         path=path,
         update=update,
