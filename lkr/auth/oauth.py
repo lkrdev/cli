@@ -55,7 +55,8 @@ def kill_process_on_port(port: int, retries: int = 5, delay: float = 1) -> None:
     try:
         # Try to create a socket binding to check if port is in use
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if os.name != "nt":
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("localhost", port))
         sock.close()
         return  # Port is free, no need to kill anything
@@ -79,7 +80,8 @@ def kill_process_on_port(port: int, retries: int = 5, delay: float = 1) -> None:
         for _ in range(retries):
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if os.name != "nt":
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 sock.bind(("localhost", port))
                 sock.close()
                 return
@@ -164,7 +166,7 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
 
 
 class OAuthCallbackServer(socketserver.TCPServer):
-    allow_reuse_address = True
+    allow_reuse_address = os.name != "nt"
 
     def __init__(self, server_address, expected_state: str | None = None):
         super().__init__(server_address, OAuthCallbackHandler)

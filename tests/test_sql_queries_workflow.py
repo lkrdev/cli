@@ -1,9 +1,11 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 import pydantic_monty
+import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "skills" / "agentic-lookml-workflow" / "scripts"
 
@@ -470,6 +472,7 @@ def test_pre_gate_executes_optional_test_queries_json_in_same_sandbox_call():
     assert len(inline_calls) == 2
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX bash script test")
 def test_setup_repo_skip_preflight_and_opt_in_secrets_and_preflight_fast_path(tmp_path: Path):
     import os
     import subprocess

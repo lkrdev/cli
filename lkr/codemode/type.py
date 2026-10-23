@@ -54,7 +54,7 @@ def _get_swagger_data():
         return _swagger_data
         
     try:
-        with open(swagger_path, 'r') as f:
+        with open(swagger_path, "r", encoding="utf-8") as f:
             _swagger_data = json.load(f)
     except Exception:  # noqa: BLE001
         _swagger_data = {}

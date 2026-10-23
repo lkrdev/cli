@@ -669,6 +669,7 @@ def _ensure_lookml_parser(version: str = LOOKML_PARSER_VERSION) -> Path:
             return_completed_process=True,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             check=True,
         )
     return mod_dir
@@ -813,7 +814,6 @@ getPositionsMod.getPositionsRecurse = function(stringsNode, sl, sc, logPath, d, 
 }};
 
 const lp = require(modDir);
-const {{ extraManifestContent, constants: cliConstants, ...parseOpts }} = JSON.parse(require("fs").readFileSync(0, "utf-8"));
 
 function normalizeDepList(rawDep) {{
   if (!rawDep || typeof rawDep !== "object") return [];
@@ -924,7 +924,17 @@ function substituteNode(node, constMap, parentScope, propKey, posNode, projectEr
 }}
 
 const origAssembleModels = xf.assembleModels;
+(async () => {{
+  let rawStdin = "";
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) rawStdin += chunk;
+  const {{ extraManifestContent, constants: cliConstants, ...parseOpts }} = JSON.parse(rawStdin);
+
 xf.assembleModels = function(project, assembleOpts) {{
+  for (const f of Object.values(project.file || {{}})) {{
+    if (typeof f.$file_path === "string") f.$file_path = f.$file_path.replace(/\\\\/g, "/");
+    if (typeof f.$file_rel === "string") f.$file_rel = f.$file_rel.replace(/\\\\/g, "/");
+  }}
   if (extraManifestContent && project.file) {{
     const manFile = {{
       ...lp.parse(extraManifestContent, {{ strings: true }}),
@@ -1071,6 +1081,10 @@ lp.parseFiles({{
   console.error(err);
   process.exit(1);
 }});
+}})().catch(err => {{
+  console.error(err);
+  process.exit(1);
+}});
 """
     proc = nodejs_wheel.node(
         ["-e", js_code],
@@ -1078,6 +1092,7 @@ lp.parseFiles({{
         input=json.dumps(opts),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
     out = proc.stdout if isinstance(proc.stdout, str) else proc.stdout.decode("utf-8")

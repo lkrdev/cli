@@ -20,7 +20,7 @@ def _get_operation_map():
         return _operation_map
         
     try:
-        with open(swagger_path, 'r') as f:
+        with open(swagger_path, "r", encoding="utf-8") as f:
             swagger = json.load(f)
             paths = swagger.get('paths', {})
             for path_item in paths.values():

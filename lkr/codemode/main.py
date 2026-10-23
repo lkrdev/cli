@@ -55,7 +55,7 @@ def capture_os_stdout():
     original_stdout_fd = os.dup(1)
     try:
         os.dup2(fd, 1)
-        with os.fdopen(os.dup(1), "w") as f:
+        with os.fdopen(os.dup(1), "w", encoding="utf-8", errors="replace") as f:
             sys.stdout = f
             yield cap
             f.flush()
@@ -66,7 +66,7 @@ def capture_os_stdout():
         os.close(fd)
         
         try:
-            with open(temp_path, "r") as f:
+            with open(temp_path, "r", encoding="utf-8", errors="replace") as f:
                 cap.output = f.read()
         finally:
             if os.path.exists(temp_path):

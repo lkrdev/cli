@@ -136,7 +136,7 @@ def schedule_download_deprecation_command(
     if csv_output:
         # For CSV, we ignore pagination and truncation
         fname = (csv_file_name or "schedule_download_deprecation") + ".csv"
-        with open(fname, "w", newline="") as f:
+        with open(fname, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             csv_headers = ["User ID", "Email" if email else "Name", "Instance Wide"] + result.model_names
             writer.writerow(csv_headers)
