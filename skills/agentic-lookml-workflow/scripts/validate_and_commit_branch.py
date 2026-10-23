@@ -1,4 +1,4 @@
-# ruff: noqa: F821
+# ruff: noqa: F821, BLE001
 """Validate LookML project, run targeted LookML data tests, and optionally commit to the active Looker branch."""
 
 
@@ -12,6 +12,10 @@ def main():
     except NameError:
         c_msg = ""
     try:
+        b_name = str(branch_name).strip() if branch_name is not None else ""  # ty: ignore[unresolved-reference]
+    except NameError:
+        b_name = ""
+    try:
         t_names = [x.strip() for x in str(test_names).split(",") if x.strip()] if test_names is not None else []  # ty: ignore[unresolved-reference]
     except NameError:
         t_names = []
@@ -23,6 +27,22 @@ def main():
         s_tests = str(skip_tests).lower() in ("true", "1", "yes")  # ty: ignore[unresolved-reference]
     except NameError:
         s_tests = False
+
+    if b_name and not c_msg:
+        try:
+            reset_project_to_remote(project_id=p_id)  # ty: ignore[unresolved-reference]
+        except Exception:
+            try:
+                reset_project_to_production(project_id=p_id)  # ty: ignore[unresolved-reference]
+            except Exception:
+                create_developer_copy(project_id=p_id)  # ty: ignore[unresolved-reference]
+                reset_project_to_production(project_id=p_id)  # ty: ignore[unresolved-reference]
+        proj = project(project_id=p_id) or {}  # ty: ignore[unresolved-reference]
+        if b_name == (proj.get("git_production_branch_name") or "main"):
+            reset_project_to_production(project_id=p_id)  # ty: ignore[unresolved-reference]
+        else:
+            update_git_branch(project_id=p_id, body={"name": b_name})  # ty: ignore[unresolved-reference]
+            reset_project_to_remote(project_id=p_id)  # ty: ignore[unresolved-reference]
 
     val = validate_project(project_id=p_id) or {}  # ty: ignore[unresolved-reference]
     errors = [

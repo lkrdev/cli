@@ -650,3 +650,52 @@ def test_init_branch_pre_generates_only_missing_bronze_views_before_pull():
     assert generated_calls[0]["body"] == {
         "tables": [{"schema": "bigquery-public-data.thelook_ecommerce", "table_name": "events", "base_view": True}]
     }
+
+
+def test_validate_and_commit_branch_checks_out_pr_branch_and_workflow_serializes():
+    calls: list[tuple[str, Any]] = []
+
+    def rec(name: str, ret: Any = None, fail_first: bool = False):
+        seen = 0
+
+        def _fn(**kw):
+            nonlocal seen
+            seen += 1
+            calls.append((name, kw))
+            if fail_first and seen == 1:
+                raise RuntimeError("dirty workspace")
+            return ret
+
+        return _fn
+
+    res = _run_monty(
+        SCRIPTS_DIR / "validate_and_commit_branch.py",
+        {"project_id": "agentic-thelook", "branch_name": "20261023_070000_000_1"},
+        {
+            "reset_project_to_remote": rec("reset_remote", fail_first=True),
+            "reset_project_to_production": rec("reset_prod"),
+            "create_developer_copy": rec("create_dev"),
+            "project": rec("project", {"git_production_branch_name": "main"}),
+            "update_git_branch": rec("update_branch"),
+            "validate_project": rec("validate", {"errors": []}),
+            "run_lookml_test": rec("test", [{"test_name": "t1", "success": True}]),
+        },
+    )
+    assert res["passed"] is True
+    assert res["committed"] is False
+    assert [c[0] for c in calls] == [
+        "reset_remote",
+        "reset_prod",
+        "project",
+        "update_branch",
+        "reset_remote",
+        "validate",
+        "test",
+    ]
+    assert calls[3][1]["body"] == {"name": "20261023_070000_000_1"}
+
+    wf_yml = (SCRIPTS_DIR.parent / "examples" / "lookml-pr-checks.yml").read_text()
+    assert "group: looker-dev-${{ vars.LOOKER_PROJECT_NAME || github.repository }}" in wf_yml
+    assert "cancel-in-progress: false" in wf_yml
+    assert '--var branch_name="$BRANCH_NAME"' in wf_yml
+

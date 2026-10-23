@@ -415,6 +415,7 @@ def _extract_query_columns(
     default_db: str | None = None,
     default_schema: str | None = None,
     exclude_join_on: bool = False,
+    split_count_cols: bool = False,
 ) -> list[tuple[str | None, str]]:
     seen: set[tuple[str | None, str]] = set()
     result: list[tuple[str | None, str]] = []
@@ -427,7 +428,7 @@ def _extract_query_columns(
             seen.add(key)
             result.append((tbl or None, col))
 
-    if not schema and not exclude_join_on:
+    if not schema and not exclude_join_on and not split_count_cols:
         for c in parsed_query.columns:
             if c.column:
                 _add(c.table, c.column)
@@ -453,20 +454,45 @@ def _extract_query_columns(
                     if exclude_join_on
                     else set()
                 )
+                cnt_col_ids: set[int] = set()
+                for cnt_expr in opt_expr.find_all(exp.Count):
+                    if isinstance(cnt_expr.parent, exp.Filter):
+                        continue
+                    arg = cnt_expr.this
+                    if isinstance(arg, (exp.Star, exp.Literal)):
+                        _add(None, "COUNT(*)")
+                    elif isinstance(arg, exp.Column) and isinstance(arg.this, exp.Star):
+                        _add(
+                            arg.table or None,
+                            f"COUNT({arg.table}.*)" if arg.table else "COUNT(*)",
+                        )
+                    elif split_count_cols:
+                        c = (
+                            arg
+                            if isinstance(arg, exp.Column)
+                            else arg.expressions[0]
+                            if isinstance(arg, exp.Distinct)
+                            and len(arg.expressions) == 1
+                            and isinstance(arg.expressions[0], exp.Column)
+                            else None
+                        )
+                        if (
+                            c is not None
+                            and c.name
+                            and not isinstance(c.this, exp.Star)
+                            and id(c) not in on_col_ids
+                        ):
+                            cnt_col_ids.add(id(c))
+                            _add(c.table or None, f"COUNT({c.name})")
                 for col_expr in opt_expr.find_all(exp.Column):
                     if (
                         id(col_expr) not in on_col_ids
+                        and id(col_expr) not in cnt_col_ids
                         and col_expr.name
                         and col_expr.arg_key != "except_"
                         and not isinstance(col_expr.this, exp.Star)
                     ):
                         _add(col_expr.table or None, col_expr.name)
-                for cnt_expr in opt_expr.find_all(exp.Count):
-                    arg = cnt_expr.this
-                    if isinstance(arg, (exp.Star, exp.Literal)):
-                        _add(None, "COUNT(*)")
-                    elif isinstance(arg, exp.Column) and isinstance(arg.this, exp.Star):
-                        _add(arg.table or None, "COUNT(*)")
     except Exception:  # noqa: BLE001, S110
         pass
 
@@ -1461,6 +1487,7 @@ def _match_model_views(
         schema=lookml_schema or None,
         default_db=sql_db,
         default_schema=sql_schema,
+        split_count_cols=True,
     )
     non_join_col_set = {
         ((t or "").lower() or None, c.lower())
@@ -1471,17 +1498,39 @@ def _match_model_views(
             default_db=sql_db,
             default_schema=sql_schema,
             exclude_join_on=True,
+            split_count_cols=True,
         )
     }
     non_join_units: set[tuple[str, str]] = set()
 
     for sql_tbl, raw_table_str, view_name, view_obj, dt_col_pair in matched_sources:
         self_names = self_names_by_view[view_name]
+        pks = _view_pk_columns(view_obj)
         if dt_col_pair is None and view_name not in direct_views:
             direct_views[view_name] = raw_table_str
             view_order.append(view_name)
         for tbl_qual, col_name in eff_query_cols:
-            if dt_col_pair and col_name.lower() != dt_col_pair[1]:
+            is_non_join = (
+                (tbl_qual or "").lower() or None,
+                col_name.lower(),
+            ) in non_join_col_set
+            cnt_inner = (
+                col_name[6:-1]
+                if col_name.startswith("COUNT(")
+                and col_name.endswith(")")
+                and col_name != "COUNT(*)"
+                else None
+            )
+            is_tbl_cnt = bool(cnt_inner and cnt_inner.endswith(".*"))
+            if cnt_inner and not is_tbl_cnt:
+                if dt_col_pair and cnt_inner.lower() != dt_col_pair[1]:
+                    continue
+                if (dt_col_pair[0] if dt_col_pair else cnt_inner).lower() in pks:
+                    is_tbl_cnt = True
+                else:
+                    col_name = cnt_inner
+            is_cnt = col_name == "COUNT(*)" or is_tbl_cnt
+            if not is_cnt and dt_col_pair and col_name.lower() != dt_col_pair[1]:
                 continue
             if tbl_qual and tbl_qual.lower() not in {
                 sql_tbl.name.lower(),
@@ -1489,13 +1538,13 @@ def _match_model_views(
                 view_name.lower(),
             }:
                 continue
-            if ((tbl_qual or "").lower() or None, col_name.lower()) in non_join_col_set:
+            if is_non_join:
                 non_join_units.add(
                     ("*", "count(*)")
                     if col_name == "COUNT(*)"
-                    else (raw_table_str.lower(), col_name.lower())
+                    else (raw_table_str.lower(), "count(*)" if is_cnt else col_name.lower())
                 )
-            target_col = dt_col_pair[0] if dt_col_pair else col_name
+            target_col = dt_col_pair[0] if (dt_col_pair and not is_cnt) else col_name
             for ftype, fname, fobj in _iter_view_fields(view_obj):
                 tfs = (
                     fobj.timeframes
@@ -1504,19 +1553,19 @@ def _match_model_views(
                 )
                 props = _get_field_properties(ftype, fname, fobj)
                 direct_hits: list[tuple[_FieldProperty | None, str, str, str | None]] = []
-                for p in props:
-                    if p.sql_text and _field_matches_column(target_col, fname, p.sql_text, ftype, tfs):
-                        direct_hits.append((p, p.prop_type, p.prop_key, p.expr))
-                if not direct_hits and _field_matches_column(target_col, fname, None, ftype, tfs):
-                    direct_hits.append((None, f"{ftype}.sql", "sql", fobj.sql.strip() if getattr(fobj, "sql", None) else None))
-                if (
-                    not direct_hits
-                    and target_col == "COUNT(*)"
-                    and ftype == "measure"
-                    and getattr(fobj, "type", None) == "count"
-                    and not getattr(fobj, "filters", None)
-                ):
-                    direct_hits.append((None, "measure.type", "type", "count"))
+                if is_cnt:
+                    if (
+                        ftype == "measure"
+                        and getattr(fobj, "type", None) == "count"
+                        and not getattr(fobj, "filters", None)
+                    ):
+                        direct_hits.append((None, "measure.type", "type", "count"))
+                else:
+                    for p in props:
+                        if p.sql_text and _field_matches_column(target_col, fname, p.sql_text, ftype, tfs):
+                            direct_hits.append((p, p.prop_type, p.prop_key, p.expr))
+                    if not direct_hits and _field_matches_column(target_col, fname, None, ftype, tfs):
+                        direct_hits.append((None, f"{ftype}.sql", "sql", fobj.sql.strip() if getattr(fobj, "sql", None) else None))
 
                 for fp_obj, m_prop, sub_key, expr_val in direct_hits:
                     fkey = (view_name, ftype, fname)
@@ -2107,6 +2156,8 @@ def _match_model_views(
                     uk = (
                         ("*", "count(*)")
                         if col_name == "COUNT(*)"
+                        else (f_sql_tbl.lower(), "count(*)")
+                        if col_name.startswith("COUNT(")
                         else (f_sql_tbl.lower(), col_name.lower())
                     )
                     fobj = getattr(model_views[vm.view_name], fm.field_type)[
