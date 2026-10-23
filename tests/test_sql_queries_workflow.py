@@ -545,6 +545,8 @@ def test_setup_repo_skip_preflight_and_opt_in_secrets_and_preflight_fast_path(tm
 
     subprocess.run(["bash", str(SCRIPTS_DIR / "setup_repo.sh")], cwd=work_dir, env=env, check=True)
     assert "gh secret" not in spy_log.read_text(encoding="utf-8")
+    installed_wf = (work_dir / ".github" / "workflows" / "lookml-pr-checks.yml").read_text(encoding="utf-8")
+    assert installed_wf == (SCRIPTS_DIR.parent / "examples" / "lookml-pr-checks.yml").read_text(encoding="utf-8")
 
     spy_log.write_text("", encoding="utf-8")
     subprocess.run(
@@ -700,4 +702,86 @@ def test_validate_and_commit_branch_checks_out_pr_branch_and_workflow_serializes
     assert "group: looker-dev-${{ vars.LOOKER_PROJECT_NAME || github.repository }}" in wf_yml
     assert "cancel-in-progress: false" in wf_yml
     assert '--var branch_name="$BRANCH_NAME"' in wf_yml
+
+    yaml_mod = importlib.import_module("yaml")
+    wf = yaml_mod.safe_load(wf_yml)
+    jobs = wf["jobs"]
+    assert list(jobs) == ["snapshots", "validator", "data-tests", "query-parity"]
+    assert "LOOKERSDK_" not in json.dumps(jobs["snapshots"])
+    assert "needs" not in jobs["snapshots"]
+    assert "needs" not in jobs["validator"]
+    assert jobs["data-tests"]["needs"] == ["validator"]
+    assert jobs["query-parity"]["needs"] == ["validator"]
+    assert jobs["query-parity"]["permissions"]["pull-requests"] == "read"
+
+    # validator mode: skip_tests="true" runs validate_project only
+    calls.clear()
+    res_val = _run_monty(
+        SCRIPTS_DIR / "validate_and_commit_branch.py",
+        {"project_id": "agentic-thelook", "branch_name": "b1", "skip_tests": "true"},
+        {
+            "reset_project_to_remote": rec("reset_remote"),
+            "project": rec("project", {"git_production_branch_name": "main"}),
+            "update_git_branch": rec("update_branch"),
+            "validate_project": rec("validate", {"errors": []}),
+            "run_lookml_test": rec("test", []),
+        },
+    )
+    assert res_val["passed"] is True
+    assert [c[0] for c in calls] == ["reset_remote", "project", "update_branch", "reset_remote", "validate"]
+
+    # data-tests mode right after validator: head_sha matches -> fast-paths git sync & skips validate_project
+    calls.clear()
+    res_dt_fast = _run_monty(
+        SCRIPTS_DIR / "validate_and_commit_branch.py",
+        {"project_id": "agentic-thelook", "branch_name": "b1", "head_sha": "sha_b1", "skip_validate": "true"},
+        {
+            "git_branch": rec("git_branch", {"name": "b1", "ref": "sha_b1"}),
+            "reset_project_to_remote": rec("reset_remote"),
+            "validate_project": rec("validate", {"errors": []}),
+            "run_lookml_test": rec("test", [{"test_name": "t1", "success": True}]),
+        },
+    )
+    assert res_dt_fast["passed"] is True
+    assert [c[0] for c in calls] == ["git_branch", "test"]
+
+    # data-tests standalone "Re-run failed jobs" after dev workspace moved: re-syncs branch
+    calls.clear()
+    res_dt_rerun = _run_monty(
+        SCRIPTS_DIR / "validate_and_commit_branch.py",
+        {"project_id": "agentic-thelook", "branch_name": "b1", "head_sha": "sha_b1", "skip_validate": "true"},
+        {
+            "git_branch": rec("git_branch", {"name": "other_branch", "ref": "sha_other"}),
+            "reset_project_to_remote": rec("reset_remote"),
+            "project": rec("project", {"git_production_branch_name": "main"}),
+            "update_git_branch": rec("update_branch"),
+            "validate_project": rec("validate", {"errors": []}),
+            "run_lookml_test": rec("test", [{"test_name": "t1", "success": True}]),
+        },
+    )
+    assert res_dt_rerun["passed"] is True
+    assert [c[0] for c in calls] == ["git_branch", "reset_remote", "project", "update_branch", "reset_remote", "test"]
+
+    # query-parity branch-sync only mode (skip_validate="true" + skip_tests="true"): re-syncs branch without running checks
+    calls.clear()
+    res_sync_only = _run_monty(
+        SCRIPTS_DIR / "validate_and_commit_branch.py",
+        {
+            "project_id": "agentic-thelook",
+            "branch_name": "b1",
+            "head_sha": "sha_b1",
+            "skip_validate": "true",
+            "skip_tests": "true",
+        },
+        {
+            "git_branch": rec("git_branch", {"name": "other_branch", "ref": "sha_other"}),
+            "reset_project_to_remote": rec("reset_remote"),
+            "project": rec("project", {"git_production_branch_name": "main"}),
+            "update_git_branch": rec("update_branch"),
+            "validate_project": rec("validate", {"errors": []}),
+            "run_lookml_test": rec("test", []),
+        },
+    )
+    assert res_sync_only["passed"] is True
+    assert [c[0] for c in calls] == ["git_branch", "reset_remote", "project", "update_branch", "reset_remote"]
 

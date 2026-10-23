@@ -31,7 +31,7 @@ flowchart TD
 ## Setup checklist
 
 1. Ask the user directly for `PROJECT_ID` (and `BASE_URL` if not already set in `.env` or environment variables). Do not search the local workspace or query Looker to guess projects unless the user asks to see a list.
-2. Run [scripts/setup_repo.sh](../../scripts/setup_repo.sh) to install or verify `uv`, `lkr-dev-cli[tools,code-mode,parse]`, `gh`, `jq`, companion skills in `.agents/skills/`, `.github/workflows/lookml-pr-checks.yml` (copied from [examples/lookml-pr-checks.yml](../../examples/lookml-pr-checks.yml)), and `.gitignore` entries (`.env`, `data/`, `tmp/`):
+2. Run [scripts/setup_repo.sh](../../scripts/setup_repo.sh) to install or verify `uv`, `lkr-dev-cli[tools,code-mode,parse]`, `gh`, `jq`, companion skills in `.agents/skills/`, `.github/workflows/lookml-pr-checks.yml` (synced from [examples/lookml-pr-checks.yml](../../examples/lookml-pr-checks.yml) with four granular jobs—offline `snapshots`, `validator`, `data-tests`, and `query-parity`—so failed warehouse checks can be retried individually via **"Re-run failed jobs"**), and `.gitignore` entries (`.env`, `data/`, `tmp/`):
    ```bash
    bash .agents/skills/agentic-lookml-workflow/scripts/setup_repo.sh
    ```
@@ -76,7 +76,7 @@ flowchart TD
      --var project_id="$PROJECT_ID" \
      -c 'deploy_to_production(project_id=project_id)'
    ```
-7. Verify that the GitHub repository has the required Actions secrets and variables configured for `.github/workflows/lookml-pr-checks.yml` (`LOOKERSDK_BASE_URL`, `LOOKERSDK_CLIENT_ID`, `LOOKERSDK_CLIENT_SECRET`, and `LOOKER_PROJECT_NAME`, plus optional `LOOKML_REVIEWERS`). Secret bootstrapping from local environment variables or `.env` is strictly opt-in during one-time repository setup (`bash .agents/skills/agentic-lookml-workflow/scripts/setup_repo.sh --sync-secrets`) and never runs automatically during PR creation:
+7. Verify that the GitHub repository has the required Actions secrets and variables configured for the live Looker jobs (`validator`, `data-tests`, and `query-parity`) in `.github/workflows/lookml-pr-checks.yml` (`LOOKERSDK_BASE_URL`, `LOOKERSDK_CLIENT_ID`, `LOOKERSDK_CLIENT_SECRET`, and `LOOKER_PROJECT_NAME`, plus optional `LOOKML_REVIEWERS`; the static `snapshots` job runs offline without Looker secrets). Secret bootstrapping from local environment variables or `.env` is strictly opt-in during one-time repository setup (`bash .agents/skills/agentic-lookml-workflow/scripts/setup_repo.sh --sync-secrets`) and never runs automatically during PR creation:
    ```bash
    gh secret list
    gh variable list
