@@ -18,49 +18,52 @@ concurrency:
   group: looker-dev-${{ vars.LOOKER_PROJECT_NAME || github.repository }}
   cancel-in-progress: false
 
+env:
+  BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref }}
+  BRANCH_NAME: ${{ github.head_ref || github.event.pull_request.head.ref || github.ref_name }}
+  HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  PR_NUMBER: ${{ github.event.pull_request.number }}
+
 jobs:
-  lookml-checks:
-    name: LookML Snapshots, Validator, Data Tests & Query Parity
+  snapshots:
+    name: LookML Snapshots (Additive vs Breaking)
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: latest
-
-      - name: Install lkr-dev-cli
-        run: |
-          uv tool install "lkr-dev-cli[tools,code-mode,parse]"
-          if ! lkr parse lookml snapshot --help 2>&1 | grep -q -- "--allow-additions"; then
-            uv tool install --force "lkr-dev-cli[tools,code-mode,parse] @ git+https://github.com/lkrdev/cli.git"
-          fi
-
-      - name: Check LookML Snapshots (Additive vs Material Changes)
-        id: snapshots
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          LOOKML_REVIEWERS: ${{ vars.LOOKML_REVIEWERS }}
+      - name: Locate LookML files
+        id: check
         run: |
           LOOKML_DIR=$(find ./data -mindepth 2 -maxdepth 2 -type d -name "lookml" 2>/dev/null | head -n 1 || true)
-          if [[ -z "$LOOKML_DIR" ]]; then
-            LOOKML_DIR="."
-          fi
+          LOOKML_DIR="${LOOKML_DIR:-.}"
           if ! find "$LOOKML_DIR" -name "*.lkml" 2>/dev/null | grep -q .; then
-            echo "No LookML (.lkml) files found in $LOOKML_DIR, skipping snapshot check."
             echo "has_lookml=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "has_lookml=true" >> "$GITHUB_OUTPUT"
+          printf 'has_lookml=true\nlookml_dir=%s\n' "$LOOKML_DIR" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@v7
+        if: steps.check.outputs.has_lookml == 'true'
+
+      - name: Install lkr-dev-cli
+        if: steps.check.outputs.has_lookml == 'true'
+        run: |
+          uv tool install "lkr-dev-cli[parse]"
+          if ! lkr parse lookml snapshot --help 2>&1 | grep -q -- "--allow-additions"; then
+            uv tool install --force "lkr-dev-cli[parse] @ git+https://github.com/lkrdev/cli.git"
+          fi
+
+      - name: Check LookML Snapshots (Additive vs Material Changes)
+        if: steps.check.outputs.has_lookml == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LOOKML_DIR: ${{ steps.check.outputs.lookml_dir }}
+          LOOKML_REVIEWERS: ${{ vars.LOOKML_REVIEWERS }}
+        run: |
           lkr parse lookml-to-api --path "$LOOKML_DIR" --validate >/dev/null
 
           BASE_ARGS=()
@@ -124,41 +127,112 @@ jobs:
           echo "::error::Material LookML snapshot changes detected (modified or removed assert, test field, connection, measure label, access control, or manifest). Approval from required CODEOWNERS (${CODEOWNERS_REQ:-human reviewer}) is required."
           exit 1
 
+  validator:
+    name: LookML Project Validator
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      has_lookml: ${{ steps.check.outputs.has_lookml }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Locate LookML files
+        id: check
+        run: |
+          LOOKML_DIR=$(find ./data -mindepth 2 -maxdepth 2 -type d -name "lookml" 2>/dev/null | head -n 1 || true)
+          if find "${LOOKML_DIR:-.}" -name "*.lkml" 2>/dev/null | grep -q .; then
+            echo "has_lookml=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_lookml=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: astral-sh/setup-uv@v7
+        if: steps.check.outputs.has_lookml == 'true'
+
+      - name: Install lkr-dev-cli
+        if: steps.check.outputs.has_lookml == 'true'
+        run: uv tool install "lkr-dev-cli[tools,code-mode]"
+
       - name: Authenticate Looker API
-        if: steps.snapshots.outputs.has_lookml == 'true'
+        if: steps.check.outputs.has_lookml == 'true'
         env:
           LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
           LOOKERSDK_CLIENT_ID: ${{ secrets.LOOKERSDK_CLIENT_ID }}
           LOOKERSDK_CLIENT_SECRET: ${{ secrets.LOOKERSDK_CLIENT_SECRET }}
-        run: |
-          lkr --base-url="$LOOKERSDK_BASE_URL" --client-id="$LOOKERSDK_CLIENT_ID" --client-secret="$LOOKERSDK_CLIENT_SECRET" --dev auth add-access-token
+        run: lkr --base-url="$LOOKERSDK_BASE_URL" --client-id="$LOOKERSDK_CLIENT_ID" --client-secret="$LOOKERSDK_CLIENT_SECRET" --dev auth add-access-token
 
-      - name: Run LookML Validator & Data Tests
-        if: steps.snapshots.outputs.has_lookml == 'true'
+      - name: Run LookML Validator
+        if: steps.check.outputs.has_lookml == 'true'
         env:
           LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
           PROJECT_ID: ${{ secrets.LOOKER_PROJECT_NAME || vars.LOOKER_PROJECT_NAME }}
-          BRANCH_NAME: ${{ github.head_ref || github.event.pull_request.head.ref || github.ref_name }}
         run: |
           SCRIPT_DIR=".agents/skills/agentic-lookml-workflow/scripts"
           [[ ! -d "$SCRIPT_DIR" ]] && SCRIPT_DIR="skills/agentic-lookml-workflow/scripts"
           OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox \
             --file="$SCRIPT_DIR/validate_and_commit_branch.py" \
             --var project_id="$PROJECT_ID" \
-            --var branch_name="$BRANCH_NAME")
+            --var branch_name="$BRANCH_NAME" \
+            --var skip_tests="true")
           echo "$OUT"
           echo "$OUT" | sed -n '/^{/,$p' | jq -e '.passed == true' >/dev/null
 
-      - name: Verify Query Parity (SQL Runner vs Looker Inline Query)
-        if: steps.snapshots.outputs.has_lookml == 'true'
+  data-tests:
+    name: LookML Data Tests
+    needs: [validator]
+    if: needs.validator.outputs.has_lookml == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Install lkr-dev-cli
+        run: uv tool install "lkr-dev-cli[tools,code-mode]"
+
+      - name: Authenticate Looker API
+        env:
+          LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
+          LOOKERSDK_CLIENT_ID: ${{ secrets.LOOKERSDK_CLIENT_ID }}
+          LOOKERSDK_CLIENT_SECRET: ${{ secrets.LOOKERSDK_CLIENT_SECRET }}
+        run: lkr --base-url="$LOOKERSDK_BASE_URL" --client-id="$LOOKERSDK_CLIENT_ID" --client-secret="$LOOKERSDK_CLIENT_SECRET" --dev auth add-access-token
+
+      - name: Run LookML Data Tests
+        env:
+          LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
+          PROJECT_ID: ${{ secrets.LOOKER_PROJECT_NAME || vars.LOOKER_PROJECT_NAME }}
+        run: |
+          SCRIPT_DIR=".agents/skills/agentic-lookml-workflow/scripts"
+          [[ ! -d "$SCRIPT_DIR" ]] && SCRIPT_DIR="skills/agentic-lookml-workflow/scripts"
+          OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox \
+            --file="$SCRIPT_DIR/validate_and_commit_branch.py" \
+            --var project_id="$PROJECT_ID" \
+            --var branch_name="$BRANCH_NAME" \
+            --var head_sha="$HEAD_SHA" \
+            --var skip_validate="true")
+          echo "$OUT"
+          echo "$OUT" | sed -n '/^{/,$p' | jq -e '.passed == true' >/dev/null
+
+  query-parity:
+    name: SQL-to-LookML Query Parity Gate
+    needs: [validator]
+    if: needs.validator.outputs.has_lookml == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve Query Parity Payload
+        id: payload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
         run: |
           DATA_FILE=$(find ./data -name "data.json" 2>/dev/null | head -n 1 || true)
           if [[ -n "$DATA_FILE" && -f "$DATA_FILE" ]]; then
-            DATA_PAYLOAD=$(cat "$DATA_FILE")
+            cp "$DATA_FILE" /tmp/data_payload.json
           elif [[ -n "$PR_NUMBER" ]]; then
             PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body' 2>/dev/null || true)
             DATA_PAYLOAD=$(echo "$PR_BODY" \
@@ -169,17 +243,47 @@ jobs:
                 DATA_PAYLOAD=$(gh api "gists/$GIST_ID" | jq -r '.files["data.json"].content // empty' || true)
               fi
             fi
-          else
-            DATA_PAYLOAD=""
+            [[ -n "$DATA_PAYLOAD" ]] && printf '%s' "$DATA_PAYLOAD" > /tmp/data_payload.json
           fi
-          if [[ -z "$DATA_PAYLOAD" ]]; then
+          if [[ ! -s /tmp/data_payload.json ]]; then
             echo "No data.json session payload found on disk or in PR description, skipping query parity check."
+            echo "has_payload=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "has_payload=true" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@v7
+        if: steps.payload.outputs.has_payload == 'true'
+
+      - name: Install lkr-dev-cli
+        if: steps.payload.outputs.has_payload == 'true'
+        run: uv tool install "lkr-dev-cli[tools,code-mode]"
+
+      - name: Authenticate Looker API
+        if: steps.payload.outputs.has_payload == 'true'
+        env:
+          LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
+          LOOKERSDK_CLIENT_ID: ${{ secrets.LOOKERSDK_CLIENT_ID }}
+          LOOKERSDK_CLIENT_SECRET: ${{ secrets.LOOKERSDK_CLIENT_SECRET }}
+        run: lkr --base-url="$LOOKERSDK_BASE_URL" --client-id="$LOOKERSDK_CLIENT_ID" --client-secret="$LOOKERSDK_CLIENT_SECRET" --dev auth add-access-token
+
+      - name: Verify Query Parity (SQL Runner vs Looker Inline Query)
+        if: steps.payload.outputs.has_payload == 'true'
+        env:
+          LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
+          PROJECT_ID: ${{ secrets.LOOKER_PROJECT_NAME || vars.LOOKER_PROJECT_NAME }}
+        run: |
           SCRIPT_DIR=".agents/skills/agentic-lookml-workflow/scripts"
           [[ ! -d "$SCRIPT_DIR" ]] && SCRIPT_DIR="skills/agentic-lookml-workflow/scripts"
+          lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox \
+            --file="$SCRIPT_DIR/validate_and_commit_branch.py" \
+            --var project_id="$PROJECT_ID" \
+            --var branch_name="$BRANCH_NAME" \
+            --var head_sha="$HEAD_SHA" \
+            --var skip_validate="true" \
+            --var skip_tests="true" >/dev/null
           OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox \
             --file="$SCRIPT_DIR/pre_gate.py" \
-            --var data_json="$DATA_PAYLOAD")
+            --var data_json="$(cat /tmp/data_payload.json)")
           echo "$OUT"
           echo "$OUT" | sed -n '/^{/,$p' | jq -e '.passed == true' >/dev/null

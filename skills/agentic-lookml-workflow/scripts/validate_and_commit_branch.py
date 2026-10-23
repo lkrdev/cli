@@ -2,16 +2,22 @@
 """Validate LookML project, run targeted LookML data tests, and optionally commit to the active Looker branch."""
 
 
-def _try_reset(reset_fn, p_id: str) -> bool:
+def _try_call(fn, **kw):
     try:
-        reset_fn(project_id=p_id)
+        return fn(**kw)
     except Exception:  # noqa: BLE001  # Monty sandbox maps host SDKError to base Exception
         return False
-    return True
 
 
-def _sync_remote_branch(p_id: str, b_name: str) -> None:
-    if not _try_reset(reset_project_to_remote, p_id) and not _try_reset(reset_project_to_production, p_id):  # ty: ignore[unresolved-reference]
+def _sync_remote_branch(p_id: str, b_name: str, h_sha: str = "") -> None:
+    if h_sha:
+        cur = _try_call(git_branch, project_id=p_id) or {}  # ty: ignore[unresolved-reference]
+        if isinstance(cur, dict) and cur.get("name") == b_name and cur.get("ref") == h_sha:
+            return
+    if (
+        _try_call(reset_project_to_remote, project_id=p_id) is False  # ty: ignore[unresolved-reference]
+        and _try_call(reset_project_to_production, project_id=p_id) is False  # ty: ignore[unresolved-reference]
+    ):
         create_developer_copy(project_id=p_id)  # ty: ignore[unresolved-reference]
         reset_project_to_production(project_id=p_id)  # ty: ignore[unresolved-reference]
     proj = project(project_id=p_id) or {}  # ty: ignore[unresolved-reference]
@@ -36,6 +42,10 @@ def main():
     except NameError:
         b_name = ""
     try:
+        h_sha = str(head_sha).strip() if head_sha is not None else ""  # ty: ignore[unresolved-reference]
+    except NameError:
+        h_sha = ""
+    try:
         t_names = [x.strip() for x in str(test_names).split(",") if x.strip()] if test_names is not None else []  # ty: ignore[unresolved-reference]
     except NameError:
         t_names = []
@@ -44,14 +54,18 @@ def main():
     except NameError:
         f_ids = []
     try:
+        s_val = str(skip_validate).lower() in ("true", "1", "yes")  # ty: ignore[unresolved-reference]
+    except NameError:
+        s_val = False
+    try:
         s_tests = str(skip_tests).lower() in ("true", "1", "yes")  # ty: ignore[unresolved-reference]
     except NameError:
         s_tests = False
 
     if b_name and not c_msg:
-        _sync_remote_branch(p_id, b_name)
+        _sync_remote_branch(p_id, b_name, h_sha)
 
-    val = validate_project(project_id=p_id) or {}  # ty: ignore[unresolved-reference]
+    val = ({} if s_val else validate_project(project_id=p_id)) or {}  # ty: ignore[unresolved-reference]
     errors = [
         e for e in (val.get("errors") or []) if e.get("severity", "error") in ("error", "fatal", "")
     ]
