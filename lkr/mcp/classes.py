@@ -95,6 +95,7 @@ class Row(Table):
     def exists(self, conn: duckdb.DuckDBPyConnection, *, base_url: str) -> bool:
         path_sql = sql_posix_path(get_database_search_file(base_url))
         columns = conn.execute(
-            f"SELECT * FROM read_json_auto('{path_sql}') WHERE fully_qualified_name = '{self.fully_qualified_name}'"
+            f"SELECT * FROM read_json_auto('{path_sql}') WHERE fully_qualified_name = ?",
+            (self.fully_qualified_name,),
         ).fetchall()
         return len(columns) > 0
