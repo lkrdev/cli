@@ -653,6 +653,8 @@ def test_init_branch_pre_generates_only_missing_bronze_views_before_pull():
 
 
 def test_validate_and_commit_branch_checks_out_pr_branch_and_workflow_serializes():
+    from looker_sdk.error import SDKError
+
     calls: list[tuple[str, Any]] = []
 
     def rec(name: str, ret: Any = None, fail_first: bool = False):
@@ -663,7 +665,7 @@ def test_validate_and_commit_branch_checks_out_pr_branch_and_workflow_serializes
             seen += 1
             calls.append((name, kw))
             if fail_first and seen == 1:
-                raise RuntimeError("dirty workspace")
+                raise SDKError("dirty workspace")
             return ret
 
         return _fn

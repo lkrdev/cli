@@ -1,5 +1,25 @@
-# ruff: noqa: F821, BLE001
+# ruff: noqa: F821
 """Validate LookML project, run targeted LookML data tests, and optionally commit to the active Looker branch."""
+
+
+def _try_reset(reset_fn, p_id: str) -> bool:
+    try:
+        reset_fn(project_id=p_id)
+    except Exception:  # noqa: BLE001  # Monty sandbox maps host SDKError to base Exception
+        return False
+    return True
+
+
+def _sync_remote_branch(p_id: str, b_name: str) -> None:
+    if not _try_reset(reset_project_to_remote, p_id) and not _try_reset(reset_project_to_production, p_id):  # ty: ignore[unresolved-reference]
+        create_developer_copy(project_id=p_id)  # ty: ignore[unresolved-reference]
+        reset_project_to_production(project_id=p_id)  # ty: ignore[unresolved-reference]
+    proj = project(project_id=p_id) or {}  # ty: ignore[unresolved-reference]
+    if b_name == (proj.get("git_production_branch_name") or "main"):
+        reset_project_to_production(project_id=p_id)  # ty: ignore[unresolved-reference]
+    else:
+        update_git_branch(project_id=p_id, body={"name": b_name})  # ty: ignore[unresolved-reference]
+        reset_project_to_remote(project_id=p_id)  # ty: ignore[unresolved-reference]
 
 
 def main():
@@ -29,20 +49,7 @@ def main():
         s_tests = False
 
     if b_name and not c_msg:
-        try:
-            reset_project_to_remote(project_id=p_id)  # ty: ignore[unresolved-reference]
-        except Exception:
-            try:
-                reset_project_to_production(project_id=p_id)  # ty: ignore[unresolved-reference]
-            except Exception:
-                create_developer_copy(project_id=p_id)  # ty: ignore[unresolved-reference]
-                reset_project_to_production(project_id=p_id)  # ty: ignore[unresolved-reference]
-        proj = project(project_id=p_id) or {}  # ty: ignore[unresolved-reference]
-        if b_name == (proj.get("git_production_branch_name") or "main"):
-            reset_project_to_production(project_id=p_id)  # ty: ignore[unresolved-reference]
-        else:
-            update_git_branch(project_id=p_id, body={"name": b_name})  # ty: ignore[unresolved-reference]
-            reset_project_to_remote(project_id=p_id)  # ty: ignore[unresolved-reference]
+        _sync_remote_branch(p_id, b_name)
 
     val = validate_project(project_id=p_id) or {}  # ty: ignore[unresolved-reference]
     errors = [
