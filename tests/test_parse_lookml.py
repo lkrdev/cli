@@ -3154,3 +3154,151 @@ def test_lookml_to_api_alias_expansion_and_collision_validation(tmp_path: Path):
     assert by_alias["orders.rev"]["fields"] == ["orders.rev_a", "orders.rev_b"]
 
 
+def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
+    from typer.testing import CliRunner
+
+    from lkr.main import app
+    from lkr.parse import lookml_to_lookml_model_explore, parse_sql_to_lookml
+
+    runner = CliRunner()
+    lkml = """
+    view: orders {
+      sql_table_name: `bigquery-public-data.thelook_ecommerce.orders` ;;
+      dimension: order_id {
+        primary_key: yes
+        type: number
+        sql: ${TABLE}.order_id ;;
+      }
+      dimension: num_of_item {
+        type: number
+        sql: ${TABLE}.num_of_item ;;
+      }
+      dimension: shipped_at {
+        type: string
+        sql: ${TABLE}.shipped_at ;;
+      }
+      measure: count {
+        type: count
+      }
+      measure: p99_items {
+        type: percentile
+        percentile: 99
+        sql: ${num_of_item} ;;
+      }
+      measure: approx_buyers {
+        type: number
+        sql: APPROX_COUNT_DISTINCT(${order_id}) ;;
+      }
+      measure: _num_of_item_sum {
+        hidden: yes
+        type: sum
+        sql: ${num_of_item} ;;
+      }
+      measure: _num_of_item_sum_of_squares {
+        hidden: yes
+        type: sum
+        sql: POWER(${num_of_item}, 2) ;;
+      }
+      measure: stddev_items {
+        type: number
+        sql: SQRT(GREATEST(${_num_of_item_sum_of_squares} - (POWER(${_num_of_item_sum}, 2) / NULLIF(${count}, 0)), 0) / NULLIF(${count} - 1, 0)) ;;
+      }
+    }
+    view: order_items {
+      sql_table_name: `bigquery-public-data.thelook_ecommerce.order_items` ;;
+      dimension: id {
+        primary_key: yes
+        type: number
+        sql: ${TABLE}.id ;;
+      }
+      dimension: order_id {
+        type: number
+        sql: ${TABLE}.order_id ;;
+      }
+      dimension: status {
+        type: string
+        sql: ${TABLE}.status ;;
+      }
+      measure: count {
+        type: count
+      }
+    }
+    explore: orders {
+      join: order_items {
+        type: left_outer
+        relationship: one_to_many
+        sql_on: ${orders.order_id} = ${order_items.order_id} ;;
+      }
+      query: order_volume_by_basket_size {
+        dimensions: [orders.num_of_item]
+        measures: [orders.count]
+      }
+      query: orders_by_item_status {
+        dimensions: [order_items.status]
+        measures: [orders.count]
+      }
+    }
+    """
+    (tmp_path / "shop.model.lkml").write_text('connection: "bq"\n' + lkml, encoding="utf-8")
+
+    # 1. COUNT(pk) -> exact coverage on orders.count without requiring orders.order_id dimension
+    r_pk = parse_sql_to_lookml(
+        sql="SELECT num_of_item AS basket_size, COUNT(order_id) AS orders_at_this_size FROM `bigquery-public-data.thelook_ecommerce.orders` GROUP BY 1",
+        path=tmp_path,
+    )
+    eq_pk = next(q for q in r_pk.queries[0].explore_queries if q.query_name == "order_volume_by_basket_size")
+    assert eq_pk.coverage == "exact"
+    assert eq_pk.unmatched_explore_query_fields == []
+    assert eq_pk.missing_query_fields == []
+
+    # 2. COUNT(DISTINCT o.order_id) across join -> exact coverage scoped to orders.count
+    r_dist = parse_sql_to_lookml(
+        sql="SELECT oi.status, COUNT(DISTINCT o.order_id) FROM `bigquery-public-data.thelook_ecommerce.order_items` oi JOIN `bigquery-public-data.thelook_ecommerce.orders` o ON oi.order_id = o.order_id GROUP BY 1",
+        path=tmp_path,
+    )
+    eq_dist = next(q for q in r_dist.queries[0].explore_queries if q.query_name == "orders_by_item_status")
+    assert eq_dist.coverage == "exact"
+    assert eq_dist.missing_query_fields == []
+
+    # 3. pk used outside COUNT(...) -> orders.order_id still required
+    r_outside = parse_sql_to_lookml(
+        sql="SELECT num_of_item, COUNT(order_id) FROM `bigquery-public-data.thelook_ecommerce.orders` WHERE order_id > 100 GROUP BY 1",
+        path=tmp_path,
+    )
+    eq_out = next(q for q in r_outside.queries[0].explore_queries if q.query_name == "order_volume_by_basket_size")
+    assert eq_out.coverage == "partial_overlap"
+    assert eq_out.missing_query_fields == ["orders.order_id"]
+
+    # 4. COUNT(non_pk_col) -> does not map to unfiltered orders.count
+    r_non_pk = parse_sql_to_lookml(
+        sql="SELECT COUNT(shipped_at) FROM `bigquery-public-data.thelook_ecommerce.orders`",
+        path=tmp_path,
+    )
+    assert ("count", "measure") not in {(f.field_name, f.field_type) for f in r_non_pk.queries[0].views[0].fields}
+
+    # 5. Clean symmetric STDDEV + native percentile + APPROX_COUNT_DISTINCT pass --validate
+    assert runner.invoke(app, ["parse", "lookml-to-api", "--path", str(tmp_path), "--validate"]).exit_code == 0
+
+    # 6. Raw SQL percentile/stddev/variance in type: number fail --validate
+    bad_lkml = """
+    view: v {
+      sql_table_name: t ;;
+      dimension: x { type: number sql: ${TABLE}.x ;; }
+      measure: m_std { type: number sql: STDDEV(${x}) ;; }
+      measure: m_var { type: number sql: VAR_POP(${x}) ;; }
+      measure: m_pct { type: number sql: PERCENTILE_CONT(${x}, 0.99) OVER() ;; }
+      measure: m_pdisc { type: number sql: PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY ${x}) ;; }
+      measure: m_approx { type: number sql: APPROX_QUANTILES(${x}, 100)[OFFSET(99)] ;; }
+      measure: m_med { type: number sql: MEDIAN(${x}) ;; }
+    }
+    explore: v {}
+    """
+    (tmp_path / "bad.model.lkml").write_text('connection: "bq"\n' + bad_lkml, encoding="utf-8")
+    bad_exp = lookml_to_lookml_model_explore("bad", "v", path=tmp_path)
+    assert bad_exp.errors is not None
+    flagged = {e["field"]: e["functions"] for e in bad_exp.errors if e["type"] == "raw_sql_aggregate"}
+    assert set(flagged) == {"v.m_std", "v.m_var", "v.m_pct", "v.m_pdisc", "v.m_approx", "v.m_med"}
+    assert runner.invoke(app, ["parse", "lookml-to-api", "--path", str(tmp_path), "-m", "bad", "--validate"]).exit_code == 1
+
+
+

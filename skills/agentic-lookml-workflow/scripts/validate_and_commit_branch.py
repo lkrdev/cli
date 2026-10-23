@@ -2,6 +2,26 @@
 """Validate LookML project, run targeted LookML data tests, and optionally commit to the active Looker branch."""
 
 
+def _try_reset(reset_fn, p_id: str) -> bool:
+    try:
+        reset_fn(project_id=p_id)
+    except Exception:  # noqa: BLE001  # Monty sandbox maps host SDKError to base Exception
+        return False
+    return True
+
+
+def _sync_remote_branch(p_id: str, b_name: str) -> None:
+    if not _try_reset(reset_project_to_remote, p_id) and not _try_reset(reset_project_to_production, p_id):  # ty: ignore[unresolved-reference]
+        create_developer_copy(project_id=p_id)  # ty: ignore[unresolved-reference]
+        reset_project_to_production(project_id=p_id)  # ty: ignore[unresolved-reference]
+    proj = project(project_id=p_id) or {}  # ty: ignore[unresolved-reference]
+    if b_name == (proj.get("git_production_branch_name") or "main"):
+        reset_project_to_production(project_id=p_id)  # ty: ignore[unresolved-reference]
+    else:
+        update_git_branch(project_id=p_id, body={"name": b_name})  # ty: ignore[unresolved-reference]
+        reset_project_to_remote(project_id=p_id)  # ty: ignore[unresolved-reference]
+
+
 def main():
     try:
         p_id = str(project_id)  # ty: ignore[unresolved-reference]
@@ -11,6 +31,10 @@ def main():
         c_msg = str(commit_message)  # ty: ignore[unresolved-reference]
     except NameError:
         c_msg = ""
+    try:
+        b_name = str(branch_name).strip() if branch_name is not None else ""  # ty: ignore[unresolved-reference]
+    except NameError:
+        b_name = ""
     try:
         t_names = [x.strip() for x in str(test_names).split(",") if x.strip()] if test_names is not None else []  # ty: ignore[unresolved-reference]
     except NameError:
@@ -23,6 +47,9 @@ def main():
         s_tests = str(skip_tests).lower() in ("true", "1", "yes")  # ty: ignore[unresolved-reference]
     except NameError:
         s_tests = False
+
+    if b_name and not c_msg:
+        _sync_remote_branch(p_id, b_name)
 
     val = validate_project(project_id=p_id) or {}  # ty: ignore[unresolved-reference]
     errors = [

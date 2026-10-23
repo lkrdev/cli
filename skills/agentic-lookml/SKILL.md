@@ -47,7 +47,7 @@ Each SQL query analyzed by `lkr parse sql-lookml-compare` can match one or multi
 | 13 | `large_tables_and_partitioning` | [13-large-tables-and-partitioning.md](references/13-large-tables-and-partitioning.md) | Partitioned/clustered tables, non-SARGable date wrappers (`DATE(ts)`), `APPROX_COUNT_DISTINCT` | `bronze/` (actual column `dimension_group`, partition min date/clustering descriptions in refinement, `always_filter:` in base explore) + `silver/explores/` (`extends: [base]`) + `gold/explores/` (`aggregate_table`) |
 | 14 | `templated_filters_and_parameters` | [14-templated-filters-and-parameters.md](references/14-templated-filters-and-parameters.md) | Runtime filters required inside inner subqueries/cohorts (`{% condition %}`, `{% parameter %}`) | Strictly `gold/` and `gold/explores/` (`tags: ["gold"]`) paired with mandatory `always_filter:` |
 
-For every SQL query—including `simple_single_table` queries without `CASE WHEN`—also apply [measures-and-sql-functions.md](references/measures-and-sql-functions.md) to evaluate outer SQL wrappers (`ROUND`, `COALESCE`, `100.0 *`, `COUNT(col)`), `value_format_name` vs. SQL rounding, and `WHERE` predicates vs. intrinsic measure `filters:`.
+For every SQL query—including `simple_single_table` queries without `CASE WHEN`—also apply [measures-and-sql-functions.md](references/measures-and-sql-functions.md) to evaluate outer SQL wrappers (`ROUND`, `COALESCE`, `100.0 *`, `COUNT(col)`), native `type: percentile` / `type: median` and symmetric `STDDEV` / `VARIANCE` intermediate measures, `value_format_name` vs. SQL rounding, and `WHERE` predicates vs. intrinsic measure `filters:`.
 
 ### LookML writing reference skills (`looker-open-source/looker-skills`)
 

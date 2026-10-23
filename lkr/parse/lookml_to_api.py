@@ -4,7 +4,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+import sqlglot
 from pydantic import BaseModel
+from sqlglot import exp
+from sqlglot.errors import SqlglotError
 
 from lkr.parse.constants import (
     _DAYS,
@@ -1301,6 +1304,70 @@ def _find_duplicate_explore_fields(
     return errors
 
 
+_RAW_NUMBER_AGGS = {
+    "PERCENTILE_CONT",
+    "PERCENTILE_DISC",
+    "APPROX_QUANTILES",
+    "MEDIAN",
+    "STDDEV",
+    "STDDEV_SAMP",
+    "STDDEV_POP",
+    "VARIANCE",
+    "VARIANCE_POP",
+    "VAR_SAMP",
+    "VAR_POP",
+}
+
+
+def _find_raw_sql_aggregate_errors(
+    all_meas: list[ApiLookmlModelExploreField],
+) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    for f in all_meas:
+        if f.type != "number" or not f.sql:
+            continue
+        s = re.sub(r"\{%-?\s*(?:elif\b.*?|else)\s*-?%\}", ", ", f.sql, flags=re.DOTALL)
+        s = re.sub(r"\{%.*?%\}|\{\{.*?\}\}", " ", s, flags=re.DOTALL)
+        s = re.sub(r"\$\{\s*TABLE\s*\}\.", "__tbl.", s)
+        s = re.sub(r"\$\{\s*([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s*\}", r"\1.\2", s)
+        s = re.sub(r"\$\{\s*([a-zA-Z0-9_]+)\s*\}", r"__self.\1", s)
+        parsed = None
+        for d in ("bigquery", None):
+            try:
+                parsed = sqlglot.parse_one(f"SELECT {s}", read=d)
+                break
+            except SqlglotError:
+                continue
+        bad_fns = sorted(
+            {
+                name
+                for fn in (parsed.find_all(exp.Func) if parsed else ())
+                if (
+                    name := (
+                        fn.name if isinstance(fn, exp.Anonymous) else fn.sql_name()
+                    ).upper()
+                )
+                in _RAW_NUMBER_AGGS
+            }
+        )
+        if bad_fns:
+            errors.append(
+                {
+                    "type": "raw_sql_aggregate",
+                    "view": f.view,
+                    "field": f.name,
+                    "functions": bad_fns,
+                    "sql": f.sql.strip(),
+                    "message": (
+                        f"Measure '{f.name}' (type='number') calls raw SQL aggregate(s) "
+                        f"{bad_fns} in sql={f.sql.strip()!r}; use native type: percentile / "
+                        "type: median or hidden symmetric-aggregate intermediate measures instead."
+                    ),
+                }
+            )
+    return errors
+
+
 def _build_explore_from_assembled(
     model_name: str,
     model_obj: LookmlModel,
@@ -1571,7 +1638,10 @@ def _build_explore_from_assembled(
                 )
         index_fields = list(dict.fromkeys(index_fields))
 
-    dup_errors = _find_duplicate_explore_fields(all_dims, all_meas, views_by_alias)
+    dup_errors = [
+        *_find_duplicate_explore_fields(all_dims, all_meas, views_by_alias),
+        *_find_raw_sql_aggregate_errors(all_meas),
+    ]
     active_names = {f.name for f in (*all_dims, *all_meas, *all_filts, *all_params)}
     by_q_alias: dict[str, set[str]] = {}
     for a in all_aliases:

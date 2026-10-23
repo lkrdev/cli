@@ -14,6 +14,10 @@ on:
     types: [submitted]
   workflow_dispatch:
 
+concurrency:
+  group: looker-dev-${{ vars.LOOKER_PROJECT_NAME || github.repository }}
+  cancel-in-progress: false
+
 jobs:
   lookml-checks:
     name: LookML Snapshots, Validator, Data Tests & Query Parity
@@ -134,12 +138,14 @@ jobs:
         env:
           LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
           PROJECT_ID: ${{ secrets.LOOKER_PROJECT_NAME || vars.LOOKER_PROJECT_NAME }}
+          BRANCH_NAME: ${{ github.head_ref || github.event.pull_request.head.ref || github.ref_name }}
         run: |
           SCRIPT_DIR=".agents/skills/agentic-lookml-workflow/scripts"
           [[ ! -d "$SCRIPT_DIR" ]] && SCRIPT_DIR="skills/agentic-lookml-workflow/scripts"
           OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox \
             --file="$SCRIPT_DIR/validate_and_commit_branch.py" \
-            --var project_id="$PROJECT_ID")
+            --var project_id="$PROJECT_ID" \
+            --var branch_name="$BRANCH_NAME")
           echo "$OUT"
           echo "$OUT" | sed -n '/^{/,$p' | jq -e '.passed == true' >/dev/null
 
