@@ -5,7 +5,7 @@ from typing import Annotated, Any
 import duckdb
 from pydantic import BaseModel, Field, computed_field
 
-from lkr.mcp.utils import get_database_search_file
+from lkr.mcp.utils import get_database_search_file, sql_posix_path
 from lkr.observability.classes import now
 
 
@@ -89,11 +89,13 @@ class Row(Table):
         return f"{self.connection}.{self.database}.{self.database_schema_name}.{self.database_table_name}.{self.database_column_name}"
 
     def append(self, base_url: str) -> None:
-        with open(get_database_search_file(base_url), "a") as f:
+        with open(get_database_search_file(base_url), "a", encoding="utf-8") as f:
             f.write(self.model_dump_json() + "\n")
 
     def exists(self, conn: duckdb.DuckDBPyConnection, *, base_url: str) -> bool:
+        path_sql = sql_posix_path(get_database_search_file(base_url))
         columns = conn.execute(
-            f"SELECT * FROM read_json_auto('{get_database_search_file(base_url)}') WHERE fully_qualified_name = '{self.fully_qualified_name}'"
+            f"SELECT * FROM read_json_auto('{path_sql}') WHERE fully_qualified_name = ?",
+            (self.fully_qualified_name,),
         ).fetchall()
         return len(columns) > 0

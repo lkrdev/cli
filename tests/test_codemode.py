@@ -307,7 +307,7 @@ def test_cli_code_mode_sandbox_sdk_code():
     assert "Test" in result.stdout
 
 def test_cli_code_mode_sandbox_file():
-    with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False) as f:
         f.write("return me()")
         temp_path = f.name
         

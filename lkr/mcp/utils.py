@@ -1,5 +1,6 @@
 # server.py
 import os
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -8,6 +9,14 @@ from typing import Literal
 from lkr.logger import logger
 
 db_loc: Path | None = None
+
+
+def _safe_prefix(prefix: str) -> str:
+    return re.sub(r'[<>:"/\\|?*]+', "_", prefix) + "." if prefix else ""
+
+
+def sql_posix_path(path: Path) -> str:
+    return path.as_posix().replace("'", "''")
 
 
 def get_db_loc() -> Path:
@@ -20,7 +29,7 @@ def get_db_loc() -> Path:
 
 
 def get_database_search_file(prefix: str = "") -> Path:
-    p = get_db_loc() / f"{prefix + '.' if prefix else ''}looker_connection_search.jsonl"
+    p = get_db_loc() / f"{_safe_prefix(prefix)}looker_connection_search.jsonl"
     if not p.exists():
         p.touch()
     return p
@@ -31,7 +40,7 @@ def get_connection_registry_file(
 ) -> Path:
     return (
         get_db_loc()
-        / f"{prefix + '.' if prefix else ''}looker_connection_registry.{type}.jsonl"
+        / f"{_safe_prefix(prefix)}looker_connection_registry.{type}.jsonl"
     )
 
 

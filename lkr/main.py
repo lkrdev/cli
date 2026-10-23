@@ -1,7 +1,15 @@
 import os
+import sys
 from typing import Annotated
 
 import typer
+
+if os.name == "nt":
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure") and getattr(
+            _stream, "encoding", ""
+        ).lower() not in ("utf-8", "utf8"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
 
 from lkr.auth.main import group as auth_group
 from lkr.classes import LkrCtxObj

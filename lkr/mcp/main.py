@@ -32,6 +32,7 @@ from lkr.mcp.utils import (
     get_connection_registry_file,
     get_database_search_file,
     ok,
+    sql_posix_path,
 )
 
 __all__ = ["group"]
@@ -142,24 +143,20 @@ class ConnectionRegistry(BaseModel):
     prefix: str = ""
 
     def append(self, obj: Connection | Database | Schema | Table) -> None:
+        kind: Literal["table", "schema", "database", "connection"]
         if isinstance(obj, Table):
-            self.tables.add(obj.fully_qualified_name)
-            with open(get_connection_registry_file("table", self.prefix), "a") as f:
-                f.write(obj.model_dump_json() + "\n")
+            kind, target = "table", self.tables
         elif isinstance(obj, Schema):
-            self.schemas.add(obj.fully_qualified_name)
-            with open(get_connection_registry_file("schema", self.prefix), "a") as f:
-                f.write(obj.model_dump_json() + "\n")
+            kind, target = "schema", self.schemas
         elif isinstance(obj, Database):
-            self.databases.add(obj.fully_qualified_name)
-            with open(get_connection_registry_file("database", self.prefix), "a") as f:
-                f.write(obj.model_dump_json() + "\n")
-        elif isinstance(obj, Connection):
-            self.connections.add(obj.fully_qualified_name)
-            with open(
-                get_connection_registry_file("connection", self.prefix), "a"
-            ) as f:
-                f.write(obj.model_dump_json() + "\n")
+            kind, target = "database", self.databases
+        else:
+            kind, target = "connection", self.connections
+        target.add(obj.fully_qualified_name)
+        with open(
+            get_connection_registry_file(kind, self.prefix), "a", encoding="utf-8"
+        ) as f:
+            f.write(obj.model_dump_json() + "\n")
 
     def check(
         self, type: Literal["connection", "database", "schema", "table"], value: str
@@ -178,7 +175,7 @@ class ConnectionRegistry(BaseModel):
     def load_connections(self, dt_filter: datetime | None = None) -> None:
         file = conn_registry_path("connection", self.prefix)
         logger.debug(f"Loading connections from {file}")
-        sql = f"SELECT connection FROM read_json_auto('{file}')"
+        sql = f"SELECT connection FROM read_json_auto('{sql_posix_path(file)}')"
         if dt_filter:
             sql += f" WHERE updated_at > '{dt_filter.isoformat()}'"
         try:
@@ -192,7 +189,7 @@ class ConnectionRegistry(BaseModel):
 
     def load_databases(self, dt_filter: datetime | None = None) -> None:
         file = conn_registry_path("database", self.prefix)
-        sql = f"SELECT connection, database FROM read_json_auto('{file}')"
+        sql = f"SELECT connection, database FROM read_json_auto('{sql_posix_path(file)}')"
         if dt_filter:
             sql += f" WHERE updated_at > '{dt_filter.isoformat()}'"
         try:
@@ -206,7 +203,7 @@ class ConnectionRegistry(BaseModel):
 
     def load_schemas(self, dt_filter: datetime | None = None) -> None:
         file = conn_registry_path("schema", self.prefix)
-        sql = f"SELECT connection, database, database_schema_name FROM read_json_auto('{file}')"
+        sql = f"SELECT connection, database, database_schema_name FROM read_json_auto('{sql_posix_path(file)}')"
         if dt_filter:
             sql += f" WHERE updated_at > '{dt_filter.isoformat()}'"
         try:
@@ -222,7 +219,7 @@ class ConnectionRegistry(BaseModel):
 
     def load_tables(self, dt_filter: datetime | None = None) -> None:
         file = conn_registry_path("table", self.prefix)
-        sql = f"SELECT connection, database, database_schema_name, database_table_name FROM read_json_auto('{file}')"
+        sql = f"SELECT connection, database, database_schema_name, database_table_name FROM read_json_auto('{sql_posix_path(file)}')"
         if dt_filter:
             sql += f" WHERE updated_at > '{dt_filter.isoformat()}'"
         try:
@@ -424,7 +421,7 @@ def load_database_search_file(file_loc: Path) -> None:
         f"""
         CREATE OR REPLACE TABLE looker_connection_search AS
         SELECT *
-        FROM read_json_auto('{file_loc}');
+        FROM read_json_auto('{sql_posix_path(file_loc)}');
         """
     )
 

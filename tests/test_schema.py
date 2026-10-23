@@ -861,6 +861,159 @@ def test_vgr_edge_cases(tmp_path: Path) -> None:
     assert arr_fail_data[1]["valid"] is False
 
 
+def test_py_explore_validator_windows_fallback_and_parity(monkeypatch, tmp_path: Path) -> None:
+    import lkr.mcp.utils as mcp_utils
+    import lkr.schema.validator as val_mod
+    from lkr.schema.validator import _PyExploreValidator
+
+    explore = {
+        "fields": {
+            **MOCK_EXPLORE["fields"],
+            "parameters": [
+                {
+                    "name": "order_items.metric_param",
+                    "parameter": True,
+                    "has_allowed_values": True,
+                    "enumerations": [{"label": "Rev", "value": "rev"}, {"label": "Cnt", "value": "cnt"}],
+                }
+            ],
+        }
+    }
+    schema = build_explore_query_schema("thelook", "order_items", explore)
+    schema_json = json.dumps(schema, sort_keys=True)
+    py_val = _PyExploreValidator(schema_json)
+
+    cases = [
+        # Valid full query with int limit coercion, read-only keys stripped, dynamic_fields, sorts, subtotals
+        {
+            "id": 99,
+            "slug": "ro",
+            "model": "thelook",
+            "view": "order_items",
+            "limit": 100,
+            "fields": ["order_items.status", "order_items.total_sale_price", "cd1", "cm1", "tc1", "tc2"],
+            "pivots": ["order_items.status", "cd1"],
+            "fill_fields": ["order_items.status"],
+            "subtotals": ["order_items.status"],
+            "filters": {
+                "order_items.status": "Complete",
+                "order_items.sale_price": ">=10",
+                "order_items.metric_param": "rev",
+            },
+            "sorts": ["__UNSORTED__", "order_items.status__sort_ asc", "tc1 desc"],
+            "filter_expression": "${order_items.sale_price} > 5 AND ${cd1}",
+            "dynamic_fields": [
+                {"dimension": "cd1", "expression": "${order_items.sale_price} > 20"},
+                {
+                    "measure": "cm1",
+                    "type": "sum",
+                    "based_on": "order_items.sale_price",
+                    "filters": {"order_items.metric_param": "rev"},
+                },
+                {
+                    "table_calculation": "tc1",
+                    "calculation_type": "rank_of_column",
+                    "args": ["order_items.total_sale_price"],
+                    "based_on": "order_items.total_sale_price",
+                },
+                {
+                    "table_calculation": "tc2",
+                    "expression": "${tc1} / ${order_items.total_sale_price:row_total} + ${cm1:total}",
+                },
+            ],
+        },
+        # Warning: column_limit without pivots + JSON-encoded dynamic_fields string
+        {
+            "body": {
+                "model": "thelook",
+                "view": "order_items",
+                "fields": ["order_items.status"],
+                "column_limit": 25,
+                "dynamic_fields": json.dumps([{"dimension": "d_str", "based_on": "order_items.status"}]),
+            }
+        },
+        # Exhaustive invalid branches for coverage and Rust parity
+        "not_an_object",
+        {"body": "not_an_object"},
+        {
+            "unknown_top": 1,
+            "result_format": "bogus_fmt",
+            "body": {
+                "model": "wrong",
+                "view": "wrong",
+                "unknown_body": 1,
+                "fields": [123, "order_items.secret_id"],
+                "pivots": [123, "order_items.total_sale_price", "cm_bad", "unknown.dim"],
+                "filters": {
+                    "unknown.f": "x",
+                    "order_items.sale_price": "not_a_num",
+                    "order_items.metric_param": "bad_enum",
+                    "order_items.status": 123,
+                },
+                "sorts": [123, "bad sort !!", "unknown.sort desc"],
+                "fill_fields": [123, "order_items.total_sale_price"],
+                "subtotals": [123, "order_items.total_sale_price"],
+                "filter_expression": "${} + ${tc_bad} + ${unknown.ref}",
+                "dynamic_fields": [
+                    "not_obj",
+                    {"label": "no_kind"},
+                    {"dimension": "cd_empty", "based_on": "unknown.bo"},
+                    {
+                        "measure": "cm_bad",
+                        "type": "invalid_mtype",
+                        "based_on": "unknown.bo",
+                        "filters": "not_obj",
+                    },
+                    {
+                        "table_calculation": "tc_bad",
+                        "source_field": "unknown.sf",
+                        "args": ["unknown.arg"],
+                        "expression": "${tc_bad}",
+                    },
+                    {"dimension": "cd_tc_ref", "expression": "${tc_bad}"},
+                ],
+            },
+        },
+        {"body": {"fields": "bad", "pivots": "bad", "filters": "bad", "sorts": "bad", "fill_fields": "bad", "subtotals": "bad", "filter_expression": 123, "dynamic_fields": 123}},
+        {"body": {"dynamic_fields": "{bad json"}},
+        {"body": {"dynamic_fields": '{"not": "array"}'}},
+    ]
+
+    serialized = [json.dumps(c) for c in cases] + ["{corrupt_query_json"]
+    py_out = py_val.validate_batch_json(serialized)
+    assert py_out[0][0] is True and py_out[0][3] is not None
+    assert py_out[1][0] is True and len(py_out[1][2]) == 1
+    assert all(not r[0] for r in py_out[2:])
+
+    if val_mod._schema_rs is not None:
+        rs_val = val_mod._schema_rs.RustExploreValidator(schema_json)
+        rs_out = rs_val.validate_batch_json(serialized)
+        for (p_ok, p_err, p_warn, p_norm), (r_ok, r_err, r_warn, r_norm) in zip(py_out, rs_out, strict=True):
+            assert p_ok == r_ok
+            assert sorted(p_warn) == sorted(r_warn)
+            assert len(p_err) == len(r_err)
+            assert (json.loads(p_norm) if p_norm else None) == (json.loads(r_norm) if r_norm else None)
+
+    # Simulate Windows / non-ELF platform where _schema_rs is unavailable
+    val_mod._compile_validator.cache_clear()
+    monkeypatch.setattr(val_mod, "_schema_rs", None)
+    try:
+        res = validate_query({"fields": ["order_items.status"]}, schema)
+        assert res.valid is True
+        assert res.normalized_query is not None
+        assert res.normalized_query["body"]["model"] == "thelook"
+    finally:
+        val_mod._compile_validator.cache_clear()
+
+    # Verify Windows-safe MCP filename sanitization for Looker base URLs containing ':' and '/'
+    monkeypatch.setattr(mcp_utils, "db_loc", tmp_path)
+    p_search = mcp_utils.get_database_search_file("https://acme.cloud.looker.com:19999")
+    p_reg = mcp_utils.get_connection_registry_file("table", "https://acme.cloud.looker.com:19999")
+    assert ":" not in p_search.name and "/" not in p_search.name and p_search.exists()
+    assert ":" not in p_reg.name and "/" not in p_reg.name
+
+
+
 
 
 

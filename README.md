@@ -35,6 +35,32 @@ uv tool upgrade lkr-dev-cli
 uv tool install --upgrade --reinstall "lkr-dev-cli[all]"
 ```
 
+## Windows
+
+`lkr` runs natively on Windows (PowerShell / Windows Terminal).
+
+1. Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/) in PowerShell:
+   ```powershell
+   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
+2. Run directly with `uvx` or install globally with `uv tool` (keep quotes around `[all]` in PowerShell):
+   ```powershell
+   # Run without installing
+   uvx lkr-dev-cli --help
+   uvx --from "lkr-dev-cli[all]" lkr --help
+
+   # Or install globally on PATH
+   uv tool install "lkr-dev-cli[all]"
+   lkr --help
+   ```
+3. When authenticating via environment variables in PowerShell:
+   ```powershell
+   $env:LOOKERSDK_BASE_URL = "https://acme.cloud.looker.com"
+   $env:LOOKERSDK_CLIENT_ID = "<your client id>"
+   $env:LOOKERSDK_CLIENT_SECRET = "<your client secret>"
+   lkr auth whoami
+   ```
+
 ## Login
 
 ### Using OAuth2
