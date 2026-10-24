@@ -682,15 +682,21 @@ def lookml_to_api_command(
             {
                 _err_key(err)
                 for exp_obj in parse_lookml_to_api(
-                    path=base_path,
+                    path=base_path if base_path.is_dir() else None,
+                    file=base_path if base_path.is_file() else None,
                     model=model,
                     explore=explore,
                     exclude_hidden=exclude_hidden,
+                    manifest=manifest,
                     constants=_parse_constant_overrides(constant),
                 ).lookml_model_explores.values()
                 for err in (exp_obj.errors or [])
             }
-            if base_path and any(base_path.rglob("*.lkml"))
+            if base_path
+            and (
+                (base_path.is_dir() and any(base_path.rglob("*.lkml")))
+                or (base_path.is_file() and base_path.suffix == ".lkml")
+            )
             else set()
         )
         new_msgs: list[str] = []
