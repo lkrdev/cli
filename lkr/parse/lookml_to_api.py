@@ -1338,7 +1338,10 @@ def _has_mul_100(sql_str: str | None) -> bool:
     return bool(
         parsed
         and any(
-            isinstance(n := side.unnest(), exp.Literal) and n.is_number and float(n.this) == 100.0
+            side is not None
+            and isinstance(n := side.unnest(), exp.Literal)
+            and n.is_number
+            and float(n.this) == 100.0
             for m in parsed.find_all(exp.Mul)
             for side in (m.this, m.expression)
         )
