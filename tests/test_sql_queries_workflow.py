@@ -788,3 +788,130 @@ def test_validate_and_commit_branch_checks_out_pr_branch_and_workflow_serializes
     assert res_sync_only["passed"] is True
     assert [c[0] for c in calls] == ["git_branch", "reset_remote", "project", "update_branch", "reset_remote"]
 
+
+def test_pre_gate_percent_scaling_unordered_group_by_and_share_url_fallback():
+    raw_sql = (
+        "SELECT department, COUNT(id) AS sku_count, "
+        "ROUND(AVG(retail_price - cost), 2) AS avg_dollar_markup, "
+        "ROUND(AVG((retail_price - cost) / NULLIF(cost, 0)) * 100, 2) AS avg_markup_greed_pct "
+        "FROM `bigquery-public-data.thelook_ecommerce.products` GROUP BY department;\n"
+        "SELECT category, department, COUNT(id) AS skus, "
+        "ROUND(AVG((retail_price - cost) / NULLIF(cost, 0)) * 100, 2) AS markup_pct "
+        "FROM `bigquery-public-data.thelook_ecommerce.products` "
+        "GROUP BY category, department ORDER BY markup_pct DESC LIMIT 2;"
+    )
+    sql_results = {
+        "sql_0": [
+            {"department": "Men", "sku_count": 13131, "avg_dollar_markup": 28.12, "avg_markup_greed_pct": 81.16},
+            {"department": "Women", "sku_count": 15989, "avg_dollar_markup": 29.54, "avg_markup_greed_pct": 110.01},
+        ],
+        "sql_1": [
+            {"category": "Socks", "department": "Women", "skus": 400, "markup_pct": 140.25},
+            {"category": "Jeans", "department": "Men", "skus": 900, "markup_pct": 95.50},
+        ],
+    }
+    looker_results = [
+        # Unordered GROUP BY: Looker returns Women before Men, and unscaled percent_2 decimals (1.10012, 0.81164)
+        [
+            {
+                "products.department": "Women",
+                "products.count": 15989,
+                "products.avg_dollar_markup": 29.5419,
+                "products.avg_markup_ratio": 1.10012,
+            },
+            {
+                "products.department": "Men",
+                "products.count": 13131,
+                "products.avg_dollar_markup": 28.1204,
+                "products.avg_markup_ratio": 0.81164,
+            },
+        ],
+        # Ordered query: reversed order in Looker MUST fail parity when top-level ORDER BY is present
+        [
+            {
+                "products.category": "Jeans",
+                "products.department": "Men",
+                "products.count": 900,
+                "products.avg_markup_ratio": 0.955,
+            },
+            {
+                "products.category": "Socks",
+                "products.department": "Women",
+                "products.count": 400,
+                "products.avg_markup_ratio": 1.4025,
+            },
+        ],
+    ]
+    created_slugs = iter(["sql_0", "sql_1"])
+    inline_iter = iter(looker_results)
+
+    res: dict[str, Any] = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {
+            "raw_sql": raw_sql,
+            "connection_name": "bq_conn",
+            "data_json": '{"project_id": "agentic-thelook"}',
+            "base_url": "",
+            "validate": "false",
+            "inline_queries_json": json.dumps({
+                "0": {
+                    "model": "agentic_thelook",
+                    "view": "products",
+                    "fields": [
+                        "products.department",
+                        "products.count",
+                        "products.avg_dollar_markup",
+                        "products.avg_markup_ratio",
+                    ],
+                },
+                "1": {
+                    "model": "agentic_thelook",
+                    "view": "products",
+                    "fields": [
+                        "products.category",
+                        "products.department",
+                        "products.count",
+                        "products.avg_markup_ratio",
+                    ],
+                    "sorts": ["products.avg_markup_ratio desc"],
+                },
+            }),
+        },
+        {
+            "create_sql_query": lambda body: {"slug": next(created_slugs)},
+            "create_query": lambda body: {
+                "id": "501",
+                "slug": "qslug",
+                "share_url": "https://demo.cloud.looker.com/x/qslug",
+            },
+            "run_sql_query": lambda slug, **_kw: json.dumps(sql_results[slug]),
+            "run_inline_query": lambda **_kw: json.dumps(next(inline_iter)),
+        },
+    )
+    assert res["queries"][0]["parity_status"] == "matched"
+    assert res["queries"][0]["sql_runner_url"] == "https://demo.cloud.looker.com/sql/sql_0"
+    assert res["queries"][0]["explore_url"] == "https://demo.cloud.looker.com/x/qslug"
+    assert res["queries"][1]["sql_runner_url"] == "https://demo.cloud.looker.com/sql/sql_1"
+    assert res["queries"][1]["parity_status"] == "mismatched"
+    assert res["passed"] is False
+
+    # Window OVER (ORDER BY ...) has no top-level ORDER BY -> still sorts rows deterministically
+    pre_mod = _load_module("pre_gate_mod", SCRIPTS_DIR / "pre_gate.py")
+    ok_win, diffs_win = pre_mod.compare_row_sets(
+        [{"dept": None, "pct": 25.0}, {"dept": "Accessories", "pct": 75.0}],
+        [{"p.dept": "Accessories", "p.pct": 0.75}, {"p.dept": None, "p.pct": 0.25}],
+        sql="WITH w AS (SELECT *, ROW_NUMBER() OVER (ORDER BY id) FROM p) SELECT dept, 100.0 * COUNT(*) / 4 AS pct FROM w GROUP BY dept",
+        looker_fields=["p.dept", "p.pct"],
+    )
+    assert ok_win is True and diffs_win == []
+
+    # Non-percentage SQL column (no * 100) must NOT accept a 100x-off Looker value
+    ok_non_pct, _ = pre_mod.compare_row_sets(
+        [{"val": 81.16}],
+        [{"p.val": 0.8116}],
+        sql="SELECT ROUND(AVG(val), 2) AS val FROM p",
+        looker_fields=["p.val"],
+    )
+    assert ok_non_pct is False
+
+

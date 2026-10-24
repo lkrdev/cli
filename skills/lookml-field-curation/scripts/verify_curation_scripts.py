@@ -63,6 +63,10 @@ class _CurationMockSDK(ExtendedLooker40SDK):
             ])
         if f.endswith(".category"):
             return json.dumps([{f: f"Category_{i:02d}"} for i in range(1, 26)])
+        if f.endswith((".product_name", ".brand")):
+            return json.dumps([{f: f"Classic Cotton Hoodie Style {i}"} for i in range(1, 150)])
+        if f.endswith(".sku"):
+            return json.dumps([{f: f"SKU-{i:05d}"} for i in range(1, 150)])
         if f.endswith(".customer_notes"):
             return json.dumps([{f: "Customer requested delivery to back porch " + ("x" * 100)}])
         if f.endswith(".metadata_json"):
@@ -157,6 +161,21 @@ view: orders {
   dimension: category {
     type: string
     sql: ${TABLE}.category ;;
+  }
+
+  dimension: product_name {
+    type: string
+    sql: ${TABLE}.product_name ;;
+  }
+
+  dimension: brand {
+    type: string
+    sql: ${TABLE}.brand ;;
+  }
+
+  dimension: sku {
+    type: string
+    sql: ${TABLE}.sku ;;
   }
 
   dimension: customer_notes {
@@ -285,12 +304,21 @@ def test_local_lookml_to_api_and_sandbox_pipeline() -> None:
         assert recs_by_name["category"]["recommended_description"].startswith("Top values include:")
         assert "(25 distinct values)" in recs_by_name["category"]["recommended_description"]
 
-        assert recs_by_name["customer_notes"]["classification"] == "high_cardinality_or_free_text"
-        assert recs_by_name["customer_notes"]["recommended_hidden"] is False
-        assert recs_by_name["customer_notes"]["recommended_suggestable"] is False
-        assert recs_by_name["customer_notes"]["recommended_description"].startswith(
-            "High-cardinality or free-text string"
-        )
+        for label_col in ("product_name", "brand"):
+            assert recs_by_name[label_col]["classification"] == "searchable_entity_label"
+            assert recs_by_name[label_col]["recommended_hidden"] is False
+            assert recs_by_name[label_col]["recommended_suggestable"] is True
+            assert recs_by_name[label_col]["recommended_description"].startswith(
+                "Searchable entity label"
+            )
+
+        for opaque_col in ("sku", "customer_notes"):
+            assert recs_by_name[opaque_col]["classification"] == "opaque_code_or_free_text"
+            assert recs_by_name[opaque_col]["recommended_hidden"] is False
+            assert recs_by_name[opaque_col]["recommended_suggestable"] is False
+            assert recs_by_name[opaque_col]["recommended_description"].startswith(
+                "Opaque identifier or free-text string"
+            )
 
         assert recs_by_name["metadata_json"]["classification"] == "json_payload"
         assert recs_by_name["metadata_json"]["recommended_hidden"] is True

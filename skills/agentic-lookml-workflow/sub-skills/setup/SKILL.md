@@ -37,6 +37,7 @@ flowchart TD
    ```
 3. Authenticate with Looker in development mode (`--dev` is mandatory):
    ```bash
+   export BASE_URL="${BASE_URL:-$LOOKERSDK_BASE_URL}"
    lkr --client-id="$LOOKERSDK_CLIENT_ID" --client-secret="$LOOKERSDK_CLIENT_SECRET" --base-url="$BASE_URL" --dev auth add-access-token
    ```
 4. Check whether the project already has a `.model.lkml` file by pulling current LookML from the project:

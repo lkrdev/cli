@@ -28,22 +28,27 @@ def split_sql_statements(raw_sql: str) -> list[str]:
     return [s.strip() for s in "".join(out).split("\0") if s.strip()]
 
 
+def _to_float(v):
+    if v is not None and not isinstance(v, bool):
+        try:
+            return float(v.strip() if isinstance(v, str) else v)
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
 def normalize_val(v, digits=4):
     if v is None or isinstance(v, bool):
         return v
-    if isinstance(v, (int, float)):
-        return round(float(v), digits)
-    if isinstance(v, str):
-        try:
-            return round(float(v.strip()), digits)
-        except ValueError:
-            return v.strip()
-    return str(v)
+    f = _to_float(v)
+    return round(f, digits) if f is not None else (v.strip() if isinstance(v, str) else str(v))
 
 
-# ponytail: paren scan for Monty sandbox (no sqlglot); pass AST scales from lkr parse sql if expressions wrap ROUND
-def _round_scales(sql: str) -> dict[str, int]:
+# ponytail: paren scan for Monty sandbox (no sqlglot); pass AST metadata from lkr parse sql if expressions wrap ROUND
+def _sql_meta(sql: str):
     scales: dict[str, int] = {}
+    pct_cols: set[str] = set()
+    pct_idxs: set[int] = set()
     clean = re.sub(r"--[^\n]*|/\*[\s\S]*?\*/", " ", re.sub(r"'[^'\\]*(?:\\.[^'\\]*)*'", "''", sql or ""))
     for m in re.finditer(r"(?i)\bROUND\s*\(", clean):
         depth, comma, i = 1, -1, m.end()
@@ -65,31 +70,93 @@ def _round_scales(sql: str) -> dict[str, int]:
         alias = am and (am.group(1) or am.group(2) or am.group(3))
         if alias and re.match(r"^[+-]?\d+$", arg2) and alias.upper() not in {"FROM", "ASC", "DESC"}:
             scales[alias.lower()] = int(arg2)
-    return scales
+
+    depth = 0
+    top_chars = []
+    for ch in clean:
+        if ch == "(":
+            depth += 1
+            top_chars.append(" ")
+        elif ch == ")":
+            depth = max(0, depth - 1)
+            top_chars.append(" ")
+        else:
+            top_chars.append(ch if depth == 0 else " ")
+    top = "".join(top_chars)
+    sm = re.search(
+        r"(?i)\bSELECT\b([\s\S]*?)(?:\b(?:FROM|WHERE|GROUP|ORDER|LIMIT|HAVING|QUALIFY|UNION)\b|;|$)", top
+    )
+    if sm:
+        base, pos = sm.start(1), 0
+        for p_idx, seg in enumerate(sm.group(1).split(",")):
+            expr = clean[base + pos : base + pos + len(seg)]
+            pos += len(seg) + 1
+            if re.search(r"(?:\*\s*100(?:\.0*)?(?!\d|\.)|(?<!\d|\.)100(?:\.0*)?\s*\*)", expr):
+                pct_idxs.add(p_idx)
+                am = re.search(
+                    r'(?:(?i:\bAS)\s+|(?<![+\-*/=<>,(])\s+|\)\s*)(?:`([^`]+)`|"([^"]+)"|([A-Za-z_]\w*))\s*$',
+                    expr.strip(),
+                )
+                alias = am and (am.group(1) or am.group(2) or am.group(3))
+                if alias and alias.upper() not in {"END", "NULL", "TRUE", "FALSE", "AND", "OR", "ELSE", "THEN"}:
+                    pct_cols.add(alias.lower())
+    return scales, pct_cols, pct_idxs, bool(re.search(r"(?i)\bORDER\s+BY\b", top))
+
+
+def _cell_key(v, digits: int, mult: float = 1.0):
+    f = _to_float(v)
+    nv = round(f * mult, digits) if f is not None else normalize_val(v, digits)
+    if nv is None or isinstance(nv, bool):
+        return (0 if nv is None else 1, float(nv or 0), "")
+    return (2, float(nv), "") if isinstance(nv, (int, float)) else (3, 0.0, str(nv))
 
 
 def compare_row_sets(sql_rows, looker_rows, sql: str = "", looker_fields: list[str] | None = None):
     if len(sql_rows) != len(looker_rows):
         return False, [f"Row count mismatch: SQL={len(sql_rows)}, Looker={len(looker_rows)}"]
-    scales = _round_scales(sql)
+    if not sql_rows:
+        return True, []
+    scales, pct_cols, pct_idxs, has_order_by = _sql_meta(sql)
     f_leaves = [f.split(".")[-1].lower() for f in (looker_fields or [])]
-    mismatches = []
-    for idx, (sr, lr) in enumerate(zip(sql_rows, looker_rows)):
-        sr_leaf = {k.split(".")[-1].lower(): v for k, v in sr.items()}
+    sr_leaves = [{k.split(".")[-1].lower(): v for k, v in sr.items()} for sr in sql_rows]
+    lr_leaves = []
+    for lr in looker_rows:
         raw_lr = {k.split(".")[-1].lower(): v for k, v in lr.items()}
-        lr_leaf = {k: raw_lr[k] for k in [k for k in f_leaves if k in raw_lr] + list(raw_lr)}
-        if len(sr_leaf) != len(lr_leaf):
-            mismatches.append(f"Row {idx} column count mismatch: SQL={len(sr_leaf)}, Looker={len(lr_leaf)}")
-            continue
-        pairs = [(k, k, sr_leaf[k], lr_leaf[k]) for k in sr_leaf if k in lr_leaf] + [
-            (f"{sk}->{lk}", sk, sr_leaf[sk], lr_leaf[lk])
-            for sk, lk in zip([k for k in sr_leaf if k not in lr_leaf], [k for k in lr_leaf if k not in sr_leaf])
-        ]
-        for col, sk, raw_sv, raw_lv in pairs:
-            digits = scales.get(sk.lower(), 4)
-            sv, lv = normalize_val(raw_sv, digits), normalize_val(raw_lv, digits)
-            if sv != lv:
-                mismatches.append(f"Row {idx} ({col}): SQL={sv}, Looker={lv}")
+        lr_leaves.append({k: raw_lr[k] for k in [k for k in f_leaves if k in raw_lr] + list(raw_lr)})
+    bad_cols = [
+        f"Row {i} column count mismatch: SQL={len(sr)}, Looker={len(lr)}"
+        for i, (sr, lr) in enumerate(zip(sr_leaves, lr_leaves))
+        if len(sr) != len(lr)
+    ]
+    if bad_cols:
+        return False, bad_cols[:5]
+    s_keys, l_keys = list(sr_leaves[0]), list(lr_leaves[0])
+    s_to_l = {k: k for k in s_keys if k in lr_leaves[0]}
+    s_to_l.update(
+        dict(zip([k for k in s_keys if k not in lr_leaves[0]], [k for k in l_keys if k not in sr_leaves[0]]))
+    )
+    cols = []
+    for c_idx, sk in enumerate(s_keys):
+        lk = s_to_l[sk]
+        digits = scales.get(sk, 4)
+        mult = 1.0
+        if sk in pct_cols or c_idx in pct_idxs:
+            s_abs = sum(abs(f) for r in sr_leaves for f in [_to_float(r.get(sk))] if f is not None)
+            l_abs = sum(abs(f) for r in lr_leaves for f in [_to_float(r.get(lk))] if f is not None)
+            if l_abs > 0 and abs(s_abs - l_abs * 100.0) < abs(s_abs - l_abs):
+                mult = 100.0
+        cols.append((sk if sk == lk else f"{sk}->{lk}", sk, lk, digits, mult))
+    if len(sr_leaves) > 1 and not has_order_by:
+        sr_leaves.sort(key=lambda r: tuple(_cell_key(r[sk], d, 1.0) for _, sk, _, d, _ in cols))
+        lr_leaves.sort(key=lambda r: tuple(_cell_key(r[lk], d, m) for _, _, lk, d, m in cols))
+    mismatches = []
+    for idx, (sr_leaf, lr_leaf) in enumerate(zip(sr_leaves, lr_leaves)):
+        for label, sk, lk, digits, mult in cols:
+            sv, lv = normalize_val(sr_leaf[sk], digits), normalize_val(lr_leaf[lk], digits)
+            lf = _to_float(lr_leaf[lk])
+            lv_cmp = round(lf * mult, digits) if (mult != 1.0 and lf is not None) else lv
+            if sv != lv_cmp:
+                mismatches.append(f"Row {idx} ({label}): SQL={sv}, Looker={lv}")
     return not mismatches, mismatches[:5]
 
 
@@ -228,6 +295,19 @@ def main():
             q["parity_status"] = "error"
             q["mismatches"] = [str(e)]
             all_matched = False
+
+    if not b_url:
+        for q in queries_list:
+            m_host = re.match(r"^(https?://[^/]+)", str(q.get("explore_url") or q.get("sql_runner_url") or ""))
+            if m_host:
+                b_url = m_host.group(1)
+                break
+    if b_url:
+        for q in queries_list:
+            if q.get("sql_query_id") and not str(q.get("sql_runner_url") or "").startswith("http"):
+                q["sql_runner_url"] = f"{b_url}/sql/{q['sql_query_id']}"
+            if q.get("query_slug") and not str(q.get("explore_url") or "").startswith("http"):
+                q["explore_url"] = f"{b_url}/x/{q['query_slug']}"
 
     # 4. Run optional test-slice baseline queries (raw unformatted JSON for .test.lkml assertions)
     try:

@@ -35,7 +35,7 @@ ORDER BY 1
 LIMIT 1000
 ```
 
-On high-cardinality strings, free-text notes, URLs, or unparsed JSON columns, this `SELECT DISTINCT ... LIMIT 1000` scan wastes warehouse compute and returns an arbitrary 1,000-row slice. Setting `suggestable: no` disables the `SELECT DISTINCT` autocomplete query while keeping visible dimensions (`hidden: no`) groupable and filterable by exact value or pattern.
+On opaque identifiers (`sku`, `tracking_number`, `session_id`), network/path tokens (`ip_address`, `uri`, `url`), free-text notes, or unparsed JSON columns, this `SELECT DISTINCT ... LIMIT 1000` scan wastes warehouse compute for values users paste verbatim rather than browse. Setting `suggestable: no` disables the `SELECT DISTINCT` autocomplete query while keeping visible dimensions (`hidden: no`) groupable and filterable by exact value or pattern. Conversely, keep human-searchable entity labels (`name`, `brand`, `title`, `account_name`, `company_name`, `city`) `suggestable: yes` even above 100 distinct values because analysts rely on Looker's partial-match filter typeahead (`WHERE name LIKE '%hoodie%' LIMIT 1000`); if a massive unpartitioned fact table stores denormalized labels where `SELECT DISTINCT` is costly, route suggestions via `suggest_explore:` / `suggest_dimension:` to a dimension lookup view rather than disabling `suggestable`.
 
 ## Decision matrix for hidden and suggestable
 
@@ -49,7 +49,8 @@ On high-cardinality strings, free-text notes, URLs, or unparsed JSON columns, th
 | Empty or all-NULL columns and deprecated duplicates | Profiling returns `distinct_count == 0` (only `NULL` or `""`), or duplicate foreign key already exposed on the joined parent view | `yes` | `no` | Removes dead or ambiguous duplicate fields from the Explore. |
 | Low-cardinality business enums and statuses | String dimensions with $1 \le \text{distinct\_count} \le 15$ and `max_length <= 120` (`status`, `payment_method`, `plan_tier`) | `no` | `yes` | Core slicing and filtering attributes. Enumerate all valid values directly in `description:`. |
 | Medium-cardinality categorical strings | String dimensions with $16 \le \text{distinct\_count} \le 100$ and `max_length <= 120` (`country`, `department`, `category`) | `no` | `yes` | Core grouping dimensions. List the top 10 values by frequency and total distinct count in `description:`. |
-| Visible high-cardinality identifiers and free-text strings | Human-searchable strings with $\text{distinct\_count} > 100$, `max_length > 120`, `avg_length > 60`, or free-text names (`*notes`, `*comment`, `*message`, `*url`, `email`, `sku`) | `no` | `no` | Keep visible for detail tables and exact or substring filtering, but disable `SELECT DISTINCT` autocomplete scans. |
+| High-cardinality human-searchable entity labels | Human-readable names and labels with $\text{distinct\_count} > 100$, `max_length <= 120`, `avg_length <= 60`, and non-code values (`name`, `*_name`, `brand`, `title`, `city`) | `no` | `yes` | Analysts search partial labels via filter typeahead (`LIKE '%...%'`); use `suggest_explore:` / `suggest_dimension:` only on massive unpartitioned fact tables. |
+| Visible opaque codes, tokens, and free-text strings | Non-PK visible codes/identifiers (`sku`, `*_code`, `email`, `ip_address`, `uri`, `url`, `tracking_number`) and long free-text fields (`max_length > 120`, `avg_length > 60`, `*notes`, `*comments`, `*message`, `*body`) | `no` | `no` | Keep visible for detail tables and exact or substring filtering, but disable `SELECT DISTINCT` autocomplete scans. |
 | Partition and clustering dimensions | Physical date or timestamp partition `dimension_group` or clustered `dimension`s in `INFORMATION_SCHEMA` | `no` | `yes` (`no` if high-card ID) | Must remain visible so users and agents apply partition and cluster filters for scan pruning. |
 | Canonical business measures and KPIs | Aggregations (`sum`, `count`, `count_distinct`, `average`, `number` ratios) | `no` | *(N/A for measures)* | Primary analytical metrics; always document math, grain, and filter exclusions in `description:`. |
 
@@ -63,9 +64,10 @@ The [profile_string_fields.py](scripts/profile_string_fields.py) script classifi
 | 2 | `surrogate_or_system_key` | `primary_key: yes`, `is_helper`, name matches `^(_fivetran_\|_airbyte_\|_sdc_\|_baton_\|etl_\|ingest_)\|(_pk\|_fk\|_sk)$`, or (`id` / `*_id` with `distinct_count > categorical_threshold`) | `True` (`yes`) | `False` (`no`) | `"Internal key or system metadata column not intended for end-user grouping."` |
 | 3 | `uuid_or_hash` | Name matches `(^\|_)(uuid\|guid\|hash\|md5\|sha256\|row_hash\|record_hash)($\|_)` or $\ge 80\%$ of sample values match UUID or 32 to 64 char hex regex | `True` (`yes`) | `False` (`no`) | `"High-cardinality UUID or hash identifier."` |
 | 4 | `empty_or_null_only` | `distinct_count == 0` (all sampled values are `NULL` or empty string) | `True` (`yes`) | `False` (`no`) | `"Column contains only NULL or empty values in sampled data."` |
-| 5 | `low_cardinality_enum` | Not free-text and `1 <= distinct_count <= enum_threshold` (default `15`) | `False` (`no`) | `True` (`yes`) | `"Values: '<v1>', '<v2>', '<v3>'."` (prefixed with `<Base>. ` if an `INFORMATION_SCHEMA` comment exists) |
-| 6 | `medium_cardinality_categorical` | Not free-text and `enum_threshold < distinct_count <= categorical_threshold` (default `100`) | `False` (`no`) | `True` (`yes`) | `"Top values include: '<v1>', ..., '<v10>' (<distinct_count> distinct values)."` |
-| 7 | `high_cardinality_or_free_text` | `distinct_count > categorical_threshold`, `max_length > 120`, `avg_length > 60.0`, or free-text suffix (`comment`, `notes`, `message`, `body`, `url`, `uri`, `path`, etc.) | `False` (`no`) | `False` (`no`) | `"High-cardinality or free-text string (<distinct_count>+ distinct values, max length <max_length>); filter suggestions disabled. Example values: '<v1>', '<v2>', '<v3>'."` |
+| 5 | `low_cardinality_enum` | Not an opaque token or free-text and `1 <= distinct_count <= enum_threshold` (default `15`) | `False` (`no`) | `True` (`yes`) | `"Values: '<v1>', '<v2>', '<v3>'."` (prefixed with `<Base>. ` if an `INFORMATION_SCHEMA` comment exists) |
+| 6 | `medium_cardinality_categorical` | Not an opaque token or free-text and `enum_threshold < distinct_count <= categorical_threshold` (default `100`) | `False` (`no`) | `True` (`yes`) | `"Top values include: '<v1>', ..., '<v10>' (<distinct_count> distinct values)."` |
+| 7 | `searchable_entity_label` | `distinct_count > categorical_threshold`, `max_length <= 120`, `avg_length <= 60.0`, and human-readable label name/values (`name`, `*_name`, `title`, `brand`, `city`, etc.) | `False` (`no`) | `True` (`yes`) | `"Searchable entity label (<distinct_count>+ distinct values). Example values: '<v1>', '<v2>', '<v3>'."` |
+| 8 | `opaque_code_or_free_text` | Non-PK visible codes/tokens (`sku`, `*_code`, `email`, `ip_address`, `uri`, `url`, `tracking_number`, machine-code values) or free-text (`max_length > 120`, `avg_length > 60.0`, `comment`, `notes`, `message`, `body`) | `False` (`no`) | `False` (`no`) | `"Opaque identifier or free-text string (<distinct_count>+ distinct values, max length <max_length>); filter suggestions disabled. Example values: '<v1>', '<v2>', '<v3>'."` |
 
 ## Field description templates
 
@@ -95,11 +97,18 @@ view: +orders {
     description: "Merchandise category. Top values include: 'Apparel', 'Footwear', 'Accessories', 'Outerwear', 'Home Goods' (25 distinct values)."
   }
 
-  # High-cardinality or free-text string: keep visible (hidden: no) but disable SELECT DISTINCT scans (suggestable: no)
+  # Searchable entity label (>100 distinct human-readable names): keep filter typeahead enabled (suggestable: yes)
+  dimension: brand {
+    hidden: no
+    suggestable: yes
+    description: "Searchable entity label (2750+ distinct values). Example values: 'Calvin Klein', 'Carhartt', 'Levi\\'s'."
+  }
+
+  # Opaque code or free-text string: keep visible (hidden: no) but disable SELECT DISTINCT scans (suggestable: no)
   dimension: customer_notes {
     hidden: no
     suggestable: no
-    description: "High-cardinality or free-text string (140+ distinct values, max length 142); filter suggestions disabled."
+    description: "Opaque identifier or free-text string (140+ distinct values, max length 142); filter suggestions disabled."
   }
 
   # Raw JSON payload: hide and disable suggestions

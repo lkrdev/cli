@@ -86,16 +86,29 @@ def classify_string_field(
             and distinct_count > categorical_threshold
         )
     )
-    is_free_text = (
+    is_free_text_or_token = (
         max_length > 120
         or avg_length > 60.0
         or bool(
             re.search(
-                r"(^|_)(comment|comments|note|notes|description|message|body|transcript|feedback|reason_text|free_text|url|uri|path)$",
+                r"(^|_)(comment|comments|note|notes|description|message|body|transcript|feedback|reason_text|free_text|url|uri|path|ip|ip_address|email|sku|tracking_number|session_id|token)$",
                 low_name,
             )
         )
     )
+    is_opaque_code = is_free_text_or_token or bool(
+        re.search(
+            r"(^|_)(code|zip|postal|phone|barcode|upc|ean|isbn|serial|key|ref|num|number)$",
+            low_name,
+        )
+    )
+    code_val_hits = sum(
+        1
+        for v in non_empty
+        if re.match(r"^(?:https?://|\S+@\S+|[0-9.\-:/_]+|[A-Z0-9_\-]{4,})$", v)
+        and re.search(r"[\d@:/_]", v)
+    )
+    is_code_values = bool(non_empty) and code_val_hits * 2 >= len(non_empty)
 
     if is_json_col:
         classification, rec_hidden, rec_suggestable, rec_desc = (
@@ -125,7 +138,7 @@ def classify_string_field(
             False,
             f"{base_prefix}Column contains only NULL or empty values in sampled data.",
         )
-    elif not is_free_text and distinct_count <= enum_threshold:
+    elif not is_free_text_or_token and distinct_count <= enum_threshold:
         vals_str = ", ".join(f"'{v}'" for v in non_empty[:enum_threshold])
         classification, rec_hidden, rec_suggestable, rec_desc = (
             "low_cardinality_enum",
@@ -133,7 +146,7 @@ def classify_string_field(
             True,
             f"{base_prefix}Values: {vals_str}.",
         )
-    elif not is_free_text and distinct_count <= categorical_threshold:
+    elif not is_free_text_or_token and distinct_count <= categorical_threshold:
         vals_str = ", ".join(f"'{v}'" for v in non_empty[:top_n])
         classification, rec_hidden, rec_suggestable, rec_desc = (
             "medium_cardinality_categorical",
@@ -144,15 +157,13 @@ def classify_string_field(
     else:
         sample_preview = ", ".join(f"'{v[:40]}'" for v in non_empty[:3])
         preview_suffix = f" Example values: {sample_preview}." if sample_preview else ""
-        desc_text = (
-            f"{base_prefix}High-cardinality or free-text string ({distinct_count}+ distinct values, max length {max_length}); "
-            f"filter suggestions disabled.{preview_suffix}"
-        )
-        classification, rec_hidden, rec_suggestable, rec_desc = (
-            "high_cardinality_or_free_text",
-            False,
-            False,
-            desc_text,
+        rec_hidden = False
+        rec_suggestable = not is_opaque_code and not is_code_values
+        classification = "searchable_entity_label" if rec_suggestable else "opaque_code_or_free_text"
+        rec_desc = (
+            f"{base_prefix}Searchable entity label ({distinct_count}+ distinct values).{preview_suffix}"
+            if rec_suggestable
+            else f"{base_prefix}Opaque identifier or free-text string ({distinct_count}+ distinct values, max length {max_length}); filter suggestions disabled.{preview_suffix}"
         )
 
     escaped_desc = rec_desc.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
