@@ -53,7 +53,7 @@ jobs:
         if: steps.check.outputs.has_lookml == 'true'
         run: |
           uv tool install "lkr-dev-cli[parse]"
-          if ! lkr parse lookml snapshot --help 2>&1 | grep -q -- "--allow-additions"; then
+          if ! lkr parse lookml snapshot --help 2>&1 | grep -q -- "--allow-additions" || ! lkr parse lookml-to-api --help 2>&1 | grep -q -- "--base-path"; then
             uv tool install --force "lkr-dev-cli[parse] @ git+https://github.com/lkrdev/cli.git"
           fi
 
@@ -64,8 +64,6 @@ jobs:
           LOOKML_DIR: ${{ steps.check.outputs.lookml_dir }}
           LOOKML_REVIEWERS: ${{ vars.LOOKML_REVIEWERS }}
         run: |
-          lkr parse lookml-to-api --path "$LOOKML_DIR" --validate >/dev/null
-
           BASE_ARGS=()
           if [[ -n "$BASE_REF" ]] && git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1; then
             rm -rf /tmp/base-branch
@@ -76,6 +74,8 @@ jobs:
               BASE_ARGS=(--base-path "/tmp/base-branch")
             fi
           fi
+
+          lkr parse lookml-to-api --path "$LOOKML_DIR" "${BASE_ARGS[@]}" --validate >/dev/null
 
           lkr parse lookml snapshot --path "$LOOKML_DIR" "${BASE_ARGS[@]}" --allow-additions --format json --output /tmp/snapshot_check.json || true
           if [[ ! -f /tmp/snapshot_check.json ]]; then
