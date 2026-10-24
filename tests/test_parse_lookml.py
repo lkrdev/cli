@@ -3300,5 +3300,54 @@ def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
     assert set(flagged) == {"v.m_std", "v.m_var", "v.m_pct", "v.m_pdisc", "v.m_approx", "v.m_med"}
     assert runner.invoke(app, ["parse", "lookml-to-api", "--path", str(tmp_path), "-m", "bad", "--validate"]).exit_code == 1
 
+    # 7. '* 100' scaling paired with literal '"%"' value_format fails --validate (direct + indirect via dimension),
+    #    while unscaled ratio + value_format_name: percent_2 passes
+    pct_lkml = r"""
+    view: products {
+      sql_table_name: products ;;
+      dimension: cost { type: number sql: ${TABLE}.cost ;; }
+      dimension: retail_price { type: number sql: ${TABLE}.retail_price ;; }
+      dimension: markup_ratio {
+        type: number
+        sql: (${retail_price} - ${cost}) / NULLIF(${cost}, 0) ;;
+        value_format_name: percent_2
+      }
+      measure: avg_markup_ratio {
+        type: average
+        sql: ${markup_ratio} ;;
+        value_format_name: percent_2
+      }
+      dimension: markup_greed_pct {
+        hidden: yes
+        type: number
+        sql: ((${retail_price} - ${cost}) / NULLIF(${cost}, 0)) * 100 ;;
+        value_format: "0.00\"%\""
+      }
+      measure: avg_markup_greed_pct {
+        type: average
+        sql: ${markup_greed_pct} ;;
+        value_format: "0.00\"%\""
+      }
+      measure: direct_pct_bad {
+        type: number
+        sql: 100.0 * ${avg_markup_ratio} ;;
+        value_format: "0.0\\%"
+      }
+    }
+    explore: products {}
+    """
+    (tmp_path / "pct.model.lkml").write_text('connection: "bq"\n' + pct_lkml, encoding="utf-8")
+    pct_exp = lookml_to_lookml_model_explore("pct", "products", path=tmp_path)
+    assert pct_exp.errors is not None
+    pct_flagged = {e["field"] for e in pct_exp.errors if e["type"] == "percent_scaled_value_format"}
+    assert pct_flagged == {"products.markup_greed_pct", "products.avg_markup_greed_pct", "products.direct_pct_bad"}
+    assert (
+        runner.invoke(
+            app,
+            ["parse", "lookml-to-api", "--path", str(tmp_path), "-m", "pct", "--exclude-hidden", "--validate"],
+        ).exit_code
+        == 1
+    )
+
 
 

@@ -1319,6 +1319,66 @@ _RAW_NUMBER_AGGS = {
 }
 
 
+def _parse_lookml_sql_expr(sql_str: str) -> exp.Expr | None:
+    s = re.sub(r"\{%-?\s*(?:elif\b.*?|else)\s*-?%\}", ", ", sql_str, flags=re.DOTALL)
+    s = re.sub(r"\{%.*?%\}|\{\{.*?\}\}", " ", s, flags=re.DOTALL)
+    s = re.sub(r"\$\{\s*TABLE\s*\}\.", "__tbl.", s)
+    s = re.sub(r"\$\{\s*([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s*\}", r"\1.\2", s)
+    s = re.sub(r"\$\{\s*([a-zA-Z0-9_]+)\s*\}", r"__self.\1", s)
+    for d in ("bigquery", None):
+        try:
+            return sqlglot.parse_one(f"SELECT {s}", read=d)
+        except SqlglotError:
+            continue
+    return None
+
+
+def _has_mul_100(sql_str: str | None) -> bool:
+    parsed = _parse_lookml_sql_expr(sql_str) if sql_str else None
+    return bool(
+        parsed
+        and any(
+            isinstance(n := side.unnest(), exp.Literal) and n.is_number and float(n.this) == 100.0
+            for m in parsed.find_all(exp.Mul)
+            for side in (m.this, m.expression)
+        )
+    )
+
+
+def _find_percent_scaling_errors(
+    all_dims: list[ApiLookmlModelExploreField],
+    all_meas: list[ApiLookmlModelExploreField],
+    views_by_alias: dict[str, LookmlView],
+) -> list[dict[str, Any]]:
+    scaled_dims = {
+        f"{v_alias}.{d_name}"
+        for v_alias, v_obj in views_by_alias.items()
+        for d_name, d_obj in (v_obj.dimension or {}).items()
+        if isinstance(d_obj, LookmlDimension) and _has_mul_100(d_obj.sql)
+    } | {d.name for d in all_dims if _has_mul_100(d.sql)}
+    return [
+        {
+            "type": "percent_scaled_value_format",
+            "view": f.view,
+            "field": f.name,
+            "sql": f.sql.strip(),
+            "value_format": vf,
+            "message": (
+                f"Field '{f.name}' pairs '* 100' scaling in sql={f.sql.strip()!r} with literal '%' "
+                f"value_format={vf!r}; strip '* 100' and use value_format_name: percent_2 (or percent_1 / percent_0)."
+            ),
+        }
+        for f in (*all_dims, *all_meas)
+        if f.sql and re.search(r"""(?:"[^"]*%|'[^']*%|\\\%)""", vf := (f.value_format or ""))
+        if _has_mul_100(f.sql)
+        or any(
+            _qualify_field_ref(r, f.view) in scaled_dims
+            for r in re.findall(r"\$\{\s*([a-zA-Z0-9_.]+)\s*\}", f.sql)
+            if r.upper() not in ("TABLE", "EXTENDED") and not r.endswith(".SQL_TABLE_NAME")
+        )
+    ]
+
+
 def _find_raw_sql_aggregate_errors(
     all_meas: list[ApiLookmlModelExploreField],
 ) -> list[dict[str, Any]]:
@@ -1326,18 +1386,7 @@ def _find_raw_sql_aggregate_errors(
     for f in all_meas:
         if f.type != "number" or not f.sql:
             continue
-        s = re.sub(r"\{%-?\s*(?:elif\b.*?|else)\s*-?%\}", ", ", f.sql, flags=re.DOTALL)
-        s = re.sub(r"\{%.*?%\}|\{\{.*?\}\}", " ", s, flags=re.DOTALL)
-        s = re.sub(r"\$\{\s*TABLE\s*\}\.", "__tbl.", s)
-        s = re.sub(r"\$\{\s*([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s*\}", r"\1.\2", s)
-        s = re.sub(r"\$\{\s*([a-zA-Z0-9_]+)\s*\}", r"__self.\1", s)
-        parsed = None
-        for d in ("bigquery", None):
-            try:
-                parsed = sqlglot.parse_one(f"SELECT {s}", read=d)
-                break
-            except SqlglotError:
-                continue
+        parsed = _parse_lookml_sql_expr(f.sql)
         bad_fns = sorted(
             {
                 name
@@ -1641,6 +1690,7 @@ def _build_explore_from_assembled(
     dup_errors = [
         *_find_duplicate_explore_fields(all_dims, all_meas, views_by_alias),
         *_find_raw_sql_aggregate_errors(all_meas),
+        *_find_percent_scaling_errors(all_dims, all_meas, views_by_alias),
     ]
     active_names = {f.name for f in (*all_dims, *all_meas, *all_filts, *all_params)}
     by_q_alias: dict[str, set[str]] = {}
