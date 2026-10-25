@@ -3349,5 +3349,51 @@ def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
         == 1
     )
 
+    # 8. --base-path suppresses pre-existing baseline errors while failing on net-new errors
+    base_dir = tmp_path / "base_pct"
+    base_dir.mkdir()
+    (base_dir / "pct.model.lkml").write_text('connection: "bq"\n' + pct_lkml, encoding="utf-8")
+    assert runner.invoke(
+        app, ["parse", "lookml-to-api", "--path", str(tmp_path), "--base-path", str(base_dir), "-m", "pct", "--validate"]
+    ).exit_code == 0
+    head_dir = tmp_path / "head_pct"
+    head_dir.mkdir()
+    (head_dir / "pct.model.lkml").write_text(
+        'connection: "bq"\n'
+        + pct_lkml.replace(
+            "explore: products {}",
+            r'view: +products { measure: new_bad_pct { type: number sql: 100 * ${avg_markup_ratio} ;; value_format: "0.00\"%\"" } }'
+            + "\nexplore: products {}",
+        ),
+        encoding="utf-8",
+    )
+    assert runner.invoke(
+        app, ["parse", "lookml-to-api", "--path", str(head_dir), "--base-path", str(base_dir), "-m", "pct", "--validate"]
+    ).exit_code == 1
+
+    # 9. sql-lookml-compare --offline skips live Looker sandbox lookups
+    import pytest
+
+    import lkr.parse.sql_to_lookml as s2l
+
+    def _fail(*_a, **_kw):
+        raise AssertionError("live lookup called")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(s2l, "_fetch_table_columns_sandbox", _fail)
+        assert runner.invoke(
+            app,
+            [
+                "parse",
+                "sql-lookml-compare",
+                "--sql",
+                "SELECT num_of_item FROM `bigquery-public-data.thelook_ecommerce.orders`",
+                "--path",
+                str(tmp_path),
+                "--offline",
+            ],
+        ).exit_code == 0
+
+
 
 

@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 import typer
 
@@ -564,6 +564,13 @@ def sql_lookml_compare_command(
             help="Schema/dataset override for LookML views",
         ),
     ] = None,
+    offline: Annotated[
+        bool,
+        typer.Option(
+            "--offline",
+            help="Skip live Looker connection and column metadata lookups",
+        ),
+    ] = False,
     manifest: ManifestOpt = None,
     constant: ConstantOpt = None,
 ) -> SqlToLookmlResult:
@@ -584,6 +591,7 @@ def sql_lookml_compare_command(
             lkml_conn=lkml_conn,
             lkml_db=lkml_db,
             lkml_schema=lkml_schema,
+            offline=offline,
             manifest=manifest,
             constants=_parse_constant_overrides(constant),
         )
@@ -632,6 +640,14 @@ def lookml_to_api_command(
             help="Fail with non-zero exit code on duplicate field logic, alias collisions, '* 100' paired with literal '%' value_format, or raw percentile/stddev/variance SQL in type: number measures",
         ),
     ] = False,
+    base_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--base-path",
+            exists=True,
+            help="Baseline LookML directory; --validate ignores pre-existing errors present in --base-path",
+        ),
+    ] = None,
     manifest: ManifestOpt = None,
     constant: ConstantOpt = None,
     output: Annotated[
@@ -653,13 +669,46 @@ def lookml_to_api_command(
     )
     _write_or_echo(result.model_dump_json(indent=2, by_alias=True), output)
     if validate:
-        dup_msgs = [
-            f"Explore '{exp_id}': {err.get('message', err)}"
-            for exp_id, exp_obj in result.lookml_model_explores.items()
-            for err in (exp_obj.errors or [])
-        ]
-        if dup_msgs:
-            for msg in dup_msgs:
+        def _err_key(err: dict[str, Any]) -> tuple[Any, ...]:
+            return (
+                err.get("type"),
+                err.get("field"),
+                err.get("alias"),
+                tuple(err.get("fields") or ()),
+                tuple(err.get("functions") or ()),
+            )
+
+        base_keys = (
+            {
+                _err_key(err)
+                for exp_obj in parse_lookml_to_api(
+                    path=base_path if base_path.is_dir() else None,
+                    file=base_path if base_path.is_file() else None,
+                    model=model,
+                    explore=explore,
+                    exclude_hidden=exclude_hidden,
+                    manifest=manifest,
+                    constants=_parse_constant_overrides(constant),
+                ).lookml_model_explores.values()
+                for err in (exp_obj.errors or [])
+            }
+            if base_path
+            and (
+                (base_path.is_dir() and any(base_path.rglob("*.lkml")))
+                or (base_path.is_file() and base_path.suffix == ".lkml")
+            )
+            else set()
+        )
+        new_msgs: list[str] = []
+        for exp_id, exp_obj in result.lookml_model_explores.items():
+            for err in exp_obj.errors or []:
+                msg = f"Explore '{exp_id}': {err.get('message', err)}"
+                if _err_key(err) in base_keys:
+                    logger.warning(f"(baseline) {msg}")
+                else:
+                    new_msgs.append(msg)
+        if new_msgs:
+            for msg in new_msgs:
                 logger.error(msg)
             raise typer.Exit(1)
     return result

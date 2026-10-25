@@ -25,12 +25,11 @@ def _load_module(name: str, path: Path):
     return mod
 
 
-init_mod = _load_module("init_sql_queries", SCRIPTS_DIR / "init_sql_queries.py")
-verify_mod = _load_module("record_query_parity", SCRIPTS_DIR / "record_query_parity.py")
+pre_gate_mod = _load_module("pre_gate", SCRIPTS_DIR / "pre_gate.py")
 
-split_sql_statements = init_mod.split_sql_statements
-compare_row_sets = verify_mod.compare_row_sets
-normalize_val = verify_mod.normalize_val
+split_sql_statements = pre_gate_mod.split_sql_statements
+compare_row_sets = pre_gate_mod.compare_row_sets
+normalize_val = pre_gate_mod.normalize_val
 
 
 def test_split_sql_statements_single():
@@ -151,26 +150,6 @@ def test_configure_model_defaults_to_project_id_and_creates_model():
     ]
 
 
-def test_init_sql_queries_defaults_to_connection_name():
-    script_path = SCRIPTS_DIR / "init_sql_queries.py"
-    source = script_path.read_text()
-    called_bodies = []
-
-    def fake_create_sql_query(body):
-        called_bodies.append(body)
-        return {"slug": "sql123"}
-
-    ns = {
-        "raw_sql": "SELECT 1",
-        "base_url": "https://example.looker.com",
-        "connection_name": "bq_conn",
-        "data_json": "{}",
-        "create_sql_query": fake_create_sql_query,
-    }
-    exec(compile(source, str(script_path), "exec"), ns)  # noqa: S102
-    assert called_bodies == [{"connection_name": "bq_conn", "sql": "SELECT 1"}]
-
-
 def test_init_branch_prefers_remote_ref_over_ref():
     script_path = SCRIPTS_DIR / "init_branch.py"
     created_branches = []
@@ -254,15 +233,7 @@ def test_no_monty_globals_in_skill_scripts():
         assert "locals().get(" not in text, f"{py_file} uses locals().get()"
 
 
-def test_record_query_parity_compare_row_sets_matches_aliased_count():
-    script_path = SCRIPTS_DIR / "record_query_parity.py"
-    source = script_path.read_text()
-    # Extract everything up to the main execution loop
-    helper_src = source.split("data = json.loads(data_json)")[0]
-    ns: dict = {}
-    exec(compile(helper_src, str(script_path), "exec"), ns)  # noqa: S102
-    compare_row_sets = ns["compare_row_sets"]
-
+def test_pre_gate_compare_row_sets_matches_aliased_count():
     ok, diffs = compare_row_sets(
         [{"total_line_items_sold": 181978}],
         [{"order_items.count": 181978}],

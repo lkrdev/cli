@@ -717,6 +717,7 @@ $ lkr parse sql-lookml-compare [OPTIONS]
 * `--lkml-conn <str>`: Looker connection name override for LookML views  [env var: LKR_LKML_CONN]
 * `--lkml-db <str>`: Database/project override for LookML views  [env var: LKR_LKML_DB]
 * `--lkml-schema <str>`: Schema/dataset override for LookML views  [env var: LKR_LKML_SCHEMA]
+* `--offline`: Skip live Looker connection and column metadata lookups
 * `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
 * `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)
 * `--help`: Show this message and exit.
@@ -740,6 +741,7 @@ $ lkr parse lookml-to-api [OPTIONS]
 * `-e, --explore <str>`: Optional LookML explore name filter
 * `--exclude-hidden`: Exclude hidden explores and hidden fields from output
 * `--validate`: Fail with non-zero exit code on duplicate field logic, alias collisions, &#x27;* 100&#x27; paired with literal &#x27;%&#x27; value_format, or raw percentile/stddev/variance SQL in type: number measures
+* `--base-path <path>`: Baseline LookML directory; --validate ignores pre-existing errors present in --base-path
 * `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
 * `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)
 * `-o, --output <path>`: Optional output .json file path

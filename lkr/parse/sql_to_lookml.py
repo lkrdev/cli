@@ -1224,8 +1224,9 @@ def _match_model_views(
     dialect: str | None = None,
     sql_db: str | None = None,
     sql_schema: str | None = None,
+    offline: bool = False,
 ) -> tuple[list[LookmlViewMatch], list[LookmlUsageMatch]]:
-    eff_conn = lkml_conn or model_obj.connection
+    eff_conn = None if offline else (lkml_conn or model_obj.connection)
     eff_db, eff_schema = lkml_db, lkml_schema
     meta_fetched = bool(eff_db and eff_schema) or not eff_conn
 
@@ -2902,6 +2903,7 @@ def parse_sql_to_lookml(
     lkml_db: str | None = None,
     lkml_schema: str | None = None,
     *,
+    offline: bool = False,
     manifest: Path | str | None = None,
     constants: dict[str, str] | None = None,
 ) -> SqlToLookmlResult:
@@ -2982,6 +2984,7 @@ def parse_sql_to_lookml(
                 dialect=dialect,
                 sql_db=sql_db,
                 sql_schema=sql_schema,
+                offline=offline,
             )
             view_matches.extend(vm_list)
             extra_usages.extend(exp_u_list)
