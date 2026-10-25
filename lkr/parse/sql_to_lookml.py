@@ -1785,7 +1785,7 @@ def _match_model_views(
                         hidden=bool(
                             fobj.hidden
                             if getattr(fobj, "hidden", None) is not None
-                            else assembled_view.fields_hidden_by_default
+                            else getattr(assembled_view, "fields_hidden_by_default", False)
                         ),
                         sql=fobj.sql.strip() if getattr(fobj, "sql", None) else None,
                         matched_property=minfo.matched_property,
@@ -3142,10 +3142,11 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
         for tm in q.get("tests") or []:
             tm.pop("field", None)
             tm.pop("fields", None)
-        if (t := q.get("tests")) and t == seen_tests:
+        t = q.get("tests")
+        if t and t == seen_tests:
             q.pop("tests", None)
-        elif t:
-            seen_tests = t
+        else:
+            seen_tests = t or None
         for ja in q.get("join_analysis") or []:
             if isinstance(sj := ja.get("sql_join"), dict):
                 lt, rt = sj.get("left_table"), sj.get("right_table")
@@ -3174,7 +3175,6 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
         for vm in q.get("views") or []:
             if vm.get("sql_table_name"):
                 vm.setdefault("unmodeled_db_columns", [])
-            had_fields = bool(vm.get("fields"))
             dedup_fields: dict[tuple[Any, Any], dict[str, Any]] = {}
             for fm in vm.get("fields") or []:
                 if fm.get("hidden") and fm.get("via"):
@@ -3188,7 +3188,7 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                             prev["via"].append(v_ref)
                 else:
                     dedup_fields[fkey] = fm
-            if had_fields and not dedup_fields and not vm.get("sql_table_name"):
+            if not dedup_fields and not vm.get("sql_table_name"):
                 continue
             vm["fields"] = list(dedup_fields.values())
             kept_views.append(vm)
