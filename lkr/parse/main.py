@@ -55,7 +55,6 @@ __all__ = [
 ]
 
 
-
 group = typer.Typer(
     name="parse",
     help="Parse SQL and LookML into structured components",
@@ -300,8 +299,7 @@ def user_attributes_command(
     effective_path = (
         path
         if any(
-            x is not None
-            for x in (path, file, lookml, dashboard_file, dashboard_json)
+            x is not None for x in (path, file, lookml, dashboard_file, dashboard_json)
         )
         else Path(".")
     )
@@ -369,9 +367,7 @@ def snapshot_command(
     ] = None,
     model: Annotated[
         str | None,
-        typer.Option(
-            "--model", "-m", help="Optional model name filter for snapshot"
-        ),
+        typer.Option("--model", "-m", help="Optional model name filter for snapshot"),
     ] = None,
     format: Annotated[
         Literal["console", "json"],
@@ -491,6 +487,8 @@ def translations_command(
         raise typer.Exit(1)
 
     return result
+
+
 @group.command(name="sql-lookml-compare")
 def sql_lookml_compare_command(
     sql: Annotated[
@@ -687,6 +685,7 @@ def lookml_to_api_command(
     )
     _write_or_echo(result.model_dump_json(indent=2, by_alias=True), output)
     if validate:
+
         def _err_key(err: dict[str, Any]) -> tuple[Any, ...]:
             return (
                 err.get("type"),
@@ -703,7 +702,7 @@ def lookml_to_api_command(
                     path=base_path if base_path.is_dir() else None,
                     file=base_path if base_path.is_file() else None,
                     model=model,
-                    explore=explore,
+                    explore=None,
                     exclude_hidden=exclude_hidden,
                     manifest=manifest,
                     constants=_parse_constant_overrides(constant),
@@ -822,23 +821,35 @@ def lookml_database_compare_command(
     ] = None,
     model: Annotated[
         list[str] | None,
-        typer.Option("--model", "-m", help="Filter to one or more LookML models (repeatable)"),
+        typer.Option(
+            "--model", "-m", help="Filter to one or more LookML models (repeatable)"
+        ),
     ] = None,
     explore: Annotated[
         list[str] | None,
-        typer.Option("--explore", "-e", help="Filter to one or more LookML explores (repeatable)"),
+        typer.Option(
+            "--explore", "-e", help="Filter to one or more LookML explores (repeatable)"
+        ),
     ] = None,
     columns: Annotated[
         bool,
-        typer.Option("--columns", "-c", help="Include physical columns referenced on each table"),
+        typer.Option(
+            "--columns", "-c", help="Include physical columns referenced on each table"
+        ),
     ] = False,
     validate: Annotated[
         bool,
-        typer.Option("--validate", help="Compare compiled LookML tables against the database schema"),
+        typer.Option(
+            "--validate",
+            help="Compare compiled LookML tables against the database schema",
+        ),
     ] = False,
     validate_columns: Annotated[
         bool,
-        typer.Option("--validate-columns", help="Validate compiled tables and columns against the database schema"),
+        typer.Option(
+            "--validate-columns",
+            help="Validate compiled tables and columns against the database schema",
+        ),
     ] = False,
     db_schema_file: Annotated[
         Path | None,

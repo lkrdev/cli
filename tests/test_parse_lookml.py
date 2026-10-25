@@ -512,13 +512,17 @@ def test_parse_sql_to_lookml_tests_dag_association():
     # Field-level tests on order_items view
     oi_views = next(v for v in q1.views if v.view_name == "order_items")
     oi_fields = {f.field_name: f for f in oi_views.fields}
-    assert [t.test_name for t in oi_fields["total_sale_price"].tests] == ["test_revenue_pos"]
+    assert [t.test_name for t in oi_fields["total_sale_price"].tests] == [
+        "test_revenue_pos"
+    ]
     assert oi_fields["sale_price"].tests == []
 
     # Field-level tests on inventory_items view
     ii_views = next(v for v in q1.views if v.view_name == "inventory_items")
     ii_fields = {f.field_name: f for f in ii_views.fields}
-    assert [t.test_name for t in ii_fields["total_gross_margin"].tests] == ["test_margin_pos"]
+    assert [t.test_name for t in ii_fields["total_gross_margin"].tests] == [
+        "test_margin_pos"
+    ]
 
     # 2. Changing id and created_at affects id and created_date in test_order_pk
     res2 = parse_sql_to_lookml(
@@ -552,7 +556,9 @@ def test_parse_sql_to_lookml_describe_doc():
         lkml_schema="public",
     )
     assert res_normal.doc is None
-    payload_normal = json.loads(res_normal.model_dump_json(by_alias=True, exclude_none=True))
+    payload_normal = json.loads(
+        res_normal.model_dump_json(by_alias=True, exclude_none=True)
+    )
     assert "_doc" not in payload_normal
 
     res_desc = parse_sql_to_lookml(
@@ -563,7 +569,9 @@ def test_parse_sql_to_lookml_describe_doc():
         lkml_schema="public",
     )
     assert res_desc.doc == SQL_TO_LOOKML_DOC
-    payload_desc = json.loads(res_desc.model_dump_json(by_alias=True, exclude_none=True))
+    payload_desc = json.loads(
+        res_desc.model_dump_json(by_alias=True, exclude_none=True)
+    )
     assert "_doc" in payload_desc
     assert "queries[].views[].fields[].via" in payload_desc["_doc"]
     assert "queries[].tests" in payload_desc["_doc"]
@@ -843,9 +851,9 @@ def test_parse_lookml_to_api_thelookevent_parity():
         assert actual_exp[k] == expected_exp[k], f"Top-level mismatch on {k}"
 
     assert set(actual_exp["scopes"]) == set(expected_exp["scopes"])
-    assert {
-        (a["name"], a["value"]) for a in actual_exp["aliases"]
-    } == {(a["name"], a["value"]) for a in expected_exp["aliases"]}
+    assert {(a["name"], a["value"]) for a in actual_exp["aliases"]} == {
+        (a["name"], a["value"]) for a in expected_exp["aliases"]
+    }
 
     exp_joins = {j["name"]: j for j in expected_exp["joins"]}
     act_joins = {j["name"]: j for j in actual_exp["joins"]}
@@ -954,7 +962,9 @@ def test_parse_lookml_to_api_thelookevent_parity():
         for fname, ef in exp_flds.items():
             af = act_flds[fname]
             for fk in compare_field_keys:
-                assert af[fk] == ef[fk], f"Field {fname}.{fk} mismatch: {af[fk]!r} != {ef[fk]!r}"
+                assert af[fk] == ef[fk], (
+                    f"Field {fname}.{fk} mismatch: {af[fk]!r} != {ef[fk]!r}"
+                )
 
 
 def test_parse_lookml_to_api_discrepancy_fixes():
@@ -1043,9 +1053,9 @@ def test_parse_lookml_to_api_discrepancy_fixes():
       }
     }
     """
-    exp = lookml_to_lookml_model_explore("inline", "order_items", lookml=lkml).model_dump(
-        by_alias=True
-    )
+    exp = lookml_to_lookml_model_explore(
+        "inline", "order_items", lookml=lkml
+    ).model_dump(by_alias=True)
 
     # Error 1: always_filter & conditionally_filter
     assert exp["always_filter"] == [{"name": "order_items.status", "value": "Complete"}]
@@ -1113,10 +1123,16 @@ def test_parse_lookml_to_api_discrepancy_fixes():
         {"label": "Sale Price", "value": "sale^_price"},
         {"label": "Gross Margin", "value": "gross^_margin"},
     ]
-    assert dims["order_items.dynamic_metric_dim"]["label_from_parameter"] == "metric_selector"
+    assert (
+        dims["order_items.dynamic_metric_dim"]["label_from_parameter"]
+        == "metric_selector"
+    )
 
     # Error 6: distance units value_format
-    assert dims["order_items.warehouse_to_user_distance"]["value_format"] == '#,##0.00" km"'
+    assert (
+        dims["order_items.warehouse_to_user_distance"]["value_format"]
+        == '#,##0.00" km"'
+    )
 
     # Batch 2 (ERRORS_1.md) cases
     lkml_b2 = """
@@ -1281,7 +1297,10 @@ def test_parse_lookml_to_api_discrepancy_fixes():
     assert m_date["align"] == "left"
     assert m_date["is_numeric"] is False
     assert m_date["time_interval"] == {"name": "day", "count": 1}
-    assert m_date["user_attribute_filter_types"] == ["datetime", "advanced_filter_datetime"]
+    assert m_date["user_attribute_filter_types"] == [
+        "datetime",
+        "advanced_filter_datetime",
+    ]
 
     m_yn = meas2["order_items.is_big_order"]
     assert m_yn["align"] == "left"
@@ -1528,8 +1547,13 @@ def test_parse_lookml_to_api_discrepancy_fixes():
     assert d_sp["synonyms"] == ["revenue", "price"]
 
     # Error 3: map_layer
-    assert dims3["order_items.sales_region"]["map_layer"]["name"] == "custom_sales_regions"
-    assert dims3["order_items.sales_region"]["map_layer"]["url"] == "/maps/regions.topojson"
+    assert (
+        dims3["order_items.sales_region"]["map_layer"]["name"] == "custom_sales_regions"
+    )
+    assert (
+        dims3["order_items.sales_region"]["map_layer"]["url"]
+        == "/maps/regions.topojson"
+    )
     assert dims3["order_items.state_built_in_layer"]["map_layer"]["name"] == "us_states"
 
     # Error 4 & 5: dimension_group synonyms and allow_fill: no
@@ -1561,11 +1585,7 @@ def test_parse_lookml_to_api_discrepancy_fixes():
     assert dims3["order_items.created_minute15"]["can_time_filter"] is True
 
     # Error 9 & 20: default duration order & standalone duration_* dimension
-    dur_names = [
-        f
-        for f in sets3["order_items"]
-        if f.endswith("_default_dur")
-    ]
+    dur_names = [f for f in sets3["order_items"] if f.endswith("_default_dur")]
     assert dur_names == [
         f"order_items.{u}s_default_dur"
         for u in ("year", "quarter", "month", "week", "day", "hour", "minute", "second")
@@ -1624,10 +1644,15 @@ def test_parse_lookml_to_api_discrepancy_fixes():
         dims3["order_items.suggest_from_status"]["suggest_dimension"]
         == "order_items.status"
     )
-    assert meas3["order_items.suggested_measure"]["suggest_dimension"] == "products.category"
+    assert (
+        meas3["order_items.suggested_measure"]["suggest_dimension"]
+        == "products.category"
+    )
     assert meas3["order_items.suggested_measure"]["suggest_explore"] == "custom_exp"
     assert meas3["order_items.suggested_measure"]["suggestions"] == ["A", "B"]
-    assert filts3["order_items.status_filter"]["suggest_dimension"] == "order_items.status"
+    assert (
+        filts3["order_items.status_filter"]["suggest_dimension"] == "order_items.status"
+    )
     assert filts3["order_items.status_filter"]["suggestions"] == ["Complete", "Pending"]
 
 
@@ -1654,7 +1679,9 @@ def test_parse_sql_to_lookml_unqualified_lookml_error():
     from lkr.parse import parse_sql_to_lookml
 
     lkml = "view: foo { sql_table_name: foo ;; dimension: a {} }"
-    with pytest.raises(ValueError, match="LookML view 'foo' table 'foo' cannot be qualified"):
+    with pytest.raises(
+        ValueError, match="LookML view 'foo' table 'foo' cannot be qualified"
+    ):
         parse_sql_to_lookml(sql="SELECT a FROM db.schema.foo", lookml=lkml)
 
 
@@ -1686,9 +1713,11 @@ def test_parse_sql_to_lookml_connection_coercion(monkeypatch):
     monkeypatch.setattr(
         s2l,
         "_fetch_connection_metadata_sandbox",
-        lambda conn_name: {"database": "db_live", "schema": "schema_live"}
-        if conn_name == "thelook"
-        else None,
+        lambda conn_name: (
+            {"database": "db_live", "schema": "schema_live"}
+            if conn_name == "thelook"
+            else None
+        ),
     )
 
     lkml = """
@@ -1733,7 +1762,9 @@ def test_parse_sql_to_lookml_native_derived_table():
     views_by_name = {v.view_name: v for v in res.queries[0].views}
     assert "orders" in views_by_name
     assert "customer_order_summary" in views_by_name
-    ndt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    ndt_fields = {
+        f.field_name: f for f in views_by_name["customer_order_summary"].fields
+    }
     assert "ordering_user_id" in ndt_fields
     assert ndt_fields["ordering_user_id"].via == ["orders.customer_id"]
 
@@ -1763,7 +1794,9 @@ def test_parse_sql_to_lookml_sql_derived_table():
     views_by_name = {v.view_name: v for v in res.queries[0].views}
     assert "orders" in views_by_name
     assert "customer_order_summary" in views_by_name
-    dt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    dt_fields = {
+        f.field_name: f for f in views_by_name["customer_order_summary"].fields
+    }
     assert "ordering_user_id" in dt_fields
     assert dt_fields["ordering_user_id"].via == ["orders.customer_id"]
 
@@ -1800,7 +1833,9 @@ def test_parse_sql_to_lookml_ndt_with_derived_column():
     views_by_name = {v.view_name: v for v in res.queries[0].views}
     assert "orders" in views_by_name
     assert "customer_order_summary" in views_by_name
-    ndt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    ndt_fields = {
+        f.field_name: f for f in views_by_name["customer_order_summary"].fields
+    }
     assert "ordering_user_id" in ndt_fields
 
 
@@ -1836,7 +1871,9 @@ def test_parse_sql_to_lookml_ndt_chained_derived_column():
     views_by_name = {v.view_name: v for v in res.queries[0].views}
     assert "orders" in views_by_name
     assert "customer_order_summary" in views_by_name
-    ndt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    ndt_fields = {
+        f.field_name: f for f in views_by_name["customer_order_summary"].fields
+    }
     assert "composite_user_key" in ndt_fields
     assert ndt_fields["composite_user_key"].via == ["orders.customer_id"]
 
@@ -1868,7 +1905,9 @@ def test_parse_sql_to_lookml_dt_cte_column_alias():
     res = parse_sql_to_lookml(sql="SELECT customer_id FROM a.b.orders", lookml=lkml)
     views_by_name = {v.view_name: v for v in res.queries[0].views}
     assert "customer_order_summary" in views_by_name
-    dt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    dt_fields = {
+        f.field_name: f for f in views_by_name["customer_order_summary"].fields
+    }
     assert "ordering_user_id" in dt_fields
 
 
@@ -1898,7 +1937,9 @@ def test_parse_sql_to_lookml_dt_subquery_column_alias():
     res = parse_sql_to_lookml(sql="SELECT customer_id FROM a.b.orders", lookml=lkml)
     views_by_name = {v.view_name: v for v in res.queries[0].views}
     assert "customer_order_summary" in views_by_name
-    dt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    dt_fields = {
+        f.field_name: f for f in views_by_name["customer_order_summary"].fields
+    }
     assert "ordering_user_id" in dt_fields
 
 
@@ -1953,7 +1994,9 @@ def test_parse_sql_to_lookml_dt_raw_table_without_sql_table_name_macro():
     res = parse_sql_to_lookml(sql="SELECT customer_id FROM a.b.orders", lookml=lkml)
     views_by_name = {v.view_name: v for v in res.queries[0].views}
     assert "customer_order_summary" in views_by_name
-    dt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    dt_fields = {
+        f.field_name: f for f in views_by_name["customer_order_summary"].fields
+    }
     assert "ordering_user_id" in dt_fields
 
 
@@ -1984,7 +2027,9 @@ def test_parse_sql_to_lookml_dt_chained_cte_raw_table():
     res = parse_sql_to_lookml(sql="SELECT customer_id FROM a.b.orders", lookml=lkml)
     views_by_name = {v.view_name: v for v in res.queries[0].views}
     assert "customer_order_summary" in views_by_name
-    dt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    dt_fields = {
+        f.field_name: f for f in views_by_name["customer_order_summary"].fields
+    }
     assert "ordering_user_id" in dt_fields
 
 
@@ -2011,7 +2056,9 @@ def test_parse_sql_to_lookml_dt_join_subquery_raw_table():
     res = parse_sql_to_lookml(sql="SELECT customer_id FROM a.b.orders", lookml=lkml)
     views_by_name = {v.view_name: v for v in res.queries[0].views}
     assert "customer_order_summary" in views_by_name
-    dt_fields = {f.field_name: f for f in views_by_name["customer_order_summary"].fields}
+    dt_fields = {
+        f.field_name: f for f in views_by_name["customer_order_summary"].fields
+    }
     assert "ordering_user_id" in dt_fields
 
 
@@ -2426,19 +2473,31 @@ view: summary {
     f_map = {f.field_name: f for f in orders_vm.fields}
 
     assert f_map["status_label"].matched_property == "dimension.case.when.sql"
-    assert f_map["status_label"].property_path == "view.orders.dimension.status_label.case.when.sql"
+    assert (
+        f_map["status_label"].property_path
+        == "view.orders.dimension.status_label.case.when.sql"
+    )
     assert f_map["status_label"].expression == "${TABLE}.status = 'open'"
     assert f_map["status_label"].sql_location is not None
 
     assert f_map["deal_tier"].matched_property == "measure.case.when.sql"
-    assert f_map["deal_tier"].property_path == "view.orders.measure.deal_tier.case.when.sql"
+    assert (
+        f_map["deal_tier"].property_path
+        == "view.orders.measure.deal_tier.case.when.sql"
+    )
 
     assert f_map["active_count"].matched_property == "measure.filters"
-    assert f_map["active_count"].property_path == "view.orders.measure.active_count.filters"
+    assert (
+        f_map["active_count"].property_path
+        == "view.orders.measure.active_count.filters"
+    )
     assert "orders.status" in f_map["active_count"].via
 
     dur_f = f_map["duration_group"]
-    assert dur_f.matched_property in ("dimension_group.sql_start", "dimension_group.sql_end")
+    assert dur_f.matched_property in (
+        "dimension_group.sql_start",
+        "dimension_group.sql_end",
+    )
 
     assert f_map["date_filter"].matched_property == "filter.sql"
 
@@ -2456,7 +2515,9 @@ view: summary {
     assert sql_on_u.property_path == "explore.orders.join.users.sql_on"
     assert sql_on_u.join_name == "users"
 
-    where_u = next(u for u in q.usages if u.matched_property == "explore.sql_always_where")
+    where_u = next(
+        u for u in q.usages if u.matched_property == "explore.sql_always_where"
+    )
     assert where_u.property_path == "explore.orders.sql_always_where"
 
     dg_u = next(u for u in q.usages if u.matched_property == "datagroup.sql_trigger")
@@ -2470,31 +2531,31 @@ def test_parse_lookml_separate_test_file(tmp_path: Path):
         'connection: "test_db"\n'
         'include: "*.view.lkml"\n'
         'include: "tests/**/*.test.lkml"\n'
-        'explore: orders {}\n',
+        "explore: orders {}\n",
         encoding="utf-8",
     )
     view_file = tmp_path / "orders.view.lkml"
     view_file.write_text(
-        'view: orders {\n'
-        '  sql_table_name: public.orders ;;\n'
-        '  dimension: id { primary_key: yes }\n'
-        '  measure: count { type: count }\n'
-        '}\n',
+        "view: orders {\n"
+        "  sql_table_name: public.orders ;;\n"
+        "  dimension: id { primary_key: yes }\n"
+        "  measure: count { type: count }\n"
+        "}\n",
         encoding="utf-8",
     )
     tests_dir = tmp_path / "tests" / "silver"
     tests_dir.mkdir(parents=True)
     test_file = tests_dir / "orders.test.lkml"
     test_file.write_text(
-        'test: orders_pk_is_unique {\n'
-        '  explore_source: orders {\n'
-        '    column: id { field: orders.id }\n'
-        '    column: count { field: orders.count }\n'
-        '  }\n'
-        '  assert: count_is_one {\n'
-        '    expression: ${orders.count} = 1 ;;\n'
-        '  }\n'
-        '}\n',
+        "test: orders_pk_is_unique {\n"
+        "  explore_source: orders {\n"
+        "    column: id { field: orders.id }\n"
+        "    column: count { field: orders.count }\n"
+        "  }\n"
+        "  assert: count_is_one {\n"
+        "    expression: ${orders.count} = 1 ;;\n"
+        "  }\n"
+        "}\n",
         encoding="utf-8",
     )
 
@@ -2606,26 +2667,26 @@ view: share_of_net_return {
 def test_parse_lookml_constants_quoted_unquoted_and_positions(tmp_path: Path):
     (tmp_path / "manifest.lkml").write_text(
         'project_name: "const_proj"\n'
-        'constant: conn_name {\n'
+        "constant: conn_name {\n"
         '  value: "bigquery_prod"\n'
-        '  export: override_required\n'
-        '}\n'
-        'constant: bq_dataset {\n'
+        "  export: override_required\n"
+        "}\n"
+        "constant: bq_dataset {\n"
         '  value: "analytics_prod.ecomm"\n'
-        '  export: override_optional\n'
-        '}\n'
-        'constant: dg_name {\n'
+        "  export: override_optional\n"
+        "}\n"
+        "constant: dg_name {\n"
         '  value: "daily_dg"\n'
-        '}\n'
-        'constant: base_view_name {\n'
+        "}\n"
+        "constant: base_view_name {\n"
         '  value: "base_entity"\n'
-        '}\n'
-        'constant: is_secret_hidden {\n'
+        "}\n"
+        "constant: is_secret_hidden {\n"
         '  value: "yes"\n'
-        '}\n'
-        'constant: col_prefix {\n'
+        "}\n"
+        "constant: col_prefix {\n"
         '  value: "order"\n'
-        '}\n',
+        "}\n",
         encoding="utf-8",
     )
     (tmp_path / "orders.view.lkml").write_text(
@@ -2707,14 +2768,14 @@ def test_parse_lookml_manifest_dependency_override_constants(tmp_path: Path):
     imp_dir.mkdir(parents=True)
     (imp_dir / "manifest.lkml").write_text(
         'project_name: "core_hub"\n'
-        'constant: schema_name {\n'
+        "constant: schema_name {\n"
         '  value: "default_core_schema"\n'
-        '  export: override_optional\n'
-        '}\n'
-        'constant: conn {\n'
+        "  export: override_optional\n"
+        "}\n"
+        "constant: conn {\n"
         '  value: "default_conn"\n'
-        '  export: override_required\n'
-        '}\n',
+        "  export: override_required\n"
+        "}\n",
         encoding="utf-8",
     )
     (imp_dir / "users.view.lkml").write_text(
@@ -2731,9 +2792,9 @@ def test_parse_lookml_manifest_dependency_override_constants(tmp_path: Path):
 
     (tmp_path / "manifest.lkml").write_text(
         'project_name: "spoke_project"\n'
-        'constant: parent_conn {\n'
+        "constant: parent_conn {\n"
         '  value: "spoke_bq_conn"\n'
-        '}\n'
+        "}\n"
         "local_dependency: {\n"
         '  project: "core_hub"\n'
         "  override_constant: schema_name {\n"
@@ -2794,13 +2855,13 @@ def test_parse_lookml_manifest_autodiscovery_and_cli_overrides(tmp_path: Path):
 
     (tmp_path / "manifest.lkml").write_text(
         'project_name: "auto_proj"\n'
-        'constant: target_schema {\n'
+        "constant: target_schema {\n"
         '  value: "manifest_schema"\n'
-        '  export: override_optional\n'
-        '}\n'
-        'constant: target_conn {\n'
+        "  export: override_optional\n"
+        "}\n"
+        "constant: target_conn {\n"
         '  value: "manifest_conn"\n'
-        '}\n',
+        "}\n",
         encoding="utf-8",
     )
     views_dir = tmp_path / "views"
@@ -2866,7 +2927,9 @@ def test_parse_lookml_manifest_autodiscovery_and_cli_overrides(tmp_path: Path):
     assert cli_sql_cmp.exit_code == 0
     cmp_payload = json.loads(cli_sql_cmp.stdout)
     assert len(cmp_payload["queries"][0]["views"]) == 1
-    assert cmp_payload["queries"][0]["views"][0]["sql_table"] == "custom_cli_schema.items"
+    assert (
+        cmp_payload["queries"][0]["views"][0]["sql_table"] == "custom_cli_schema.items"
+    )
 
     # 4. lookml-to-api resolves constants and CLI --constant override
     api_res = parse_lookml_to_api(
@@ -2959,11 +3022,22 @@ def test_lookml_to_api_duplicate_field_logic_and_count_star_matching(tmp_path: P
     exp = lookml_to_lookml_model_explore("inline", "order_items", lookml=dup_lkml)
     assert exp.errors is not None
     error_msgs = [e["message"] for e in exp.errors]
-    assert any("order_items.count" in m and "order_items.total_line_items_sold" in m for m in error_msgs)
-    assert any("order_items.total_revenue" in m and "order_items.gross_sales" in m for m in error_msgs)
-    assert any("order_items.sale_price" in m and "order_items.price_alias" in m for m in error_msgs)
+    assert any(
+        "order_items.count" in m and "order_items.total_line_items_sold" in m
+        for m in error_msgs
+    )
+    assert any(
+        "order_items.total_revenue" in m and "order_items.gross_sales" in m
+        for m in error_msgs
+    )
+    assert any(
+        "order_items.sale_price" in m and "order_items.price_alias" in m
+        for m in error_msgs
+    )
 
-    (tmp_path / "dup.model.lkml").write_text('connection: "c"\n' + dup_lkml, encoding="utf-8")
+    (tmp_path / "dup.model.lkml").write_text(
+        'connection: "c"\n' + dup_lkml, encoding="utf-8"
+    )
     cli_fail = runner.invoke(
         app,
         ["parse", "lookml-to-api", "--path", str(tmp_path), "--validate"],
@@ -2993,7 +3067,9 @@ def test_lookml_to_api_duplicate_field_logic_and_count_star_matching(tmp_path: P
       }
     }
     """
-    (tmp_path / "dup.model.lkml").write_text('connection: "c"\n' + clean_lkml, encoding="utf-8")
+    (tmp_path / "dup.model.lkml").write_text(
+        'connection: "c"\n' + clean_lkml, encoding="utf-8"
+    )
     cli_ok = runner.invoke(
         app,
         ["parse", "lookml-to-api", "--path", str(tmp_path), "--validate"],
@@ -3061,7 +3137,9 @@ def test_parse_lookml_to_api_exclude_hidden_flag(tmp_path: Path):
       hidden: no
     }
     """
-    (tmp_path / "shop.model.lkml").write_text('connection: "bq"\n' + lkml, encoding="utf-8")
+    (tmp_path / "shop.model.lkml").write_text(
+        'connection: "bq"\n' + lkml, encoding="utf-8"
+    )
 
     res = runner.invoke(
         app,
@@ -3070,7 +3148,9 @@ def test_parse_lookml_to_api_exclude_hidden_flag(tmp_path: Path):
     assert res.exit_code == 0, res.output
     payload = json.loads(res.output)
 
-    assert [e["name"] for e in payload["all_lookml_models"][0]["explores"]] == ["orders"]
+    assert [e["name"] for e in payload["all_lookml_models"][0]["explores"]] == [
+        "orders"
+    ]
     assert list(payload["lookml_model_explores"].keys()) == ["shop::orders"]
 
     fields = payload["lookml_model_explores"]["shop::orders"]["fields"]
@@ -3079,7 +3159,12 @@ def test_parse_lookml_to_api_exclude_hidden_flag(tmp_path: Path):
 
     assert "orders.id" not in dim_names
     assert "orders.created_raw" not in dim_names
-    assert {"orders.status", "orders.created_date", "orders.created_month", "orders.store_loc"} <= set(dim_names)
+    assert {
+        "orders.status",
+        "orders.created_date",
+        "orders.created_month",
+        "orders.store_loc",
+    } <= set(dim_names)
     assert meas_names == ["orders.count"]
 
 
@@ -3144,8 +3229,12 @@ def test_lookml_to_api_alias_expansion_and_collision_validation(tmp_path: Path):
     }
     explore: orders {}
     """
-    (tmp_path / "m.model.lkml").write_text('connection: "bq"\n' + collide_lkml, encoding="utf-8")
-    res = runner.invoke(app, ["parse", "lookml-to-api", "--path", str(tmp_path), "--validate"])
+    (tmp_path / "m.model.lkml").write_text(
+        'connection: "bq"\n' + collide_lkml, encoding="utf-8"
+    )
+    res = runner.invoke(
+        app, ["parse", "lookml-to-api", "--path", str(tmp_path), "--validate"]
+    )
     assert res.exit_code == 1
     bad_exp = lookml_to_lookml_model_explore("m", "orders", path=tmp_path)
     assert bad_exp.errors is not None
@@ -3239,14 +3328,20 @@ def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
       }
     }
     """
-    (tmp_path / "shop.model.lkml").write_text('connection: "bq"\n' + lkml, encoding="utf-8")
+    (tmp_path / "shop.model.lkml").write_text(
+        'connection: "bq"\n' + lkml, encoding="utf-8"
+    )
 
     # 1. COUNT(pk) -> exact coverage on orders.count without requiring orders.order_id dimension
     r_pk = parse_sql_to_lookml(
         sql="SELECT num_of_item AS basket_size, COUNT(order_id) AS orders_at_this_size FROM `bigquery-public-data.thelook_ecommerce.orders` GROUP BY 1",
         path=tmp_path,
     )
-    eq_pk = next(q for q in r_pk.queries[0].explore_queries if q.query_name == "order_volume_by_basket_size")
+    eq_pk = next(
+        q
+        for q in r_pk.queries[0].explore_queries
+        if q.query_name == "order_volume_by_basket_size"
+    )
     assert eq_pk.coverage == "exact"
     assert eq_pk.unmatched_explore_query_fields == []
     assert eq_pk.missing_query_fields == []
@@ -3256,7 +3351,11 @@ def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
         sql="SELECT oi.status, COUNT(DISTINCT o.order_id) FROM `bigquery-public-data.thelook_ecommerce.order_items` oi JOIN `bigquery-public-data.thelook_ecommerce.orders` o ON oi.order_id = o.order_id GROUP BY 1",
         path=tmp_path,
     )
-    eq_dist = next(q for q in r_dist.queries[0].explore_queries if q.query_name == "orders_by_item_status")
+    eq_dist = next(
+        q
+        for q in r_dist.queries[0].explore_queries
+        if q.query_name == "orders_by_item_status"
+    )
     assert eq_dist.coverage == "exact"
     assert eq_dist.missing_query_fields == []
 
@@ -3265,7 +3364,11 @@ def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
         sql="SELECT num_of_item, COUNT(order_id) FROM `bigquery-public-data.thelook_ecommerce.orders` WHERE order_id > 100 GROUP BY 1",
         path=tmp_path,
     )
-    eq_out = next(q for q in r_outside.queries[0].explore_queries if q.query_name == "order_volume_by_basket_size")
+    eq_out = next(
+        q
+        for q in r_outside.queries[0].explore_queries
+        if q.query_name == "order_volume_by_basket_size"
+    )
     assert eq_out.coverage == "partial_overlap"
     assert eq_out.missing_query_fields == ["orders.order_id"]
 
@@ -3274,10 +3377,17 @@ def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
         sql="SELECT COUNT(shipped_at) FROM `bigquery-public-data.thelook_ecommerce.orders`",
         path=tmp_path,
     )
-    assert ("count", "measure") not in {(f.field_name, f.field_type) for f in r_non_pk.queries[0].views[0].fields}
+    assert ("count", "measure") not in {
+        (f.field_name, f.field_type) for f in r_non_pk.queries[0].views[0].fields
+    }
 
     # 5. Clean symmetric STDDEV + native percentile + APPROX_COUNT_DISTINCT pass --validate
-    assert runner.invoke(app, ["parse", "lookml-to-api", "--path", str(tmp_path), "--validate"]).exit_code == 0
+    assert (
+        runner.invoke(
+            app, ["parse", "lookml-to-api", "--path", str(tmp_path), "--validate"]
+        ).exit_code
+        == 0
+    )
 
     # 6. Raw SQL percentile/stddev/variance in type: number fail --validate
     bad_lkml = """
@@ -3293,12 +3403,39 @@ def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
     }
     explore: v {}
     """
-    (tmp_path / "bad.model.lkml").write_text('connection: "bq"\n' + bad_lkml, encoding="utf-8")
+    (tmp_path / "bad.model.lkml").write_text(
+        'connection: "bq"\n' + bad_lkml, encoding="utf-8"
+    )
     bad_exp = lookml_to_lookml_model_explore("bad", "v", path=tmp_path)
     assert bad_exp.errors is not None
-    flagged = {e["field"]: e["functions"] for e in bad_exp.errors if e["type"] == "raw_sql_aggregate"}
-    assert set(flagged) == {"v.m_std", "v.m_var", "v.m_pct", "v.m_pdisc", "v.m_approx", "v.m_med"}
-    assert runner.invoke(app, ["parse", "lookml-to-api", "--path", str(tmp_path), "-m", "bad", "--validate"]).exit_code == 1
+    flagged = {
+        e["field"]: e["functions"]
+        for e in bad_exp.errors
+        if e["type"] == "raw_sql_aggregate"
+    }
+    assert set(flagged) == {
+        "v.m_std",
+        "v.m_var",
+        "v.m_pct",
+        "v.m_pdisc",
+        "v.m_approx",
+        "v.m_med",
+    }
+    assert (
+        runner.invoke(
+            app,
+            [
+                "parse",
+                "lookml-to-api",
+                "--path",
+                str(tmp_path),
+                "-m",
+                "bad",
+                "--validate",
+            ],
+        ).exit_code
+        == 1
+    )
 
     # 7. '* 100' scaling paired with literal '"%"' value_format fails --validate (direct + indirect via dimension),
     #    while unscaled ratio + value_format_name: percent_2 passes
@@ -3336,15 +3473,32 @@ def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
     }
     explore: products {}
     """
-    (tmp_path / "pct.model.lkml").write_text('connection: "bq"\n' + pct_lkml, encoding="utf-8")
+    (tmp_path / "pct.model.lkml").write_text(
+        'connection: "bq"\n' + pct_lkml, encoding="utf-8"
+    )
     pct_exp = lookml_to_lookml_model_explore("pct", "products", path=tmp_path)
     assert pct_exp.errors is not None
-    pct_flagged = {e["field"] for e in pct_exp.errors if e["type"] == "percent_scaled_value_format"}
-    assert pct_flagged == {"products.markup_greed_pct", "products.avg_markup_greed_pct", "products.direct_pct_bad"}
+    pct_flagged = {
+        e["field"] for e in pct_exp.errors if e["type"] == "percent_scaled_value_format"
+    }
+    assert pct_flagged == {
+        "products.markup_greed_pct",
+        "products.avg_markup_greed_pct",
+        "products.direct_pct_bad",
+    }
     assert (
         runner.invoke(
             app,
-            ["parse", "lookml-to-api", "--path", str(tmp_path), "-m", "pct", "--exclude-hidden", "--validate"],
+            [
+                "parse",
+                "lookml-to-api",
+                "--path",
+                str(tmp_path),
+                "-m",
+                "pct",
+                "--exclude-hidden",
+                "--validate",
+            ],
         ).exit_code
         == 1
     )
@@ -3352,10 +3506,26 @@ def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
     # 8. --base-path suppresses pre-existing baseline errors while failing on net-new errors
     base_dir = tmp_path / "base_pct"
     base_dir.mkdir()
-    (base_dir / "pct.model.lkml").write_text('connection: "bq"\n' + pct_lkml, encoding="utf-8")
-    assert runner.invoke(
-        app, ["parse", "lookml-to-api", "--path", str(tmp_path), "--base-path", str(base_dir), "-m", "pct", "--validate"]
-    ).exit_code == 0
+    (base_dir / "pct.model.lkml").write_text(
+        'connection: "bq"\n' + pct_lkml, encoding="utf-8"
+    )
+    assert (
+        runner.invoke(
+            app,
+            [
+                "parse",
+                "lookml-to-api",
+                "--path",
+                str(tmp_path),
+                "--base-path",
+                str(base_dir),
+                "-m",
+                "pct",
+                "--validate",
+            ],
+        ).exit_code
+        == 0
+    )
     head_dir = tmp_path / "head_pct"
     head_dir.mkdir()
     (head_dir / "pct.model.lkml").write_text(
@@ -3367,9 +3537,23 @@ def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
         ),
         encoding="utf-8",
     )
-    assert runner.invoke(
-        app, ["parse", "lookml-to-api", "--path", str(head_dir), "--base-path", str(base_dir), "-m", "pct", "--validate"]
-    ).exit_code == 1
+    assert (
+        runner.invoke(
+            app,
+            [
+                "parse",
+                "lookml-to-api",
+                "--path",
+                str(head_dir),
+                "--base-path",
+                str(base_dir),
+                "-m",
+                "pct",
+                "--validate",
+            ],
+        ).exit_code
+        == 1
+    )
 
     # 9. sql-lookml-compare --offline skips live Looker sandbox lookups
     import pytest
@@ -3381,18 +3565,21 @@ def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(s2l, "_fetch_table_columns_sandbox", _fail)
-        assert runner.invoke(
-            app,
-            [
-                "parse",
-                "sql-lookml-compare",
-                "--sql",
-                "SELECT num_of_item FROM `bigquery-public-data.thelook_ecommerce.orders`",
-                "--path",
-                str(tmp_path),
-                "--offline",
-            ],
-        ).exit_code == 0
+        assert (
+            runner.invoke(
+                app,
+                [
+                    "parse",
+                    "sql-lookml-compare",
+                    "--sql",
+                    "SELECT num_of_item FROM `bigquery-public-data.thelook_ecommerce.orders`",
+                    "--path",
+                    str(tmp_path),
+                    "--offline",
+                ],
+            ).exit_code
+            == 0
+        )
 
 
 def test_sql_lookml_compare_refinement_file_attribution_and_compact(tmp_path: Path):
@@ -3531,13 +3718,21 @@ def test_iter3_value_format_validation_compact_explores_and_diff_tests(tmp_path:
     assert len(comp["explores"]) == 1
     assert set(comp["explores"][0]["fields"]) >= {"orders.status", "orders.count"}
     assert [eq["query_name"] for eq in comp["explore_queries"]] == ["q_exact"]
-    assert [(eq["query_name"], eq["coverage"]) for eq in comp_remorse["explore_queries"]] == [
-        ("q_remorse", "exact")
-    ]
+    assert [
+        (eq["query_name"], eq["coverage"]) for eq in comp_remorse["explore_queries"]
+    ] == [("q_remorse", "exact")]
     assert "explore_queries" not in comp_join
-    assert comp_join["join_analysis"][0]["sql_join"] == "proj.ds.users INNER proj.ds.orders"
-    combo_hits = [f for f in comp_join["views"][0]["fields"] if f["field_name"] == "combo"]
-    assert len(combo_hits) == 1 and set(combo_hits[0]["via"]) >= {"orders.count", "orders.ratio_ok"}
+    assert (
+        comp_join["join_analysis"][0]["sql_join"]
+        == "proj.ds.users INNER proj.ds.orders"
+    )
+    combo_hits = [
+        f for f in comp_join["views"][0]["fields"] if f["field_name"] == "combo"
+    ]
+    assert len(combo_hits) == 1 and set(combo_hits[0]["via"]) >= {
+        "orders.count",
+        "orders.ratio_ok",
+    }
 
     bad_dir = tmp_path / "bad"
     bad_dir.mkdir()
@@ -3572,8 +3767,7 @@ def test_iter3_value_format_validation_compact_explores_and_diff_tests(tmp_path:
         "}\n"
     )
     head_lkml = (
-        base_lkml
-        + "\ntest: new_pr_test {\n"
+        base_lkml + "\ntest: new_pr_test {\n"
         "  explore_source: events {}\n"
         "  assert: ok { expression: ${events.count} > 0 ;; }\n"
         "}\n"
@@ -3583,3 +3777,75 @@ def test_iter3_value_format_validation_compact_explores_and_diff_tests(tmp_path:
     changed = [n for n, b in head_blocks.items() if base_blocks.get(n) != b]
     assert changed == ["new_pr_test"]
 
+
+def test_validate_join_all_fields_base_path_cross_explore_and_scratch_ignore(
+    tmp_path: Path,
+):
+    from typer.testing import CliRunner
+
+    from lkr.main import app
+    from lkr.parse.lookml import parse_lookml
+
+    runner = CliRunner()
+
+    # 1. ALL_FIELDS* inside join: { fields: [...] } fails offline --validate
+    bad_join_lkml = (
+        "view: orders { dimension: id { primary_key: yes type: number } dimension: p_id { type: number } }\n"
+        "view: products { dimension: id { primary_key: yes type: number } dimension: secret { type: string } }\n"
+        "explore: orders {\n"
+        "  join: products { sql_on: ${orders.p_id} = ${products.id} ;; fields: [ALL_FIELDS*, -products.secret] }\n"
+        "}\n"
+    )
+    res_bad_join = runner.invoke(
+        app, ["parse", "lookml-to-api", "--lookml", bad_join_lkml, "--validate"]
+    )
+    assert res_bad_join.exit_code == 1
+
+    # 2. --base-path suppresses pre-existing view error when joined onto another explore with -e,
+    #    and ignores ./data/<run>/lookml/** scratch trees inside base_path.
+    base_dir = tmp_path / "repo"
+    cand_dir = base_dir / "data" / "run_1" / "lookml"
+    cand_dir.mkdir(parents=True)
+    legacy_products = (
+        "view: products {\n"
+        "  dimension: id { primary_key: yes type: number }\n"
+        "  measure: legacy_pct { type: number sql: 100.0 * 1 ;; value_format: '0.00\"%\"' }\n"
+        "}\n"
+    )
+    orders_view = "view: orders { dimension: id { primary_key: yes type: number } dimension: p_id { type: number } }\n"
+    (base_dir / "products.view.lkml").write_text(legacy_products, encoding="utf-8")
+    (base_dir / "orders.view.lkml").write_text(orders_view, encoding="utf-8")
+    (base_dir / "shop.model.lkml").write_text(
+        'connection: "bq"\ninclude: "*.view.lkml"\nexplore: orders {}\nexplore: products {}\n',
+        encoding="utf-8",
+    )
+    (cand_dir / "products.view.lkml").write_text(legacy_products, encoding="utf-8")
+    (cand_dir / "orders.view.lkml").write_text(orders_view, encoding="utf-8")
+    (cand_dir / "shop.model.lkml").write_text(
+        'connection: "bq"\ninclude: "*.view.lkml"\n'
+        "explore: orders { join: products { sql_on: ${orders.p_id} = ${products.id} ;; relationship: many_to_one } }\n"
+        "explore: ghost_only_in_scratch { view_name: orders }\n",
+        encoding="utf-8",
+    )
+
+    parsed_base = parse_lookml(path=base_dir)
+    assert parsed_base.model is not None
+    assert "ghost_only_in_scratch" not in (parsed_base.model["shop"].explore or {})
+
+    scoped_res = runner.invoke(
+        app,
+        [
+            "parse",
+            "lookml-to-api",
+            "--path",
+            str(cand_dir),
+            "--base-path",
+            str(base_dir),
+            "-m",
+            "shop",
+            "-e",
+            "orders",
+            "--validate",
+        ],
+    )
+    assert scoped_res.exit_code == 0, scoped_res.output

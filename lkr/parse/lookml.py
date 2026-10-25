@@ -737,9 +737,28 @@ def parse_lookml(
         if root.is_file():
             return parse_lookml(file=root, manifest=manifest, constants=constants)
         mpath = _find_manifest_file(root, manifest)
-        if any(root.rglob("*.model.lkml")):
+
+        def _is_ignored_rel(rel_posix: str) -> bool:
+            parts = rel_posix.split("/")
+            return parts[0] in {"tmp", ".agents", ".git", "node_modules"} or (
+                len(parts) >= 3 and parts[0] == "data" and parts[2] == "lookml"
+            )
+
+        if any(
+            not _is_ignored_rel(f.relative_to(root).as_posix())
+            for f in root.rglob("*.model.lkml")
+        ):
             opts["cwd"] = str(root)
             opts["source"] = "**/*.lkml"
+            opts["globOptions"] = {
+                "ignore": [
+                    "data/*/lookml/**",
+                    "tmp/**",
+                    ".agents/**",
+                    ".git/**",
+                    "node_modules/**",
+                ]
+            }
         else:
             opts["input"] = [
                 *(
@@ -749,6 +768,7 @@ def parse_lookml(
                     }
                     for f in sorted(root.rglob("*.lkml"))
                     if f.is_file()
+                    and not _is_ignored_rel(f.relative_to(root).as_posix())
                 ),
                 {"path": "inline.model.lkml", "content": 'include: "**/*.lkml"'},
             ]
