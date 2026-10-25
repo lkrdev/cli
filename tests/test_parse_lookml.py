@@ -3486,6 +3486,7 @@ def test_iter3_value_format_validation_compact_explores_and_diff_tests(tmp_path:
         "  measure: count { type: count }\n"
         '  measure: cancelled_orders { type: count filters: [status: "Cancelled"] }\n'
         "  measure: ratio_ok { type: number sql: ${sale_price} ;; value_format_name: decimal_3 }\n"
+        "  measure: combo { type: number sql: ${count} + ${ratio_ok} ;; }\n"
         "}\n",
         encoding="utf-8",
     )
@@ -3515,7 +3516,9 @@ def test_iter3_value_format_validation_compact_explores_and_diff_tests(tmp_path:
                 "--sql",
                 (
                     "SELECT status, COUNT(*) AS c, SUM(sale_price) AS s FROM `proj.ds.orders` GROUP BY 1; "
-                    "SELECT COUNT(id) AS c FROM `proj.ds.orders` WHERE status = 'Cancelled'"
+                    "SELECT COUNT(id) AS c FROM `proj.ds.orders` WHERE status = 'Cancelled'; "
+                    "SELECT u.country, o.status, COUNT(*) AS c, SUM(o.sale_price) AS s "
+                    "FROM `proj.ds.users` u JOIN `proj.ds.orders` o ON u.id = o.id GROUP BY 1, 2"
                 ),
                 "--path",
                 str(tmp_path),
@@ -3524,13 +3527,17 @@ def test_iter3_value_format_validation_compact_explores_and_diff_tests(tmp_path:
             ],
         ).output
     )["queries"]
-    comp, comp_remorse = comp_qs[0], comp_qs[1]
+    comp, comp_remorse, comp_join = comp_qs[0], comp_qs[1], comp_qs[2]
     assert len(comp["explores"]) == 1
     assert set(comp["explores"][0]["fields"]) >= {"orders.status", "orders.count"}
     assert [eq["query_name"] for eq in comp["explore_queries"]] == ["q_exact"]
     assert [(eq["query_name"], eq["coverage"]) for eq in comp_remorse["explore_queries"]] == [
         ("q_remorse", "exact")
     ]
+    assert "explore_queries" not in comp_join
+    assert comp_join["join_analysis"][0]["sql_join"] == "proj.ds.users INNER proj.ds.orders"
+    combo_hits = [f for f in comp_join["views"][0]["fields"] if f["field_name"] == "combo"]
+    assert len(combo_hits) == 1 and set(combo_hits[0]["via"]) >= {"orders.count", "orders.ratio_ok"}
 
     bad_dir = tmp_path / "bad"
     bad_dir.mkdir()

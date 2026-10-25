@@ -117,12 +117,12 @@ def compare_row_sets(sql_rows, looker_rows, sql: str = "", looker_fields: list[s
     if not sql_rows:
         return True, []
     scales, pct_cols, pct_idxs, has_order_by = _sql_meta(sql)
-    f_leaves = [f.split(".")[-1].lower() for f in (looker_fields or [])]
+    f_norm = [f.lower() for f in (looker_fields or [])]
     sr_leaves = [{k.split(".")[-1].lower(): v for k, v in sr.items()} for sr in sql_rows]
     lr_leaves = []
     for lr in looker_rows:
-        raw_lr = {k.split(".")[-1].lower(): v for k, v in lr.items()}
-        lr_leaves.append({k: raw_lr[k] for k in [k for k in f_leaves if k in raw_lr] + list(raw_lr)})
+        raw_lr = {k.lower(): v for k, v in lr.items()}
+        lr_leaves.append({k: raw_lr[k] for k in [k for k in f_norm if k in raw_lr] + list(raw_lr)})
     bad_cols = [
         f"Row {i} column count mismatch: SQL={len(sr)}, Looker={len(lr)}"
         for i, (sr, lr) in enumerate(zip(sr_leaves, lr_leaves))
@@ -131,10 +131,16 @@ def compare_row_sets(sql_rows, looker_rows, sql: str = "", looker_fields: list[s
     if bad_cols:
         return False, bad_cols[:5]
     s_keys, l_keys = list(sr_leaves[0]), list(lr_leaves[0])
-    s_to_l = {k: k for k in s_keys if k in lr_leaves[0]}
-    s_to_l.update(
-        dict(zip([k for k in s_keys if k not in lr_leaves[0]], [k for k in l_keys if k not in sr_leaves[0]]))
-    )
+    l_by_leaf: dict[str, list[str]] = {}
+    for lk in l_keys:
+        l_by_leaf.setdefault(lk.split(".")[-1], []).append(lk)
+    s_to_l = {
+        sk: (sk if sk in lr_leaves[0] else l_by_leaf[sk][0])
+        for sk in s_keys
+        if sk in lr_leaves[0] or len(l_by_leaf.get(sk, ())) == 1
+    }
+    used_l = set(s_to_l.values())
+    s_to_l.update(dict(zip([k for k in s_keys if k not in s_to_l], [k for k in l_keys if k not in used_l])))
     cols = []
     for c_idx, sk in enumerate(s_keys):
         lk = s_to_l[sk]
@@ -145,7 +151,8 @@ def compare_row_sets(sql_rows, looker_rows, sql: str = "", looker_fields: list[s
             l_abs = sum(abs(f) for r in lr_leaves for f in [_to_float(r.get(lk))] if f is not None)
             if l_abs > 0 and abs(s_abs - l_abs * 100.0) < abs(s_abs - l_abs):
                 mult = 100.0
-        cols.append((sk if sk == lk else f"{sk}->{lk}", sk, lk, digits, mult))
+        same_leaf = lk == sk or (lk.split(".")[-1] == sk and len(l_by_leaf.get(sk, ())) == 1)
+        cols.append((sk if same_leaf else f"{sk}->{lk}", sk, lk, digits, mult))
     if len(sr_leaves) > 1 and not has_order_by:
         sr_leaves.sort(key=lambda r: tuple(_cell_key(r[sk], d, 1.0) for _, sk, _, d, _ in cols))
         lr_leaves.sort(key=lambda r: tuple(_cell_key(r[lk], d, m) for _, _, lk, d, m in cols))

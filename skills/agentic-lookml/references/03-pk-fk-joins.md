@@ -70,13 +70,14 @@ Map the audit results to the LookML `relationship:` parameter:
 - When `duplicate_rows == 0` on both tables, set `relationship: one_to_one`.
 - When `duplicate_rows > 0` on the right table and `0` on the left, set `relationship: one_to_many`.
 
-### Default `INNER JOIN` to `LEFT JOIN`
+### Default `INNER JOIN` to `LEFT JOIN` (and `"NOT NULL"` on `type: number` PKs)
 
-When converting SQL queries, assume `INNER JOIN` means `LEFT JOIN` (`type: left_outer`) in Silver Explores unless the business logic for a specific metric strictly requires inner join filtering. Looker handles `NULL` values from `left_outer` joins cleanly by coalescing `sum` measures with 0. Using `left_outer` prevents accidental drop-off of base fact records when users explore dimensions from joined tables. Only use `type: inner` if a business rule explicitly requires dropping unmatched base records across all queries on that Explore.
+Default SQL `INNER JOIN` to `type: left_outer` in Silver Explores unless dropping unmatched rows is an invariant across all queries on that Explore; when a specific query needs `INNER JOIN` semantics on a `left_outer` Explore, filter the child PK (`child.id: "NOT NULL"` for `type: number` PKs—never `"-NULL"`, which is valid only on `type: string`).
 
-### Role-playing joins (same table joined multiple times)
+### Role-playing joins & `1:M` fanout `AVG(parent.col)` parity
 
-When `users` is joined twice (`buyer_id = u1.id` and `seller_id = u2.id`), use `from: users` and `view_label: "Buyer"` / `view_label: "Seller"` in `silver/explores/`.
+- **Role-playing joins:** When `users` is joined twice (`buyer_id = u1.id` and `seller_id = u2.id`), use `from: users` and `view_label: "Buyer"` / `view_label: "Seller"`.
+- **`1:M` fanout `AVG(parent.col)` vs symmetric `parent.avg_<col>`:** When SQL joins `parent (1) -> child (M)` (`users -> order_items`) and writes `AVG(parent.age)` without deduplicating `parent`, raw SQL weights `parent.age` by child row count while Looker's symmetric `parent.avg_age` (`type: average` on `parent`) computes entity-grain `average_distinct`. Keep `parent.avg_<col>` pure on `parent` for Explore Quick Start `query:` blocks; if exact SQL parity (`pre_gate.py`) requires the activity-weighted SQL value, define a hidden composite `primary_key: yes` (`CONCAT(CAST(${parent.id} AS STRING), '_', CAST(COALESCE(${child.id}, 0) AS STRING))`) plus an honestly named `avg_activity_weighted_<col>` (`type: average`, `sql: ${parent.col} ;;`, `tags: ["non_additive"]`) in `silver/:child_:parent_fields.view.lkml`.
 
 ### Cross-view dimensions and measures (`*_fields.view.lkml` + bare join)
 

@@ -1433,10 +1433,13 @@ def _match_model_views(
         tuple[TableRef, str, str, LookmlView, tuple[str, str] | None]
     ] = []
 
+    all_sql_tables: set[str] = set()
     for sql_tbl in pq.tables:
         raw_table_str = ".".join(
             p for p in (sql_tbl.catalog, sql_tbl.db, sql_tbl.name) if p
         )
+        if sql_tbl.name:
+            all_sql_tables.add(raw_table_str.lower())
         for view_name, view_obj in model_views.items():
             cand_sources: list[tuple[TableRef, tuple[str, str] | None]] = [
                 (raw_dt_tbl, (out_col, dt_src_col))
@@ -1910,6 +1913,23 @@ def _match_model_views(
                 return True, vm.sql_table, None, v_name, None
         return False, None, None, None, None
 
+    def _unit_key(t_low: str, col: str) -> tuple[str, str]:
+        return (
+            ("*", "count(*)")
+            if col == "COUNT(*)"
+            else (t_low, "count(*)" if col.startswith("COUNT(") else col.lower())
+        )
+
+    query_canon_by_unit: dict[tuple[str, str], str] = {}
+    for vm in results:
+        t_low = vm.sql_table.lower()
+        for fm in vm.fields:
+            uk = _unit_key(t_low, fm.sql_column)
+            if (not non_join_units or uk in non_join_units) and (
+                not fm.via or uk not in query_canon_by_unit
+            ):
+                query_canon_by_unit[uk] = f"{vm.view_name}.{fm.field_name}"
+
     for exp_name, exp_val in (model_obj.explore or {}).items():
         for exp_obj in _as_list(exp_val):
             if not isinstance(exp_obj, LookmlExplore):
@@ -1922,6 +1942,12 @@ def _match_model_views(
             for j_name, j_obj in (exp_obj.join or {}).items():
                 jv_name = j_obj.from_ or j_obj.view_name or j_name
                 views_by_alias[j_name.lower()] = jv_name.lower()
+            exp_view_set = set(views_by_alias.values())
+            has_all_tables = all_sql_tables <= {
+                raw_t.lower()
+                for _, raw_t, v_n, _, _ in matched_sources
+                if v_n.lower() in exp_view_set
+            }
 
             if exp_obj.sql_always_where:
                 raw_expr = str(exp_obj.sql_always_where).strip()
@@ -2149,18 +2175,11 @@ def _match_model_views(
                     set[str],
                 ]
             ] = []
-            canon_by_unit: dict[tuple[str, str], str] = {}
+            canon_by_unit: dict[tuple[str, str], str] = dict(query_canon_by_unit)
             for vm in results:
                 f_sql_tbl_low = vm.sql_table.lower()
                 for fm in vm.fields:
-                    col_name = fm.sql_column
-                    uk = (
-                        ("*", "count(*)")
-                        if col_name == "COUNT(*)"
-                        else (f_sql_tbl_low, "count(*)")
-                        if col_name.startswith("COUNT(")
-                        else (f_sql_tbl_low, col_name.lower())
-                    )
+                    uk = _unit_key(f_sql_tbl_low, fm.sql_column)
                     fobj = getattr(model_views[vm.view_name], fm.field_type)[
                         fm.field_name
                     ]
@@ -2274,7 +2293,7 @@ def _match_model_views(
                             explore_name=exp_name,
                             aggregate_table_name=agg_name,
                             coverage="hit_candidate"
-                            if not missing
+                            if not missing and has_all_tables
                             else "partial_overlap",
                             matched_fields=matched_usages,
                             missing_query_fields=missing,
@@ -2306,7 +2325,7 @@ def _match_model_views(
                             explore_name=exp_name,
                             query_name=q_name,
                             coverage="exact"
-                            if not missing and not unmatched_refs
+                            if not missing and not unmatched_refs and has_all_tables
                             else "partial_overlap",
                             matched_fields=matched_usages,
                             unmatched_explore_query_fields=unmatched_refs,
@@ -3101,30 +3120,39 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
         for tm in q.get("tests") or []:
             if tm.get("fields"):
                 tm.pop("field", None)
+        for ja in q.get("join_analysis") or []:
+            if isinstance(sj := ja.get("sql_join"), dict):
+                lt, rt = sj.get("left_table"), sj.get("right_table")
+                l_str = ".".join(p for p in (lt.get("catalog"), lt.get("db"), lt.get("name")) if p) if isinstance(lt, dict) else str(lt or "")
+                r_str = ".".join(p for p in (rt.get("catalog"), rt.get("db"), rt.get("name")) if p) if isinstance(rt, dict) else str(rt or "")
+                j_type = sj.get("join_type") or ja.get("sql_join_type") or "JOIN"
+                ja["sql_join"] = f"{l_str} {j_type} {r_str}".strip()
         eqs = q.get("explore_queries") or []
-        exact_exps = {
-            (eq.get("model_name"), eq.get("explore_name"))
-            for eq in eqs
-            if eq.get("coverage") == "exact"
-        }
-        if exact_exps:
+        if any(eq.get("coverage") == "exact" for eq in eqs):
+            q["explore_queries"] = [eq for eq in eqs if eq.get("coverage") == "exact"]
+        elif bad_join_exps := {
+            (ja.get("model_name"), ja.get("explore_name"))
+            for ja in (q.get("join_analysis") or [])
+            if ja.get("status") == "missing_join"
+        }:
             q["explore_queries"] = [
                 eq
                 for eq in eqs
-                if not (
-                    eq.get("coverage") == "partial_overlap"
-                    and (eq.get("model_name"), eq.get("explore_name")) in exact_exps
-                )
+                if (eq.get("model_name"), eq.get("explore_name")) not in bad_join_exps
             ]
         for vm in q.get("views") or []:
             vm.setdefault("unmodeled_db_columns", [])
+            dedup_fields: dict[tuple[Any, Any], dict[str, Any]] = {}
             for fm in vm.get("fields") or []:
-                for dup_key in (
-                    "explores",
-                    "tests",
-                    "aggregate_tables",
-                    "explore_queries",
-                    "usages",
-                ):
+                for dup_key in ("explores", "tests", "aggregate_tables", "explore_queries", "usages"):
                     fm.pop(dup_key, None)
+                fkey = (fm.get("field_type"), fm.get("field_name"))
+                if prev := dedup_fields.get(fkey):
+                    for v_ref in fm.get("via") or []:
+                        if v_ref not in prev.setdefault("via", []):
+                            prev["via"].append(v_ref)
+                else:
+                    dedup_fields[fkey] = fm
+            if dedup_fields:
+                vm["fields"] = list(dedup_fields.values())
     return _prune(data)

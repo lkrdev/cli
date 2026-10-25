@@ -885,4 +885,20 @@ def test_pre_gate_percent_scaling_unordered_group_by_and_share_url_fallback():
     )
     assert ok_non_pct is False
 
+    # Joined queries selecting multiple .count measures must not collide on leaf name "count"
+    ok_2cnt, diffs_2cnt = pre_mod.compare_row_sets(
+        [{"country": "US", "registered_users": 100, "items_purchased": 250}],
+        [{"order_items.count": 250, "users.count": 100, "users.country": "US"}],
+        sql="SELECT u.country, COUNT(DISTINCT u.id) AS registered_users, COUNT(oi.id) AS items_purchased FROM users u LEFT JOIN order_items oi ON u.id = oi.user_id GROUP BY 1",
+        looker_fields=["users.country", "users.count", "order_items.count"],
+    )
+    assert ok_2cnt is True and diffs_2cnt == []
+    ok_2cnt_swap, _ = pre_mod.compare_row_sets(
+        [{"country": "US", "registered_users": 100, "items_purchased": 250}],
+        [{"order_items.count": 100, "users.count": 250, "users.country": "US"}],
+        looker_fields=["users.country", "users.count", "order_items.count"],
+    )
+    assert ok_2cnt_swap is False
+
+
 
