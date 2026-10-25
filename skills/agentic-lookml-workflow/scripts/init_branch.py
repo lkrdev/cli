@@ -45,7 +45,7 @@ def main():
     except Exception:
         files = []
     paths = [str(f.get("path") or f.get("id") or "").lstrip("/") for f in files if isinstance(f, dict)]
-    model_files = [p for p in paths if p.endswith(".model.lkml") and "/" not in p]
+    model_files = sorted(p for p in paths if p.endswith(".model.lkml") and "/" not in p)
     conn_name = ""
     if model_files:
         out["model_name"] = model_files[0][:-11]

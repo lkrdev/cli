@@ -1537,12 +1537,14 @@ def _match_model_views(
                 and col_name != "COUNT(*)"
                 else None
             )
+            is_pk_cnt = False
             is_tbl_cnt = bool(cnt_inner and cnt_inner.endswith(".*"))
             if cnt_inner and not is_tbl_cnt:
                 if dt_col_pair and cnt_inner.lower() != dt_col_pair[1]:
                     continue
                 if (dt_col_pair[0] if dt_col_pair else cnt_inner).lower() in pks:
                     is_tbl_cnt = True
+                    is_pk_cnt = True
                 else:
                     col_name = cnt_inner
             is_cnt = col_name == "COUNT(*)" or is_tbl_cnt
@@ -1576,6 +1578,26 @@ def _match_model_views(
                         and not getattr(fobj, "filters", None)
                     ):
                         direct_hits.append((None, "measure.type", "type", "count"))
+                    elif (
+                        is_pk_cnt
+                        and ftype == "dimension"
+                        and getattr(fobj, "primary_key", False)
+                        and _field_matches_column(
+                            dt_col_pair[0] if dt_col_pair else str(cnt_inner),
+                            fname,
+                            getattr(fobj, "sql", None),
+                            ftype,
+                            tfs,
+                        )
+                    ):
+                        direct_hits.append(
+                            (
+                                None,
+                                "dimension.sql",
+                                "sql",
+                                fobj.sql.strip() if getattr(fobj, "sql", None) else None,
+                            )
+                        )
                 else:
                     for p in props:
                         if p.sql_text and _field_matches_column(target_col, fname, p.sql_text, ftype, tfs):
@@ -1603,7 +1625,8 @@ def _match_model_views(
                         sub_key=sub_key,
                     )
                     matched_fields.setdefault(fkey, []).append(minfo)
-                    queue.append((view_name, ftype, fname, minfo))
+                    if is_non_join and not (is_pk_cnt and ftype == "dimension"):
+                        queue.append((view_name, ftype, fname, minfo))
 
     # Transitive forward ${...} and derived_table propagation
     while queue:
@@ -1711,9 +1734,67 @@ def _match_model_views(
                         if cand_view not in direct_views and cand_view not in view_order:
                             view_order.append(cand_view)
 
+    matched_tokens = {
+        (mv.lower(), n)
+        for mv, mft, mfn in matched_fields
+        for n in (
+            mfn.lower(),
+            *(
+                f"{mfn}_{tf}".lower()
+                for tf in (
+                    getattr(_get_view_field(model_views[mv], mft, mfn), "timeframes", None) or ()
+                    if mft == "dimension_group"
+                    else ()
+                )
+            ),
+        )
+    }
+    views_lower = {vn.lower(): vobj for vn, vobj in model_views.items()}
+    raw_sql_lower = pq.raw_sql.lower()
+
+    def _resolve_ref(r: str, cur_view: str, self_set: set[str]) -> tuple[str, str]:
+        if "." not in r:
+            return (cur_view.lower(), r.lower())
+        pfx, fld = r.split(".", 1)
+        pfx_l = pfx.lower()
+        return (
+            cur_view.lower() if pfx_l in self_set else alias_to_view.get(pfx_l, pfx_l),
+            fld.lower(),
+        )
+
+    def _has_unmatched_filter(cur_view: str, self_set: set[str], fobj: Any) -> bool:
+        if not getattr(fobj, "filters", None):
+            return False
+        for ref_field, filter_repr in _extract_filter_refs(fobj.filters):
+            rv, rf = _resolve_ref(ref_field, cur_view, self_set)
+            if (rv, rf) not in matched_tokens:
+                return True
+            val_part = filter_repr.split(":", 1)[1].strip() if ":" in filter_repr else ""
+            d_obj = _get_view_field(views_lower[rv], "dimension", rf) if rv in views_lower else None
+            if (
+                d_obj is not None
+                and getattr(d_obj, "type", None) in (None, "string")
+                and getattr(d_obj, "case", None) is None
+                and "CASE " not in (getattr(d_obj, "sql", None) or "").upper()
+            ):
+                segs = [
+                    s
+                    for raw_s in re.split(r"(?<!\^),", val_part)
+                    if (s := raw_s.strip().strip("\"'"))
+                ]
+                if segs and all(
+                    not s.startswith("-")
+                    and "%" not in s
+                    and s.lower() not in {"empty", "null", "not null", "yes", "no", "true", "false"}
+                    for s in segs
+                ) and not any(s.replace("^", "").lower() in raw_sql_lower for s in segs):
+                    return True
+        return False
+
     results: list[LookmlViewMatch] = []
     for view_name in view_order:
         assembled_view = model_views[view_name]
+        self_names = self_names_by_view[view_name]
         chain = view_chains[view_name]
         view_file, view_pos = _chain_root_pos(chain, view_name)
 
@@ -1729,6 +1810,17 @@ def _match_model_views(
             key = (view_name, ftype, fname)
             if key not in matched_fields:
                 continue
+            f_sql_str = fobj.sql.strip() if getattr(fobj, "sql", None) else None
+            f_deps = (
+                {_resolve_ref(r, view_name, self_names) for r in _extract_lookml_refs(f_sql_str)}
+                if ftype == "measure" and f_sql_str
+                else set()
+            )
+            f_unmatched_flt = (
+                _has_unmatched_filter(view_name, self_names, fobj)
+                if ftype == "measure"
+                else False
+            )
             for minfo in matched_fields[key]:
                 if not v_sql_tbl:
                     v_sql_tbl = minfo.sql_table
@@ -1800,12 +1892,14 @@ def _match_model_views(
                             if getattr(fobj, "hidden", None) is not None
                             else getattr(assembled_view, "fields_hidden_by_default", False)
                         ),
-                        sql=fobj.sql.strip() if getattr(fobj, "sql", None) else None,
+                        sql=f_sql_str,
                         matched_property=minfo.matched_property,
                         property_path=minfo.property_path,
                         expression=minfo.expression,
                         via=minfo.via,
                         ext_views={alias_to_view.get(a, a).lower() for a in minfo.ext_aliases},
+                        dep_fields=f_deps,
+                        unmatched_filter=f_unmatched_flt,
                         file=loc.file,
                         line=loc.line,
                         end_line=loc.end_line,
@@ -2633,6 +2727,11 @@ def _analyze_query_joins(
     if views_by_model is None:
         views_by_model = _build_views_by_model(models)
 
+    non_base_graph_keys = {
+        (g.model_name, g.explore_name)
+        for g in all_explore_graphs
+        if not g.explore_name.endswith("_base")
+    }
     results: list[ExploreJoinComparison] = []
 
     for target_graph in candidate_graphs:
@@ -2836,7 +2935,20 @@ def _analyze_query_joins(
                     )
                 )
             else:
+                present_in_target = set(base_names)
+                for jn, jnode in target_graph.joins.items():
+                    j_tail = _view_table_tail(m_views.get(jnode.target_view))
+                    present_in_target |= {
+                        jn.lower(),
+                        jnode.target_view.lower(),
+                        jnode.view_alias.lower(),
+                    }
+                    if j_tail:
+                        present_in_target.add(j_tail)
+                left_present = bool({left_name, left_alias} & present_in_target)
+                right_present = bool({right_name, right_alias} & present_in_target)
                 both_precedents: list[JoinPrecedent] = []
+                both_inverted: list[bool] = []
                 target_precedents: list[JoinPrecedent] = []
                 seen_both: set[tuple[str, str, str]] = set()
                 seen_target: set[tuple[str, str, str]] = set()
@@ -2845,6 +2957,9 @@ def _analyze_query_joins(
                     if (other_g.model_name, other_g.explore_name) == (
                         target_graph.model_name,
                         target_graph.explore_name,
+                    ) or (
+                        other_g.explore_name.endswith("_base")
+                        and (other_g.model_name, other_g.explore_name[:-5]) in non_base_graph_keys
                     ):
                         continue
                     o_views = views_by_model.get(other_g.model_name or "", {})
@@ -2878,7 +2993,13 @@ def _analyze_query_joins(
                         is_both = (right_matches and left_matches) or (
                             rev_right_matches and rev_left_matches
                         )
-                        is_target = right_matches or rev_right_matches
+                        is_target = (
+                            right_matches
+                            if (left_present and not right_present)
+                            else rev_right_matches
+                            if (right_present and not left_present)
+                            else (right_matches or rev_right_matches)
+                        )
 
                         prec_key = (
                             other_g.model_name or "",
@@ -2899,13 +3020,15 @@ def _analyze_query_joins(
                         if is_both and prec_key not in seen_both:
                             seen_both.add(prec_key)
                             both_precedents.append(prec_item)
+                            both_inverted.append(not (right_matches and left_matches))
                         elif is_target and prec_key not in seen_target:
                             seen_target.add(prec_key)
                             target_precedents.append(prec_item)
 
                 precedents = both_precedents if both_precedents else target_precedents
                 if inferred_rel is None and both_precedents:
-                    inferred_rel = both_precedents[0].relationship
+                    rel0 = both_precedents[0].relationship
+                    inferred_rel = _FLIP_REL.get(rel0, rel0) if (rel0 and both_inverted[0]) else rel0
 
                 results.append(
                     ExploreJoinComparison(
@@ -3149,19 +3272,34 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                     pj.pop("right_table", None)
         rq = result.queries[qi]
         q_views = {vm.view_name.lower() for vm in rq.views}
-        bad_ext_fields = {
-            (vm.view_name, fm.field_type, fm.field_name)
+        valid_fms = [
+            (vm.view_name, fm)
             for vm in rq.views
             for fm in vm.fields
-            if not (fm.ext_views <= q_views)
-        }
+            if (fm.ext_views <= q_views) and not (fm.via and fm.unmatched_filter)
+        ]
+        while True:
+            avail_refs = {
+                (vn.lower(), n)
+                for vn, fm in valid_fms
+                for n in (fm.field_name.lower(), *(f"{fm.field_name}_{tf}".lower() for tf in (fm.timeframes or ())))
+            }
+            nxt_fms = [
+                (vn, fm)
+                for vn, fm in valid_fms
+                if not (fm.field_type == "measure" and fm.via and fm.dep_fields and not (fm.dep_fields <= avail_refs))
+            ]
+            if len(nxt_fms) == len(valid_fms):
+                break
+            valid_fms = nxt_fms
+        keep_fkeys = {(vn, fm.field_type, fm.field_name) for vn, fm in valid_fms}
         kept_views: list[dict[str, Any]] = []
         for vm in q.get("views") or []:
             if vm.get("sql_table_name"):
                 vm.setdefault("unmodeled_db_columns", [])
             dedup_fields: dict[tuple[Any, Any], dict[str, Any]] = {}
             for fm in vm.get("fields") or []:
-                if (vm.get("view_name"), fm.get("field_type"), fm.get("field_name")) in bad_ext_fields:
+                if (vm.get("view_name"), fm.get("field_type"), fm.get("field_name")) not in keep_fkeys:
                     continue
                 if fm.get("hidden") and fm.get("via"):
                     continue
@@ -3174,16 +3312,6 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                             prev["via"].append(v_ref)
                 else:
                     dedup_fields[fkey] = fm
-            dedup_fields = {
-                fk: fv
-                for fk, fv in dedup_fields.items()
-                if not (
-                    fv.get("field_type") == "measure"
-                    and bool(fv.get("via"))
-                    and all(str(v).endswith(".count") for v in fv["via"])
-                    and len(_extract_lookml_refs(fv.get("sql"))) > 1
-                )
-            }
             if not dedup_fields and not vm.get("sql_table_name"):
                 continue
             vm["fields"] = list(dedup_fields.values())
@@ -3207,14 +3335,22 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
             )
             if fld not in entry["fields"]:
                 entry["fields"].append(fld)
+        base_matched_exps = {
+            (m, e) for (m, e, _va, jn) in grouped_explores if not jn
+        }
         non_base_exps = {
-            (m, str(e)) for m, e, *_ in grouped_explores if not str(e or "").endswith("_base")
+            (m, str(e))
+            for m, e, *_ in grouped_explores
+            if not str(e or "").endswith("_base")
+            and (not base_matched_exps or (m, e) in base_matched_exps)
         }
         q["explores"] = [
             v
             for (m, e, *_), v in grouped_explores.items()
-            if not (str(e or "").endswith("_base") and (m, str(e)[:-5]) in non_base_exps)
+            if (not base_matched_exps or (m, e) in base_matched_exps)
+            and not (str(e or "").endswith("_base") and (m, str(e)[:-5]) in non_base_exps)
         ]
+        kept_exp_keys = {(v.get("model_name"), v.get("explore_name")) for v in q["explores"]}
         if q.get("tests"):
             dedup_tests: list[dict[str, Any]] = []
             for tm in q["tests"]:
@@ -3228,13 +3364,35 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                     seen_test_keys.add(tkey)
                     dedup_tests.append(tm)
             q["tests"] = dedup_tests
-        for ja in q.get("join_analysis") or []:
+        jas = [
+            ja
+            for ja in (q.get("join_analysis") or [])
+            if not kept_exp_keys or (ja.get("model_name"), ja.get("explore_name")) in kept_exp_keys
+        ]
+        first_base_exps = (
+            {
+                (v.get("model_name"), v.get("explore_name"))
+                for v in q["explores"]
+                if not v.get("join_name") and v.get("view_name") == kept_views[0].get("view_name")
+            }
+            if kept_views
+            else set()
+        )
+        active_ja_exps = {
+            (ja.get("model_name"), ja.get("explore_name"))
+            for ja in jas
+            if ja.get("status") != "missing_join"
+        } | first_base_exps
+        if active_ja_exps:
+            jas = [ja for ja in jas if (ja.get("model_name"), ja.get("explore_name")) in active_ja_exps]
+        for ja in jas:
             if isinstance(sj := ja.get("sql_join"), dict):
                 lt, rt = sj.get("left_table"), sj.get("right_table")
                 l_str = ".".join(p for p in (lt.get("catalog"), lt.get("db"), lt.get("name")) if p) if isinstance(lt, dict) else str(lt or "")
                 r_str = ".".join(p for p in (rt.get("catalog"), rt.get("db"), rt.get("name")) if p) if isinstance(rt, dict) else str(rt or "")
                 j_type = sj.get("join_type") or ja.get("sql_join_type") or "JOIN"
                 ja["sql_join"] = f"{l_str} {j_type} {r_str}".strip()
+        q["join_analysis"] = jas
         eqs = q.get("explore_queries") or []
         dedup_eqs: dict[tuple[Any, ...], dict[str, Any]] = {}
         for eq in eqs:
@@ -3249,13 +3407,17 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                 and not str(eq.get("explore_name") or "").endswith("_base")
             ):
                 dedup_eqs[qkey] = eq
-        eqs = list(dedup_eqs.values())
+        eqs = [
+            eq
+            for eq in dedup_eqs.values()
+            if not kept_exp_keys or (eq.get("model_name"), eq.get("explore_name")) in kept_exp_keys
+        ]
         if any(eq.get("coverage") == "exact" for eq in eqs):
             eqs = [eq for eq in eqs if eq.get("coverage") == "exact"]
         else:
             bad_join_exps = {
                 (ja.get("model_name"), ja.get("explore_name"))
-                for ja in (q.get("join_analysis") or [])
+                for ja in jas
                 if ja.get("status") == "missing_join"
             }
             eqs = sorted(

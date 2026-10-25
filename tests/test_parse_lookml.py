@@ -3961,3 +3961,96 @@ def test_compact_sql_to_lookml_ndt_count_extends_dedup_and_count_ratio_prune():
     assert len(eqs) == 1 and eqs[0]["explore_name"] == "events"
     assert eqs[0]["matched_fields"] == ["events.session_id", "events.count"]
 
+
+def test_compact_sql_to_lookml_pk_count_join_filter_and_precedent_pruning():
+    import json
+
+    from typer.testing import CliRunner
+
+    from lkr.main import app
+
+    lkml = (
+        'connection: "bq"\n'
+        "view: order_items {\n"
+        "  sql_table_name: `proj.ds.order_items` ;;\n"
+        "  dimension: id { primary_key: yes hidden: yes type: number sql: ${TABLE}.id ;; }\n"
+        "  dimension: order_id { type: number sql: ${TABLE}.order_id ;; }\n"
+        "  dimension: product_id { type: number sql: ${TABLE}.product_id ;; }\n"
+        "  dimension: status { type: string sql: ${TABLE}.status ;; }\n"
+        "  dimension: sale_price { type: number sql: ${TABLE}.sale_price ;; }\n"
+        "  dimension_group: created { type: time timeframes: [raw, hour] sql: ${TABLE}.created_at ;; }\n"
+        "  measure: count { type: count }\n"
+        "  measure: distinct_orders { type: count_distinct sql: ${order_id} ;; }\n"
+        "  measure: total_revenue { type: sum sql: ${sale_price} ;; }\n"
+        '  measure: returned_revenue { type: sum sql: ${sale_price} ;; filters: [status: "Returned"] }\n'
+        '  measure: night_revenue { type: sum sql: ${sale_price} ;; filters: [created_hour: "0"] }\n'
+        "  measure: night_share { type: number sql: 1.0 * ${night_revenue} / NULLIF(${total_revenue}, 0) ;; }\n"
+        "}\n"
+        "view: orders {\n"
+        "  sql_table_name: `proj.ds.orders` ;;\n"
+        "  dimension: order_id { primary_key: yes type: number sql: ${TABLE}.order_id ;; }\n"
+        "  dimension: user_id { type: number sql: ${TABLE}.user_id ;; }\n"
+        "}\n"
+        "view: products {\n"
+        "  sql_table_name: `proj.ds.products` ;;\n"
+        "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+        "  dimension: category { type: string sql: ${TABLE}.category ;; }\n"
+        "}\n"
+        "view: users {\n"
+        "  sql_table_name: `proj.ds.users` ;;\n"
+        "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+        "}\n"
+        "view: shipments {\n"
+        "  sql_table_name: `proj.ds.shipments` ;;\n"
+        "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+        "}\n"
+        "view: order_items_products_fields {\n"
+        '  measure: sock_rev { type: sum sql: ${order_items.sale_price} ;; filters: [products.category: "Socks"] }\n'
+        "  measure: sock_share { type: number sql: 1.0 * ${sock_rev} / NULLIF(${order_items.total_revenue}, 0) ;; }\n"
+        "}\n"
+        "explore: orders {}\n"
+        "explore: products {}\n"
+        "explore: shipments {\n"
+        "  view_name: shipments\n"
+        "  join: order_items { sql_on: ${shipments.id} = ${order_items.id} ;; relationship: one_to_many }\n"
+        "}\n"
+        "explore: order_items_base {\n"
+        "  hidden: yes\n"
+        "  view_name: order_items\n"
+        "  join: products { sql_on: ${order_items.product_id} = ${products.id} ;; relationship: many_to_one }\n"
+        "}\n"
+        "explore: order_items {\n"
+        "  extends: [order_items_base]\n"
+        "  view_name: order_items\n"
+        "  join: order_items_products_fields { sql: ;; relationship: one_to_one }\n"
+        "}\n"
+        "explore: users {\n"
+        "  view_name: users\n"
+        "  join: orders { sql_on: ${users.id} = ${orders.user_id} ;; relationship: one_to_many }\n"
+        "}\n"
+    )
+    sql = (
+        "SELECT p.category, COUNT(oi.id) AS items, "
+        "SUM(CASE WHEN oi.status = 'Returned' THEN oi.sale_price ELSE 0 END) AS ret_rev "
+        "FROM `proj.ds.order_items` oi "
+        "INNER JOIN `proj.ds.orders` o ON oi.order_id = o.order_id "
+        "INNER JOIN `proj.ds.products` p ON oi.product_id = p.id "
+        "GROUP BY 1"
+    )
+    res = CliRunner().invoke(
+        app,
+        ["parse", "sql-lookml-compare", "--sql", sql, "--lookml", lkml, "--offline", "--compact"],
+    )
+    q0 = json.loads(res.output)["queries"][0]
+    assert [v["view_name"] for v in q0["views"]] == ["order_items", "orders", "products"]
+    oi_flds = {f["field_name"]: f for f in q0["views"][0]["fields"]}
+    assert oi_flds["id"]["primary_key"] is True
+    assert "returned_revenue" in oi_flds
+    assert {"distinct_orders", "night_revenue", "night_share"}.isdisjoint(oi_flds)
+    assert {e["explore_name"] for e in q0["explores"]} == {"order_items", "orders", "products"}
+    jas = q0["join_analysis"]
+    assert {j["explore_name"] for j in jas} == {"order_items"}
+    miss_orders = next(j for j in jas if j["status"] == "missing_join")
+    assert [p["target_view"] for p in miss_orders.get("precedents", [])] == ["orders"]
+
+

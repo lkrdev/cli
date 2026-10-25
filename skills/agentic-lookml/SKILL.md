@@ -49,46 +49,30 @@ For **every** SQL query—including `simple_single_table` queries without `CASE 
 ### Companion skills & LookML syntax references
 
 - **Workflow & tooling:** [agentic-lookml-workflow](../agentic-lookml-workflow/SKILL.md) ([setup](../agentic-lookml-workflow/sub-skills/setup/SKILL.md)), [generate-view-from-table](../generate-view-from-table/SKILL.md), and on-demand [lookml-field-curation](../lookml-field-curation/SKILL.md).
-- **LookML syntax (`../lookml/`):** [lookml](../lookml/SKILL.md) indexes [lookml-model](../lookml/sub-skills/lookml-model/SKILL.md), [lookml-view](../lookml/sub-skills/lookml-view/SKILL.md) ([derived_table.md](../lookml/sub-skills/lookml-view/references/derived_table.md)), [lookml-explore](../lookml/sub-skills/lookml-explore/SKILL.md) ([joins.md](../lookml/sub-skills/lookml-explore/references/joins.md), [advanced.md](../lookml/sub-skills/lookml-explore/references/advanced.md)), [lookml-fields](../lookml/sub-skills/lookml-fields/SKILL.md) ([dimension.md](../lookml/sub-skills/lookml-fields/references/dimension.md), [dimension_group.md](../lookml/sub-skills/lookml-fields/references/dimension_group.md), [measure.md](../lookml/sub-skills/lookml-fields/references/measure.md), [filter_parameter.md](../lookml/sub-skills/lookml-fields/references/filter_parameter.md), [value_format.md](../lookml/sub-skills/lookml-fields/references/value_format.md)), [lookml-refinements](../lookml/sub-skills/lookml-refinements/SKILL.md), [lookml-liquid](../lookml/sub-skills/lookml-liquid/SKILL.md) ([lookml-advanced-liquid](../lookml/sub-skills/lookml-advanced-liquid/SKILL.md)), [lookml-ojof](../lookml/sub-skills/lookml-ojof/SKILL.md), [lookml-sets](../lookml/sub-skills/lookml-sets/SKILL.md) ([lookml-access-grants](../lookml/sub-skills/lookml-access-grants/SKILL.md)), and [lookml-tests](../lookml/sub-skills/lookml-tests/SKILL.md). Rules in `agentic-lookml` (Medallion `bronze/`, `silver/`, `gold/`, and `tests/bronze|silver` paths; ephemeral Silver NDTs with zero `datagroup_trigger:` / `cluster_keys:` up-front; `drill_fields:` / `set: detail` out of scope unless requested; no inline `view: +name` refinements inside `.explore.lkml`) supersede examples in `../lookml/`.
+- **LookML syntax (`../lookml/`):** [lookml](../lookml/SKILL.md) indexes [lookml-model](../lookml/sub-skills/lookml-model/SKILL.md), [lookml-view](../lookml/sub-skills/lookml-view/SKILL.md) ([derived_table.md](../lookml/sub-skills/lookml-view/references/derived_table.md)), [lookml-explore](../lookml/sub-skills/lookml-explore/SKILL.md) ([joins.md](../lookml/sub-skills/lookml-explore/references/joins.md), [advanced.md](../lookml/sub-skills/lookml-explore/references/advanced.md)), [lookml-fields](../lookml/sub-skills/lookml-fields/SKILL.md) ([dimension.md](../lookml/sub-skills/lookml-fields/references/dimension.md), [dimension_group.md](../lookml/sub-skills/lookml-fields/references/dimension_group.md), [measure.md](../lookml/sub-skills/lookml-fields/references/measure.md), [filter_parameter.md](../lookml/sub-skills/lookml-fields/references/filter_parameter.md), [value_format.md](../lookml/sub-skills/lookml-fields/references/value_format.md)), [lookml-refinements](../lookml/sub-skills/lookml-refinements/SKILL.md), [lookml-liquid](../lookml/sub-skills/lookml-liquid/SKILL.md) ([lookml-advanced-liquid](../lookml/sub-skills/lookml-advanced-liquid/SKILL.md)), [lookml-ojof](../lookml/sub-skills/lookml-ojof/SKILL.md), [lookml-sets](../lookml/sub-skills/lookml-sets/SKILL.md) ([lookml-access-grants](../lookml/sub-skills/lookml-access-grants/SKILL.md)), and [lookml-tests](../lookml/sub-skills/lookml-tests/SKILL.md). `agentic-lookml` + `references/` are self-contained for standard modeling (views, refinements, explores, Quick Start `query:` blocks, and `.test.lkml`)—only open `../lookml/` for specialized parameters (`html:`, `link:`, `access_grant:`, `map_layer:`), and `agentic-lookml` rules (Medallion paths; ephemeral Silver NDTs; no unrequested `drill_fields:` / `set: detail`; no inline `view: +name` refinements in `.explore.lkml`) always supersede `../lookml/`.
 
 ## How `lkr parse sql-lookml-compare` drives refactoring
 
-`lkr parse sql-lookml-compare` outputs a `QueryLookmlMapping` with:
-- `raw_sql` & `parsed_query`: tables, CTEs, joins (`equi_joins`, `non_equi_conditions`), columns (`is_agg`, `sql`, `table`, `column`), `where`, `having`, `group_by`, `order_by`, `limit`.
-- `views`: matched LookML views with file/line locations, matched `fields` (`via` lineage), `unmodeled_db_columns`, and `missing_db_columns`.
-- `explores` & `join_analysis`: reachable explores and join diagnostics (`status`, `relationship`, `inferred_relationship`, `safety_warnings`, `precedents`).
-- `tests`, `aggregate_tables`, `explore_queries`, & `usages`: downstream tests, Quick Start queries (`coverage`), and content dependencies.
+`lkr parse sql-lookml-compare` outputs per-query `parsed_query` ASTs, matched `views`/`fields` (`primary_key`, `timeframes`, `via`, `unmodeled_db_columns`), `explores` & `join_analysis` (`status`, `relationship`, `inferred_relationship`, `safety_warnings`, `precedents`), plus `tests`, `aggregate_tables`, and `explore_queries` (`coverage`).
 
 ## Canonical Looker Query translation gate
 
-Before creating any derived table (NDT or SDT), check whether the SQL query reduces to a flat Canonical Looker Query ([How Looker Generates SQL](https://docs.cloud.google.com/looker/docs/how-looker-generates-sql)):
-
-```sql
-SELECT <dims>, <agg_measures>
-FROM <base>
-LEFT JOIN <joins>
-WHERE <filters>
-GROUP BY <dims>
-HAVING <measure_filters>
-ORDER BY ...
-LIMIT ...
-```
+Before creating any derived table (NDT or SDT), check whether the SQL query reduces to a flat Canonical Looker Query (`SELECT dims, agg_measures FROM base LEFT JOIN joins WHERE filters GROUP BY dims HAVING measure_filters ORDER BY ... LIMIT ...`; see [How Looker Generates SQL](https://docs.cloud.google.com/looker/docs/how-looker-generates-sql)).
 
 When a query (even with pass-through CTEs/subqueries) maps to this shape without grain changes or non-`PK = FK` joins using Bronze refinements, Silver `PK = FK` joins + bare-joined `*_fields` views, runtime filters, and post-aggregation `dynamic_fields`, model zero derived tables:
-- Author an Explore Quick Start `query:` block containing **only** modeled `dimensions`, `measures`, `filters`, `pivots`, `subtotals`, `limit`, `sorts`, `timezone`, and `description` (Looker's `explore: { query: {} }` syntax never accepts `dynamic_fields`, Table Calculations, or Custom Fields).
-- Place any Table Calculations or Custom Fields in `dynamic_fields` on the Looker `WriteQuery` / `run_inline_query` payload (note: any Custom Dimension or Custom Measure in `dynamic_fields` must **also** list its `.name` in `fields` to appear in `run_inline_query` results, `based_on` must reference a `hidden: no` field, and any `table_calculation` expression can only reference fields listed in `fields` and must appear *after* all database field sorts in `sorts`):
+- Author an Explore Quick Start `query:` block containing **only** modeled `dimensions`, `measures`, `filters` (including `HAVING` measure predicates), `pivots`, `subtotals`, `limit` (unquoted integer), `sorts` (`[view.field: desc]`), `timezone`, and `description` (Looker's `explore: { query: {} }` never accepts `dynamic_fields`, so when a multi-query `input.sql` defines distinct filter/ratio variants across its queries, promote each variant with predicate-distinct canonical names so every query gets a native Quick Start `query:` block):
 
-```json
-{
-  "model": "ecommerce",
-  "view": "orders",
-  "fields": ["users.country", "orders.order_count", "orders.total_net_revenue"],
-  "filters": {"orders.status": "-Cancelled", "users.is_deleted": "no"},
-  "sorts": ["orders.total_net_revenue desc"],
-  "limit": "500",
-  "dynamic_fields": "[{\"table_calculation\":\"pct_of_total\",\"label\":\"% of Total Revenue\",\"expression\":\"${orders.total_net_revenue} / sum(${orders.total_net_revenue})\"}]"
+```lookml
+query: top_countries {
+  dimensions: [users.country]
+  measures: [orders.count, orders.total_net_revenue]
+  filters: [orders.status: "-Cancelled", orders.count: ">=30"]
+  sorts: [orders.total_net_revenue: desc]
+  limit: 20
 }
 ```
+
+- Place any Table Calculations or Custom Fields in `dynamic_fields` on the Looker `WriteQuery` / `run_inline_query` payload (any Custom Dimension/Measure in `dynamic_fields` must **also** list its `.name` in `fields`, `based_on` must reference a `hidden: no` field, and `table_calculation` sorts must appear *after* database sorts in `sorts` like `["orders.total_net_revenue desc", "pct_of_total desc"]`, with `"limit": "500"` string in `WriteQuery` JSON).
 
 Escalate to Silver NDTs/SDTs or Gold specialty explores **only** when grain-changing reaggregations, pre-`GROUP BY` row windows/`QUALIFY`, `UNION ALL`, runtime-filtered subqueries, or non-key/inequality joins prevent a flat canonical query.
 
