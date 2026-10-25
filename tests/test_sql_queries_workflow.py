@@ -901,4 +901,54 @@ def test_pre_gate_percent_scaling_unordered_group_by_and_share_url_fallback():
     assert ok_2cnt_swap is False
 
 
+def test_pre_gate_order_by_round_ties_and_pr_data_json_compaction():
+    sql = (
+        "SELECT dc.name AS warehouse_name, "
+        "ROUND(100.0 * COUNTIF(ii.sold_at IS NOT NULL) / COUNT(ii.id), 2) AS sell_through_rate_pct "
+        "FROM dc INNER JOIN ii ON dc.id = ii.dc_id GROUP BY dc.name ORDER BY sell_through_rate_pct DESC"
+    )
+    sql_rows = [
+        {"warehouse_name": "Memphis TN", "sell_through_rate_pct": 40.0},
+        {"warehouse_name": "Port Authority NY/NJ", "sell_through_rate_pct": 37.06},
+        {"warehouse_name": "Savannah GA", "sell_through_rate_pct": 37.06},
+    ]
+    looker_rows = [
+        {"dc.name": "Memphis TN", "ii.sell_through_rate": 0.40},
+        {"dc.name": "Savannah GA", "ii.sell_through_rate": 0.370645},
+        {"dc.name": "Port Authority NY/NJ", "ii.sell_through_rate": 0.370588},
+    ]
+    res = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {
+            "raw_sql": sql,
+            "connection_name": "bq",
+            "base_url": "https://demo.cloud.looker.com",
+            "validate": "false",
+            "data_json": json.dumps({"run_id": "r1"}),
+            "inline_queries_json": json.dumps(
+                {"0": {"model": "m", "view": "ii", "fields": ["dc.name", "ii.sell_through_rate"]}}
+            ),
+        },
+        {
+            "create_sql_query": lambda **kw: {"slug": "s0"},
+            "run_sql_query": lambda **kw: json.dumps(sql_rows),
+            "create_query": lambda **kw: {"id": "1", "slug": "q0"},
+            "run_inline_query": lambda **kw: json.dumps(looker_rows),
+        },
+    )
+    assert res["passed"] is True and res["all_queries_matched"] is True
+
+    ok_rev, diffs_rev = compare_row_sets(
+        sql_rows,
+        list(reversed(looker_rows)),
+        sql=sql,
+        looker_fields=["dc.name", "ii.sell_through_rate"],
+    )
+    assert ok_rev is False and diffs_rev
+
+    pr_sh = (SCRIPTS_DIR / "create_github_pr.sh").read_text()
+    assert "jq -c 'del(.test_query_results)'" in pr_sh
+
+
+
 

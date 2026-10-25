@@ -3091,12 +3091,22 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
     """Serialize SqlToLookmlResult without duplicate per-field cross-refs, 0-indexed positions, or empty defaults."""
     data = result.model_dump(by_alias=True, exclude_none=True, exclude_defaults=True)
 
+    drop_keys = {
+        "position",
+        "sql_location",
+        "sql_table_name_location",
+        "property_path",
+        "matched_property",
+        "end_line",
+    }
+
     def _prune(val: Any) -> Any:
         if isinstance(val, dict):
             return {
                 k: pv
                 for k, v in val.items()
-                if k != "position"
+                if k not in drop_keys
+                and not (k == "expression" and v == val.get("sql"))
                 and ((pv := _prune(v)) not in (None, [], {}) or k in ("queries", "unmodeled_db_columns"))
             }
         if isinstance(val, list):
@@ -3118,8 +3128,8 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
         if grouped_explores:
             q["explores"] = list(grouped_explores.values())
         for tm in q.get("tests") or []:
-            if tm.get("fields"):
-                tm.pop("field", None)
+            tm.pop("field", None)
+            tm.pop("fields", None)
         for ja in q.get("join_analysis") or []:
             if isinstance(sj := ja.get("sql_join"), dict):
                 lt, rt = sj.get("left_table"), sj.get("right_table")
@@ -3129,17 +3139,21 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                 ja["sql_join"] = f"{l_str} {j_type} {r_str}".strip()
         eqs = q.get("explore_queries") or []
         if any(eq.get("coverage") == "exact" for eq in eqs):
-            q["explore_queries"] = [eq for eq in eqs if eq.get("coverage") == "exact"]
-        elif bad_join_exps := {
-            (ja.get("model_name"), ja.get("explore_name"))
-            for ja in (q.get("join_analysis") or [])
-            if ja.get("status") == "missing_join"
-        }:
-            q["explore_queries"] = [
-                eq
-                for eq in eqs
-                if (eq.get("model_name"), eq.get("explore_name")) not in bad_join_exps
-            ]
+            eqs = [eq for eq in eqs if eq.get("coverage") == "exact"]
+        else:
+            bad_join_exps = {
+                (ja.get("model_name"), ja.get("explore_name"))
+                for ja in (q.get("join_analysis") or [])
+                if ja.get("status") == "missing_join"
+            }
+            eqs = sorted(
+                [eq for eq in eqs if (eq.get("model_name"), eq.get("explore_name")) not in bad_join_exps],
+                key=lambda eq: -len(eq.get("matched_fields") or []),
+            )[:3]
+        for eq in eqs:
+            if eq.get("matched_fields") and isinstance(eq["matched_fields"][0], dict):
+                eq["matched_fields"] = [mf.get("field") for mf in eq["matched_fields"] if mf.get("field")]
+        q["explore_queries"] = eqs
         for vm in q.get("views") or []:
             vm.setdefault("unmodeled_db_columns", [])
             dedup_fields: dict[tuple[Any, Any], dict[str, Any]] = {}

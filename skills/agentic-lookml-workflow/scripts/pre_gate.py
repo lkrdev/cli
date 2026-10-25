@@ -86,11 +86,23 @@ def _sql_meta(sql: str):
     sm = re.search(
         r"(?i)\bSELECT\b([\s\S]*?)(?:\b(?:FROM|WHERE|GROUP|ORDER|LIMIT|HAVING|QUALIFY|UNION)\b|;|$)", top
     )
+    sel_exprs: list[str] = []
     if sm:
         base, pos = sm.start(1), 0
         for p_idx, seg in enumerate(sm.group(1).split(",")):
             expr = clean[base + pos : base + pos + len(seg)]
             pos += len(seg) + 1
+            sel_exprs.append(
+                re.sub(
+                    r"\s+",
+                    "",
+                    re.sub(
+                        r'(?i)(?:\s+AS\s+|(?<![+\-*/=<>,(])\s+|\)\s*)(?!\b(?:END|NULL|TRUE|FALSE|AND|OR|ELSE|THEN)\b)(?:`[^`]+`|"[^"]+"|[A-Za-z_]\w*)\s*$',
+                        "",
+                        expr.strip(),
+                    ),
+                ).lower()
+            )
             if re.search(r"(?:\*\s*100(?:\.0*)?(?!\d|\.)|(?<!\d|\.)100(?:\.0*)?\s*\*)", expr):
                 pct_idxs.add(p_idx)
                 am = re.search(
@@ -100,7 +112,19 @@ def _sql_meta(sql: str):
                 alias = am and (am.group(1) or am.group(2) or am.group(3))
                 if alias and alias.upper() not in {"END", "NULL", "TRUE", "FALSE", "AND", "OR", "ELSE", "THEN"}:
                     pct_cols.add(alias.lower())
-    return scales, pct_cols, pct_idxs, bool(re.search(r"(?i)\bORDER\s+BY\b", top))
+    om = re.search(r"(?i)\bORDER\s+BY\b([\s\S]*?)(?:\b(?:LIMIT|OFFSET|FETCH)\b|;|$)", top)
+    order_specs: list[str] = []
+    if om:
+        ob_base, ob_pos = om.start(1), 0
+        for seg in om.group(1).split(","):
+            raw_ob = clean[ob_base + ob_pos : ob_base + ob_pos + len(seg)]
+            ob_pos += len(seg) + 1
+            spec = re.sub(
+                r"(?i)(?:\s+(?:ASC|DESC))?(?:\s+NULLS\s+(?:FIRST|LAST))?\s*$", "", raw_ob.strip()
+            ).strip()
+            if spec:
+                order_specs.append(spec)
+    return scales, pct_cols, pct_idxs, sel_exprs, bool(om), order_specs
 
 
 def _cell_key(v, digits: int, mult: float = 1.0):
@@ -116,7 +140,7 @@ def compare_row_sets(sql_rows, looker_rows, sql: str = "", looker_fields: list[s
         return False, [f"Row count mismatch: SQL={len(sql_rows)}, Looker={len(looker_rows)}"]
     if not sql_rows:
         return True, []
-    scales, pct_cols, pct_idxs, has_order_by = _sql_meta(sql)
+    scales, pct_cols, pct_idxs, sel_exprs, has_order_by, order_specs = _sql_meta(sql)
     f_norm = [f.lower() for f in (looker_fields or [])]
     sr_leaves = [{k.split(".")[-1].lower(): v for k, v in sr.items()} for sr in sql_rows]
     lr_leaves = []
@@ -156,6 +180,41 @@ def compare_row_sets(sql_rows, looker_rows, sql: str = "", looker_fields: list[s
     if len(sr_leaves) > 1 and not has_order_by:
         sr_leaves.sort(key=lambda r: tuple(_cell_key(r[sk], d, 1.0) for _, sk, _, d, _ in cols))
         lr_leaves.sort(key=lambda r: tuple(_cell_key(r[lk], d, m) for _, _, lk, d, m in cols))
+    elif len(sr_leaves) > 1 and order_specs:
+        order_idxs = []
+        for spec in order_specs:
+            ident, norm_ob = spec.strip('`"').lower(), re.sub(r"\s+", "", spec).lower()
+            leaf_hits = [i for i, sk in enumerate(s_keys) if sk == ident.split(".")[-1]]
+            idx = (
+                int(spec) - 1
+                if spec.isdigit() and 1 <= int(spec) <= len(cols)
+                else s_keys.index(ident)
+                if ident in s_keys
+                else sel_exprs.index(norm_ob)
+                if norm_ob in sel_exprs
+                else leaf_hits[0]
+                if len(leaf_hits) == 1
+                else -1
+            )
+            if idx >= 0:
+                order_idxs.append(idx)
+        if len(order_idxs) == len(order_specs):
+            s_ob = [tuple(_cell_key(r[cols[i][1]], cols[i][3], 1.0) for i in order_idxs) for r in sr_leaves]
+            l_ob = [tuple(_cell_key(r[cols[i][2]], cols[i][3], cols[i][4]) for i in order_idxs) for r in lr_leaves]
+            if s_ob == l_ob:
+                sr_tied, lr_tied, start = [], [], 0
+                while start < len(sr_leaves):
+                    end = start + 1
+                    while end < len(sr_leaves) and s_ob[end] == s_ob[start]:
+                        end += 1
+                    sr_tied.extend(
+                        sorted(sr_leaves[start:end], key=lambda r: tuple(_cell_key(r[sk], d, 1.0) for _, sk, _, d, _ in cols))
+                    )
+                    lr_tied.extend(
+                        sorted(lr_leaves[start:end], key=lambda r: tuple(_cell_key(r[lk], d, m) for _, _, lk, d, m in cols))
+                    )
+                    start = end
+                sr_leaves, lr_leaves = sr_tied, lr_tied
     mismatches = []
     for idx, (sr_leaf, lr_leaf) in enumerate(zip(sr_leaves, lr_leaves)):
         for label, sk, lk, digits, mult in cols:
@@ -163,7 +222,7 @@ def compare_row_sets(sql_rows, looker_rows, sql: str = "", looker_fields: list[s
             lf = _to_float(lr_leaf[lk])
             lv_cmp = round(lf * mult, digits) if (mult != 1.0 and lf is not None) else lv
             if sv != lv_cmp:
-                mismatches.append(f"Row {idx} ({label}): SQL={sv}, Looker={lv}")
+                mismatches.append(f"Row {idx} ({label}): SQL={sv}, Looker={lv_cmp}")
     return not mismatches, mismatches[:5]
 
 
