@@ -305,6 +305,7 @@ class LookmlFieldMatch(BaseModel):
     field_type: str
     field_name: str
     lookml_type: str | None = None
+    timeframes: list[str] | None = None
     primary_key: bool = False
     hidden: bool = False
     sql: str | None = None
@@ -312,6 +313,7 @@ class LookmlFieldMatch(BaseModel):
     property_path: str | None = None
     expression: str | None = None
     via: list[str] = Field(default_factory=list)
+    ext_views: set[str] = Field(default_factory=set, exclude=True)
     file: str
     line: int
     end_line: int
