@@ -17,34 +17,6 @@ description: >
 
 # Agentic end-to-end SQL-to-LookML workflow (`agentic-lookml-workflow`)
 
-```mermaid
-flowchart TD
-    Start["Ask user for missing inputs: SQL Queries + Metrics & Terms Logic + Looker Project (PROJECT_ID)"] --> Preflight["Preflight: scripts/preflight.sh (fast-path warm runs)"]
-    Preflight --> Auth["Auth (--dev): lkr auth add-access-token"]
-    Auth --> InitBranch["Parse SQL offline (lkr parse sql) -> Reset to prod, create branch & pre-generate missing Bronze views: scripts/init_branch.py -> ./data/:id/data.json"]
-    InitBranch --> ExtractFiles["Save ./data/:id/input.sql, ./data/:id/metrics.md, initialize summary.md & pull LookML (including newly generated Bronze views) in one shot"]
-    ExtractFiles --> ModelCheck{"Existing model or new/no model?"}
-    ModelCheck -- "No models / Creating new model" --> AskConn["Ask user for CONNECTION_NAME (or offer to list instance connections), default MODEL_NAME=PROJECT_ID, create .model.lkml from examples/template.model.lkml.tmpl & run scripts/configure_model.py (create_lookml_model)"]
-    AskConn --> CompareInit
-    ModelCheck -- "Existing model" --> CompareInit["Upgrade/deduplicate model includes, snapshot baseline (-u) & run offline lkr parse sql-lookml-compare -> compare_initial.json"]
-    CompareInit --> MissingBronze{"Brand-new model or stale unmodeled_db_columns?"}
-    MissingBronze -- "Yes" --> GenBronze["Refresh stale/new-model Bronze views: generate_bronze_view.py + lookml pull -f + refresh snapshot & compare_initial.json"]
-    GenBronze --> AuthorLookML
-    MissingBronze -- "No" --> AuthorLookML["Deconstruct query, evaluate measures/SQL wrappers, author Bronze refinements + Bronze explore (hidden: no until joined; detach *_base + Silver explore ONLY when joins/*_fields/NDTs exist) & verify includes"]
-    AuthorLookML --> PushLookML["Push authored LookML to dev branch: lkr --dev tools lookml push --no-reset --only-changed"]
-    PushLookML --> PreGate["SINGLE PARITY, VALIDATOR & TEST-BASELINE GATE (scripts/pre_gate.py): Validate LookML + Init SQL Runner (/sql/:sql_id) + Register Explore Query (/x/:query_id) + Check Parity + Optional test_queries_json"]
-    PreGate --> PreGateCheck{"Validator or parity errors?"}
-    PreGateCheck -- "Yes" --> FixLookML["Log 'Validation failed' & 'Updating LookML' to summary.md; self-heal LookML"]
-    FixLookML --> PushLookML
-    PreGateCheck -- "No" --> WriteTests["Author LookML tests on terminal/immutable slices (skip frozen = asserts on mutable open states; tests/silver/ ONLY for joins, *_fields, or NDTs) & check snapshots"]
-    WriteTests --> PushTests["Push test & snapshot files to dev branch: lkr --dev tools lookml push --no-reset --only-changed"]
-    PushTests --> ValidateCommit["Final validation, targeted run_lookml_test & commit: scripts/validate_and_commit_branch.py"]
-    ValidateCommit --> ValidCheck{"Validation or test errors?"}
-    ValidCheck -- "Yes" --> FixFinal["Log failure & fix to summary.md; self-heal LookML/tests (re-run pre_gate.py only if LookML logic changed)"]
-    FixFinal --> PushTests
-    ValidCheck -- "No" --> OpenPR["Attach summary.md & files, open GitHub PR with query links: scripts/create_github_pr.sh"]
-```
-
 ## Prerequisite setup sub-skill
 
 If the repository has not been configured yet (or is missing `uv`, `lkr-dev-cli`, companion skills in `.agents/skills/`, an initial `.model.lkml` file, or `.github/workflows/lookml-pr-checks.yml`), run the setup sub-skill [sub-skills/setup/SKILL.md](sub-skills/setup/SKILL.md) and [scripts/setup_repo.sh](scripts/setup_repo.sh) first.
@@ -75,11 +47,12 @@ All workflow helper scripts live in `.agents/skills/agentic-lookml-workflow/scri
 - Ask the user directly for any missing inputs on the first prompt: SQL queries (inline or `.sql` files), metrics and terms logic (business definitions, common measures, and dimensions/filters used for common analysis), and the target Looker project (`PROJECT_ID`, plus `BASE_URL` if not already configured). Do not search the local workspace or query the Looker instance to guess or discover projects unless the user asks to see a list.
 - Run [scripts/preflight.sh](scripts/preflight.sh) on warm runs (or [scripts/setup_repo.sh](scripts/setup_repo.sh) once if `.github/workflows/lookml-pr-checks.yml` or `.agents/skills/` is not set up yet; see [sub-skills/setup/SKILL.md](sub-skills/setup/SKILL.md)), and authenticate in development mode (`--dev` is mandatory; never run in production):
   ```bash
+  [[ -f .env ]] && { set -a; source .env; set +a; }
   export BASE_URL="${BASE_URL:-$LOOKERSDK_BASE_URL}"
   bash .agents/skills/agentic-lookml-workflow/scripts/preflight.sh
   lkr --client-id="$LOOKERSDK_CLIENT_ID" --client-secret="$LOOKERSDK_CLIENT_SECRET" --base-url="$BASE_URL" --dev auth add-access-token
   ```
-- Parse `$SQL_FILE` offline (`lkr parse sql --file "$SQL_FILE"`), reset the developer workspace to production, create branch `YYYYMMDD_HHMMSS_mmm_<looker_user_id>`, resolve existing `model_name` + `connection_name`, and pre-generate any missing `bronze/:table.view.lkml` files via [scripts/init_branch.py](scripts/init_branch.py); then initialize `./data/$RUN_ID/`, pull LookML once, and—whenever `init_branch.py` returned an existing `model_name`—sync includes, baseline snapshots (`-u`), and `compare_initial.json` in the **same shell call** (read `compare_initial.json` via `read_file` rather than `cat`ting it to stdout):
+- Parse `$SQL_FILE` offline (`lkr parse sql --file "$SQL_FILE"`), reset the developer workspace to production, create branch `YYYYMMDD_HHMMSS_mmm_<looker_user_id>`, resolve existing `model_name` + `connection_name`, and pre-generate any missing `bronze/:table.view.lkml` files via [scripts/init_branch.py](scripts/init_branch.py); then initialize `./data/$RUN_ID/`, pull LookML once, and—whenever `init_branch.py` returned an existing `model_name`—sync includes, baseline snapshots (`-u`), and `compare_initial.json` in the **same shell call** (inspect pulled LookML files directly under `./data/$RUN_ID/lookml/` after pull rather than reading repo-root LookML before pull, and read `compare_initial.json` via `read_file`):
   ```bash
   PARSED_SQL_JSON=$(lkr parse sql --file "$SQL_FILE")
   RAW_BRANCH=$(lkr --base-url="$BASE_URL" --dev code-mode sandbox \
