@@ -19,15 +19,19 @@ def _g(fn, default=""):
         return default
 
 
+def _attr(o, k, d=None):
+    return o.get(k, d) if isinstance(o, dict) else getattr(o, k, d)
+
+
 def main():
     proj = _g(lambda: project_name, "my_new_project")  # ty: ignore[unresolved-reference]
     msg = _g(lambda: commit_message, "Automated LookML sync and deploy")  # ty: ignore[unresolved-reference]
     is_strict = _g(lambda: strict, "false").lower() in ("true", "1", "yes")  # ty: ignore[unresolved-reference]
     should_deploy = _g(lambda: deploy, "true").lower() in ("true", "1", "yes")  # ty: ignore[unresolved-reference]
 
-    raw_errors = (validate_project(proj) or {}).get("errors") or []  # ty: ignore[unresolved-reference]
+    raw_errors = _attr(validate_project(proj), "errors") or []  # ty: ignore[unresolved-reference]
     blocking_errors = [
-        err for err in raw_errors if str(err.get("severity", "")).lower() in ("error", "fatal")
+        err for err in raw_errors if str(_attr(err, "severity", "") or "").lower() in ("error", "fatal")
     ]
     result = {
         "project_id": proj,
@@ -69,7 +73,7 @@ def main():
             create_developer_copy(proj)  # ty: ignore[unresolved-reference]
             reset_project_to_production(proj)  # ty: ignore[unresolved-reference]
         result["dev_workspace_reset"] = True
-        result["dev_branch_name"] = (git_branch(proj) or {}).get("name", "")  # ty: ignore[unresolved-reference]
+        result["dev_branch_name"] = _attr(git_branch(proj), "name", "") or ""  # ty: ignore[unresolved-reference]
     except Exception as e:
         result["dev_reset_notice"] = str(e)
 

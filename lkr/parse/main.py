@@ -780,11 +780,15 @@ def curation_meta_command(
         if api_json != "-" and not Path(api_json).exists():
             logger.error(f"API JSON file not found: {api_json}")
             raise typer.Exit(1)
-        payload: dict[str, Any] | LookmlToApiResult = json.loads(
-            sys.stdin.read()
-            if api_json == "-"
-            else Path(api_json).read_text(encoding="utf-8")
-        )
+        try:
+            payload: dict[str, Any] | LookmlToApiResult = json.loads(
+                sys.stdin.read()
+                if api_json == "-"
+                else Path(api_json).read_text(encoding="utf-8")
+            )
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse API JSON: {e}")
+            raise typer.Exit(1) from None
     else:
         _validate_lookml_args(path, file, lookml, manifest=manifest)
         payload = build_api_result_from_lookml(

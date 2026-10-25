@@ -44,27 +44,15 @@ def check_random_int_format(val: str) -> tuple[bool, str | None]:
 def format_attributes(
     attributes: list[str] | None = None, seperator: str = ":"
 ) -> dict[str, str]:
-    if attributes is None:
-        attributes = []
     formatted_attributes: dict[str, str] = {}
-    if attributes:
-        for attr in attributes:
-            valid = True
-            split_attr = [x.strip() for x in attr.split(seperator) if x.strip()]
-            if len(split_attr) == 2:
-                val = split_attr[1]
-                # regex to check if for string random.randint(0,1000000)
-                is_valid, val = check_random_int_format(val)
-                if is_valid and val is not None:
-                    split_attr[1] = val
-                else:
-                    valid = False
-            else:
-                valid = False
-            if valid:
-                formatted_attributes[split_attr[0]] = split_attr[1]
-            else:
-                invalid_attribute_format(attr)
+    for attr in attributes or []:
+        split_attr = [x.strip() for x in attr.split(seperator) if x.strip()]
+        if len(split_attr) == 2:
+            is_valid, val = check_random_int_format(split_attr[1])
+            if is_valid and val is not None:
+                formatted_attributes[split_attr[0]] = val
+                continue
+        invalid_attribute_format(attr)
 
     return formatted_attributes
 

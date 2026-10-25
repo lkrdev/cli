@@ -19,6 +19,10 @@ def _g(fn, default=""):
         return default
 
 
+def _attr(o, k, d=None):
+    return o.get(k, d) if isinstance(o, dict) else getattr(o, k, d)
+
+
 def main():
     proj = _g(lambda: project_name, "my_new_project")  # ty: ignore[unresolved-reference]
     model = _g(lambda: model_name, proj)  # ty: ignore[unresolved-reference]
@@ -27,13 +31,13 @@ def main():
 
     project_created = False
     try:
-        p = project(proj) or {}  # ty: ignore[unresolved-reference]
+        p = project(proj)  # ty: ignore[unresolved-reference]
     except Exception:
-        p = create_project(body={"name": proj}) or {}  # ty: ignore[unresolved-reference]
+        p = create_project(body={"name": proj})  # ty: ignore[unresolved-reference]
         project_created = True
 
-    if not p.get("uses_git"):
-        p = update_project(project_id=proj, body={"git_service_name": "bare"}) or {}  # ty: ignore[unresolved-reference]
+    if not _attr(p, "uses_git"):
+        p = update_project(project_id=proj, body={"git_service_name": "bare"})  # ty: ignore[unresolved-reference]
 
     dev_copy_status = "verified"
     try:
@@ -42,10 +46,10 @@ def main():
         dev_copy_status = f"notice: {e}"
 
     out = {
-        "project_id": p.get("id") or proj,
+        "project_id": _attr(p, "id") or proj,
         "project_created": project_created,
-        "uses_git": bool(p.get("uses_git")),
-        "git_remote_url": p.get("git_remote_url"),
+        "uses_git": bool(_attr(p, "uses_git")),
+        "git_remote_url": _attr(p, "git_remote_url"),
         "developer_copy": dev_copy_status,
     }
     if should_skip_model:
@@ -54,30 +58,30 @@ def main():
 
     if not conn or "PLACEHOLDER" in conn:
         conns = all_connections() or []  # ty: ignore[unresolved-reference]
-        conn = conns[0].get("name", "") if conns else ""
+        conn = (_attr(conns[0], "name", "") if conns else "") or ""
         if not conn:
             return {"error": "No database connections found on this Looker instance"}
 
-    existing = {m.get("name"): m for m in (all_lookml_models() or []) if m.get("name")}  # ty: ignore[unresolved-reference]
+    existing = {_attr(m, "name"): m for m in (all_lookml_models() or []) if _attr(m, "name")}  # ty: ignore[unresolved-reference]
     if model in existing:
-        allowed = [c for c in (existing[model].get("allowed_db_connection_names") or []) if c]
+        allowed = [c for c in (_attr(existing[model], "allowed_db_connection_names") or []) if c]
         if conn not in allowed:
             allowed.append(conn)
         res = update_lookml_model(  # ty: ignore[unresolved-reference]
             lookml_model_name=model,
             body={"name": model, "project_name": proj, "allowed_db_connection_names": allowed},
-        ) or {}
+        )
         action = "updated"
     else:
         allowed = [conn]
         res = create_lookml_model(  # ty: ignore[unresolved-reference]
             body={"name": model, "project_name": proj, "allowed_db_connection_names": allowed}
-        ) or {}
+        )
         action = "created"
 
     out.update({
         "model_action": action,
-        "model_name": res.get("name") or model,
+        "model_name": _attr(res, "name") or model,
         "allowed_connections": allowed,
         "status": "ready_for_push_or_generation",
     })

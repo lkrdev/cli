@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 from lkr.codemode.main import run_python_code
 from lkr.extended_sdk_methods import ExtendedLooker40SDK
 from lkr.main import app
+from lkr.observability.utils import format_attributes
 from lkr.parse.curation import build_api_result_from_lookml, extract_curation_metadata
 from lkr.utils import deep_get
 
@@ -521,4 +522,59 @@ def test_project_helper_consolidated_monty_scripts() -> None:
         assert deploy_out["committed"] is True
         assert deploy_out["deployed"] is False
         assert deploy_out["status"] == "committed_without_deploy"
+
+    # Also verify direct Python execution when Looker SDK returns model objects (non-dicts)
+    def _run_script_with_sdk_objects(path: Path, bindings: dict[str, Any]) -> Any:
+        spec = importlib.util.spec_from_file_location(path.stem, path)
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        mod.__dict__.update(bindings)
+        spec.loader.exec_module(mod)
+        return mod.main()
+
+    ensure_obj_res = _run_script_with_sdk_objects(
+        helper_dir / "ensure_project_and_model.py",
+        {
+            "project_name": "demo_proj",
+            "model_name": "demo_model",
+            "connection_name": "",
+            "project": lambda _p: SimpleNamespace(
+                id="demo_proj", uses_git=True, git_remote_url=None
+            ),
+            "create_developer_copy": lambda _p: SimpleNamespace(status="ok"),
+            "all_connections": lambda: [SimpleNamespace(name="conn_obj")],
+            "all_lookml_models": lambda: [
+                SimpleNamespace(
+                    name="demo_model", allowed_db_connection_names=["conn_a"]
+                )
+            ],
+            "update_lookml_model": lambda lookml_model_name, body: SimpleNamespace(
+                **body
+            ),
+        },
+    )
+    assert ensure_obj_res["allowed_connections"] == ["conn_a", "conn_obj"]
+
+    deploy_obj_res = _run_script_with_sdk_objects(
+        helper_dir / "deploy_and_reset_workspace.py",
+        {
+            "project_name": "demo_proj",
+            "strict": "true",
+            "validate_project": lambda _p: SimpleNamespace(
+                errors=[SimpleNamespace(severity="error")]
+            ),
+            "git_branch": lambda _p: SimpleNamespace(name="dev-bryan"),
+        },
+    )
+    assert deploy_obj_res["status"] == "aborted_due_to_validation_errors"
+    assert deploy_obj_res["blocking_error_count"] == 1
+
+
+def test_format_attributes_and_invalid_api_json() -> None:
+    assert format_attributes(["tenant:random.randint(7,7)", "bad_attr"]) == {"tenant": "7"}
+    bad_json_res = runner.invoke(
+        app, ["parse", "curation-meta", "--api-json", "-"], input="{not-valid-json"
+    )
+    assert bad_json_res.exit_code == 1
+
 
