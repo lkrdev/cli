@@ -1511,7 +1511,7 @@ def _build_explore_from_assembled(
         rel = j_obj.relationship or ""
         is_sym = (rel or "many_to_one") != "one_to_one"
         if any(
-            t and t.lstrip("-").strip().upper() == "ALL_FIELDS*"
+            t and t.strip().lstrip("-").strip().upper() == "ALL_FIELDS*"
             for t in (j_obj.fields or [])
         ):
             join_errors.append(
