@@ -2914,6 +2914,19 @@ def _analyze_query_joins(
             for j1, j2 in itertools.combinations(o2m_joins, 2)
         ]
 
+        j_meta = [
+            (
+                j_node,
+                {j_name.lower(), j_node.view_alias.lower()},
+                {j_name.lower(), j_node.target_view.lower(), j_node.view_alias.lower()}
+                | ({jv_tail} if (jv_tail := _view_table_tail(m_views.get(j_node.target_view))) else set()),
+                {(j_node.from_view or target_graph.base_alias).lower()}
+                | ({ft} if (ft := _view_table_tail(m_views.get(j_node.from_view or ""))) else set()),
+            )
+            for j_name, j_node in target_graph.joins.items()
+        ]
+        present_in_target = base_names.union(*(jn_set for _, _, jn_set, _ in j_meta))
+
         for sql_join in pq.joins:
             left_t = sql_join.left_table
             right_t = sql_join.right_table
@@ -2947,18 +2960,7 @@ def _analyze_query_joins(
             matched_inverted = False
             is_unnest_join = right_name.startswith("unnest(")
 
-            for j_name, j_node in target_graph.joins.items():
-                jv_tail = _view_table_tail(m_views.get(j_node.target_view))
-                j_names = {
-                    j_name.lower(),
-                    j_node.target_view.lower(),
-                    j_node.view_alias.lower(),
-                } | ({jv_tail} if jv_tail else set())
-
-                from_v = (j_node.from_view or target_graph.base_alias).lower()
-                from_tail = _view_table_tail(m_views.get(j_node.from_view or ""))
-                from_names = {from_v} | ({from_tail} if from_tail else set())
-
+            for j_node, _, j_names, from_names in j_meta:
                 if is_unnest_join:
                     fwd_match = "UNNEST(" in (j_node.sql or "").upper() and (
                         not left_name
@@ -2985,6 +2987,37 @@ def _analyze_query_joins(
                     matched_j = j_node
                     matched_inverted = rev_match and not fwd_match
                     break
+
+            if (
+                matched_j is None
+                and not is_unnest_join
+                and sql_join.equi_joins
+                and inferred_rel in ("one_to_one", "many_to_one", "one_to_many")
+            ):
+                left_j, right_j = (
+                    next((jn for jn, al, _, _ in j_meta if ta and ta in al), None)
+                    or (hits[0] if len(hits := [jn for jn, _, jns, _ in j_meta if tn and tn in jns]) == 1 else None)
+                    for tn, ta in ((left_name, left_alias), (right_name, right_alias))
+                )
+                if left_j is not None and right_j is not None and left_j.name != right_j.name:
+                    sql_pairs = {
+                        p
+                        for (_, lc), (_, rc) in sql_join.equi_joins
+                        for p in ((lc.lower(), rc.lower()), (rc.lower(), lc.lower()))
+                    }
+                    cands = (
+                        [(left_j, True)]
+                        if inferred_rel == "one_to_many"
+                        else [(right_j, False)]
+                        if inferred_rel == "many_to_one"
+                        else [(right_j, False), (left_j, True)]
+                    )
+                    for cand_j, cand_inv in cands:
+                        if cand_j.equi_joins and all(
+                            (fc.lower(), jc.lower()) in sql_pairs for (_, fc), (_, jc) in cand_j.equi_joins
+                        ):
+                            matched_j, matched_inverted = cand_j, cand_inv
+                            break
 
             safety_warnings = list(explore_safety_warnings)
             precedents: list[JoinPrecedent] = []
@@ -3096,16 +3129,6 @@ def _analyze_query_joins(
                     )
                 )
             else:
-                present_in_target = set(base_names)
-                for jn, jnode in target_graph.joins.items():
-                    j_tail = _view_table_tail(m_views.get(jnode.target_view))
-                    present_in_target |= {
-                        jn.lower(),
-                        jnode.target_view.lower(),
-                        jnode.view_alias.lower(),
-                    }
-                    if j_tail:
-                        present_in_target.add(j_tail)
                 left_present = bool({left_name, left_alias} & present_in_target)
                 right_present = bool({right_name, right_alias} & present_in_target)
                 both_precedents: list[JoinPrecedent] = []

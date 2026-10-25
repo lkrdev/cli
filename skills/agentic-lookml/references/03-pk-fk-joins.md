@@ -91,6 +91,7 @@ view: order_items_users_fields {
   dimension: pk {
     primary_key: yes
     hidden: yes
+    # Use type: number + sql: ${order_items.id} ;; when only bare-joined onto M:1 explore: order_items; use CONCAT when also joined onto 1:M explore: users
     sql: CONCAT(CAST(${users.id} AS STRING), '_', CAST(COALESCE(${order_items.id}, 0) AS STRING)) ;;
   }
 

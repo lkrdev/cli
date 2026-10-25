@@ -4201,3 +4201,75 @@ def test_cte_dead_projection_pruning_count_alias_and_unnest_virtual_view():
     assert q2["join_analysis"][0]["matched_explore_join"] == "events__uri_segments"
     assert [(eq["query_name"], eq["coverage"]) for eq in q2["explore_queries"]] == [("top_uri_segments", "exact")]
 
+
+def test_star_schema_transitive_pk_fk_join_analysis_and_explore_queries():
+    import json
+
+    from typer.testing import CliRunner
+
+    from lkr.main import app
+
+    lkml = (
+        'connection: "bq"\n'
+        "view: users {\n"
+        "  sql_table_name: `proj.ds.users` ;;\n"
+        "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+        "  dimension: gender { type: string sql: ${TABLE}.gender ;; }\n"
+        "}\n"
+        "view: orders {\n"
+        "  sql_table_name: `proj.ds.orders` ;;\n"
+        "  dimension: order_id { primary_key: yes type: number sql: ${TABLE}.order_id ;; }\n"
+        "  dimension: user_id { type: number sql: ${TABLE}.user_id ;; }\n"
+        "}\n"
+        "view: products {\n"
+        "  sql_table_name: `proj.ds.products` ;;\n"
+        "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+        "  dimension: department { type: string sql: ${TABLE}.department ;; }\n"
+        "}\n"
+        "view: order_items {\n"
+        "  sql_table_name: `proj.ds.order_items` ;;\n"
+        "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+        "  dimension: order_id { type: number sql: ${TABLE}.order_id ;; }\n"
+        "  dimension: user_id { type: number sql: ${TABLE}.user_id ;; }\n"
+        "  dimension: product_id { type: number sql: ${TABLE}.product_id ;; }\n"
+        "  measure: count { type: count }\n"
+        "}\n"
+        "explore: order_items {\n"
+        "  view_name: order_items\n"
+        "  join: orders { type: left_outer relationship: many_to_one sql_on: ${order_items.order_id} = ${orders.order_id} ;; }\n"
+        "  join: users { type: left_outer relationship: many_to_one sql_on: ${order_items.user_id} = ${users.id} ;; }\n"
+        "  join: products { type: left_outer relationship: many_to_one sql_on: ${order_items.product_id} = ${products.id} ;; }\n"
+        "  query: by_gender_dept { dimensions: [users.gender, products.department] measures: [order_items.count] }\n"
+        "}\n"
+    )
+    sql = (
+        "SELECT u.gender, COUNT(oi.id) AS total_items "
+        "FROM `proj.ds.users` u "
+        "INNER JOIN `proj.ds.orders` o ON u.id = o.user_id "
+        "INNER JOIN `proj.ds.order_items` oi ON o.order_id = oi.order_id "
+        "INNER JOIN `proj.ds.products` p ON oi.product_id = p.id "
+        "GROUP BY 1; "
+        "SELECT u1.gender, COUNT(oi.id) AS total_items "
+        "FROM `proj.ds.users` u1 "
+        "INNER JOIN `proj.ds.users` u2 ON u1.id = u2.id "
+        "INNER JOIN `proj.ds.order_items` oi ON u1.id = oi.user_id "
+        "GROUP BY 1"
+    )
+    res = CliRunner().invoke(
+        app,
+        ["parse", "sql-lookml-compare", "--sql", sql, "--lookml", lkml, "--offline", "--compact"],
+    )
+    assert res.exit_code == 0, res.output
+    q0, q1 = json.loads(res.output)["queries"]
+
+    ja0 = {j["sql_join"]: j for j in q0["join_analysis"] if j["explore_name"] == "order_items"}
+    uo = ja0["proj.ds.users INNER proj.ds.orders"]
+    assert uo["status"] == "type_mismatch"
+    assert uo["matched_explore_join"] == "users"
+    assert uo["inferred_relationship"] == "many_to_one"
+    assert [eq["query_name"] for eq in q0["explore_queries"]] == ["by_gender_dept"]
+
+    ja1 = {j["sql_join"]: j for j in q1["join_analysis"] if j["explore_name"] == "order_items"}
+    assert ja1["proj.ds.users INNER proj.ds.users"]["status"] == "missing_join"
+
+
