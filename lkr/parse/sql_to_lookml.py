@@ -3122,9 +3122,11 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                 tm.pop("field", None)
         for ja in q.get("join_analysis") or []:
             if isinstance(sj := ja.get("sql_join"), dict):
-                ja["sql_join"] = (
-                    f"{sj.get('left_table') or ''} {sj.get('join_type', 'JOIN')} {sj.get('right_table') or ''}".strip()
-                )
+                lt, rt = sj.get("left_table"), sj.get("right_table")
+                l_str = ".".join(p for p in (lt.get("catalog"), lt.get("db"), lt.get("name")) if p) if isinstance(lt, dict) else str(lt or "")
+                r_str = ".".join(p for p in (rt.get("catalog"), rt.get("db"), rt.get("name")) if p) if isinstance(rt, dict) else str(rt or "")
+                j_type = sj.get("join_type") or ja.get("sql_join_type") or "JOIN"
+                ja["sql_join"] = f"{l_str} {j_type} {r_str}".strip()
         eqs = q.get("explore_queries") or []
         if any(eq.get("coverage") == "exact" for eq in eqs):
             q["explore_queries"] = [eq for eq in eqs if eq.get("coverage") == "exact"]

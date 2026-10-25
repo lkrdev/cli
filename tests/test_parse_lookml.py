@@ -3535,7 +3535,7 @@ def test_iter3_value_format_validation_compact_explores_and_diff_tests(tmp_path:
         ("q_remorse", "exact")
     ]
     assert "explore_queries" not in comp_join
-    assert isinstance(comp_join["join_analysis"][0]["sql_join"], str)
+    assert comp_join["join_analysis"][0]["sql_join"] == "proj.ds.users INNER proj.ds.orders"
     combo_hits = [f for f in comp_join["views"][0]["fields"] if f["field_name"] == "combo"]
     assert len(combo_hits) == 1 and set(combo_hits[0]["via"]) >= {"orders.count", "orders.ratio_ok"}
 
