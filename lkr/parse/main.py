@@ -1,5 +1,4 @@
 import json
-import re
 import sys
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -612,12 +611,16 @@ def sql_lookml_compare_command(
     except ValueError as e:
         logger.error(str(e))
         raise typer.Exit(1)
+    def _dump_compact(v: Any, ind: int = 0) -> str:
+        pad = " " * (ind + 1)
+        if isinstance(v, dict) and any(isinstance(x, dict) or (isinstance(x, (list, tuple)) and any(isinstance(i, dict) for i in x)) for x in v.values()):
+            return "{\n" + ",\n".join(f"{pad}{json.dumps(k)}: {_dump_compact(val, ind + 1)}" for k, val in v.items()) + f"\n{' ' * ind}}}"
+        if isinstance(v, (list, tuple)) and any(isinstance(x, dict) for x in v):
+            return "[\n" + ",\n".join(f"{pad}{_dump_compact(x, ind + 1)}" for x in v) + f"\n{' ' * ind}]"
+        return json.dumps(v)
+
     payload = (
-        re.sub(
-            r"\[\n\s+([^\[\]\{\}]+?)\n\s+\]",
-            lambda m: "[" + re.sub(r",\n\s+", ", ", m.group(1)) + "]",
-            json.dumps(compact_sql_to_lookml(result), indent=1),
-        )
+        _dump_compact(compact_sql_to_lookml(result))
         if compact
         else result.model_dump_json(indent=2, by_alias=True, exclude_none=True)
     )

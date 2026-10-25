@@ -58,7 +58,7 @@ Use judgment rather than wrapping every filter condition in a boolean field, and
 
 1. **Date and timestamp nullability (`NULL` / `-NULL`) — create ONE positive-polarity `type: yesno` dimension:** Whenever SQL tests `<timestamp_or_date> IS NULL` or `IS NOT NULL` (`sold_at IS NULL`, `returned_at IS NOT NULL`, `deleted_at IS NULL`), define a single **positive-form** `type: yesno` dimension (`is_sold`, `is_returned`, `is_deleted`) in `bronze/:table.refinement.lkml` against the `raw` timeframe (`sql: ${sold_raw} IS NOT NULL ;;`), then filter via `is_sold: "no"` (for unsold) or `is_sold: "yes"` (for sold) in measures and Explore queries. Using `${<group>_raw}` avoids Looker's `DATE()`/timezone cast on `${<group>_date}: "NULL"` and gives users and Conversational Analytics a clean `Yes / No` toggle.
 2. **Never create the opposite / negated twin:** Before adding any `type: yesno` dimension or filtered measure, inspect existing `views[].fields` in `lkr parse sql-lookml-compare`. Never author negated boolean names (`is_unsold`, `is_not_sold`, `is_unreturned`, `is_inactive`, `has_not_churned`), never add an inverse `yesno` field (`${sold_raw} IS NULL` or `NOT ${is_sold}`) alongside an existing positive `yesno` field (`is_sold`), and never speculatively create the opposite filtered measure (`sold_inventory_cost` when only `sunk_dusty_shelf_cost` was requested). Flip the filter value (`"yes"` vs. `"no"`) on the single positive field instead.
-3. **Compound `OR` helper for LookML measures — create a `hidden: yes` positive `type: yesno` dimension:** Because `measure: { filters: [...] }` combines multiple fields with `AND`, cross-column `OR` conditions (`${status} = 'Complete' OR ${is_override}`) require a hidden positive-form `type: yesno` helper dimension (`is_completed_or_override`).
+3. **Compound `OR` helper for LookML measures — create a `hidden: yes` positive `type: yesno` dimension:** Because `measure: { filters: [...] }` combines multiple fields with `AND`, cross-column `OR` conditions (`${status} = 'Returned' OR ${is_returned}` — note `${yesno_dim}` expands directly as a parenthesized SQL boolean expression) require a hidden positive-form `type: yesno` helper dimension (`is_ever_returned`).
 4. **Plain categorical equality or numeric intervals — skip `type: yesno`:** Do not create `is_complete` or `is_us` for single-value string filters (`status = 'Complete'`), and do not create `is_late_night` for numeric range filters (`EXTRACT(HOUR FROM created_at) BETWEEN 0 AND 5`, `amount >= 100`); filter directly via `filters: [status: "Complete"]` or Looker numeric interval expressions (`filters: [created_hour_utc: "[0, 5]"]`, `filters: [amount: ">=100"]`) unless `metrics.md` explicitly requests a standalone boolean dimension.
 
 ## LookML templates
@@ -83,10 +83,10 @@ view: +orders {
     description: "Whether the order has been returned (returned_at is populated)."
   }
 
-  dimension: is_completed_or_override {
+  dimension: is_ever_returned {
     type: yesno
     hidden: yes
-    sql: ${status} = 'Complete' OR ${is_override} ;;
+    sql: ${status} = 'Returned' OR ${is_returned} ;;
   }
 
   measure: count {

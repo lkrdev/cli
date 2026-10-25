@@ -314,6 +314,8 @@ class LookmlFieldMatch(BaseModel):
     expression: str | None = None
     via: list[str] = Field(default_factory=list)
     ext_views: set[str] = Field(default_factory=set, exclude=True)
+    dep_fields: set[tuple[str, str]] = Field(default_factory=set, exclude=True)
+    unmatched_filter: bool = Field(default=False, exclude=True)
     file: str
     line: int
     end_line: int

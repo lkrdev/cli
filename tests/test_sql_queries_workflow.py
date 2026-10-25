@@ -947,7 +947,7 @@ def test_pre_gate_order_by_round_ties_and_pr_data_json_compaction():
     assert ok_rev is False and diffs_rev
 
     pr_sh = (SCRIPTS_DIR / "create_github_pr.sh").read_text()
-    assert "jq -c 'del(.test_query_results)'" in pr_sh
+    assert "jq -c 'del(.test_query_results, .queries[]?.sql_rows)'" in pr_sh
     assert 'elif [[ "$lang" == "json" ]]; then jq -c .' in pr_sh
 
     seen_fids: list[str | None] = []

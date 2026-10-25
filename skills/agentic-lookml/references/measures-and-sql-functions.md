@@ -27,7 +27,6 @@ Apply this guide to **every** query—including `simple_single_table` queries wi
 `lkr parse lookml-to-api --validate` rejects any `type: number` measure whose `sql:` AST calls `PERCENTILE_CONT`, `PERCENTILE_DISC`, `APPROX_QUANTILES`, `MEDIAN`, `STDDEV*`, or `VAR*`. Always model quantiles natively and decompose dispersion into symmetric intermediate measures scoped by `<col>`:
 
 ```lookml
-# Native percentile / median (auto-promotes to percentile_distinct / median_distinct on fanout joins)
 measure: p99_revenue {
   type: percentile
   percentile: 99
@@ -35,42 +34,30 @@ measure: p99_revenue {
   value_format_name: usd
 }
 
-# Symmetric STDDEV / VARIANCE helpers scoped to <col> (`hidden: yes` unless requested in input.sql / metrics.md):
-# 1. Non-null count (if <col> is guaranteed NOT NULL, skip this and reference ${count} directly)
+# Symmetric STDDEV / VARIANCE helpers scoped to <col> (`hidden: yes` unless requested):
+# Skip _<col>_count and use ${count} when <col> is NOT NULL; reuse existing unfiltered total_<col>
+# instead of _<col>_sum (or promote _<col>_sum -> total_<col> with `alias: [_<col>_sum]` later).
 measure: _revenue_count {
   hidden: yes
   type: count_distinct
   sql: ${order_id} ;;
   filters: [revenue: "-NULL"]
 }
-
-# 2. Sum of values (if unfiltered total_revenue `type: sum` already exists on the view, reuse ${total_revenue}
-#    instead of creating _revenue_sum to avoid duplicate_field_logic; conversely, if a later query needs SUM(revenue)
-#    when hidden _revenue_sum already exists, promote _revenue_sum in-place to visible total_revenue with
-#    `alias: [_revenue_sum]` and update stddev_revenue to `${total_revenue}`, which is additive in `lookml snapshot`!)
 measure: _revenue_sum {
   hidden: yes
   type: sum
   sql: ${revenue} ;;
 }
-
-# 3. Sum of squared values
 measure: _revenue_sum_of_squares {
   hidden: yes
   type: sum
   sql: POWER(${revenue}, 2) ;;
 }
 
-# 4. Final sample STDDEV (`STDDEV` / `STDDEV_SAMP`, denominator N - 1):
-#    - For population `STDDEV_POP` / `VAR_POP`, replace `NULLIF(${_revenue_count} - 1, 0)` with `NULLIF(${_revenue_count}, 0)`.
-#    - For `VARIANCE` / `VAR_SAMP` / `VAR_POP`, omit the outer `SQRT(...)`.
-#    - `GREATEST(..., 0)` prevents `-1e-16` floating-point underflow inside `SQRT` when variance is 0.
+# Sample STDDEV (N - 1); use NULLIF(${_revenue_count}, 0) for POP and drop SQRT(...) for VARIANCE:
 measure: stddev_revenue {
   type: number
-  sql: SQRT(
-        GREATEST(${_revenue_sum_of_squares} - (POWER(${_revenue_sum}, 2) / NULLIF(${_revenue_count}, 0)), 0)
-        / NULLIF(${_revenue_count} - 1, 0)
-       ) ;;
+  sql: SQRT(GREATEST(${_revenue_sum_of_squares} - (POWER(${_revenue_sum}, 2) / NULLIF(${_revenue_count}, 0)), 0) / NULLIF(${_revenue_count} - 1, 0)) ;;
   value_format_name: usd
 }
 ```
