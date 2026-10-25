@@ -47,7 +47,7 @@ If the outer query only averages or totals rows that are already displayed at th
 
 ### Prefer a consolidated Silver Native Derived Table (`explore_source:`)
 
-When the outer query groups by a bucketed tier of the Stage-1 metric (`customer_frequency_tier`) or aggregates across an entity grain not displayed in the chart, create `silver/:entity_facts.view.lkml` (such as `silver/user_order_facts.view.lkml`) using `explore_source:`. If `silver/explores/orders.explore.lkml` already exists, point `explore_source: orders` at it; otherwise create a base explore `bronze/explores/orders_base.explore.lkml` (`extension: required` or `hidden: yes`). Consolidate multiple `GROUP BY user_id` aggregations from different queries into a single, cohesive `silver/user_order_facts.view.lkml` rather than creating separate one-off NDT views.
+When the outer query groups by a bucketed tier of the Stage-1 metric (`customer_frequency_tier`) or aggregates across an entity grain not displayed in the chart, create `silver/:entity_facts.view.lkml` (such as `silver/user_order_facts.view.lkml`) using `explore_source:`. Detach the base explore to `bronze/explores/orders_base.explore.lkml` (`hidden: yes` — **never** `extension: required`, which Looker rejects in `explore_source:`) and point `explore_source: orders_base` at it so joining `user_order_facts` into `silver/explores/orders.explore.lkml` (`extends: [orders_base]`) stays strictly acyclic (zero circular `include:` cycles). Consolidate multiple `GROUP BY user_id` aggregations from different queries into a single, cohesive `silver/user_order_facts.view.lkml` rather than creating separate one-off NDT views.
 
 ### Keep Silver NDTs ephemeral by default
 
@@ -55,9 +55,9 @@ Silver NDTs remain ephemeral (inlined CTE or subquery at query runtime) by defau
 
 ### Promote Stage-1 metrics to dimensions and join back on `PK = FK`
 
-Inside `silver/user_order_facts.view.lkml`, `lifetime_orders` and `lifetime_spend` become dimensions (`primary_key: yes` on `user_id`). Define `customer_frequency_tier` (`type: tier`) and Stage-2 measures (`avg_customer_ltv { type: average sql: ${lifetime_spend} ;; }`) on `silver/user_order_facts.view.lkml`.
+Inside `silver/user_order_facts.view.lkml`, `lifetime_orders` and `lifetime_spend` become dimensions (`primary_key: yes` on `user_id`, which automatically triggers Looker symmetric `COUNT(DISTINCT user_id)` and `average_distinct` across `many_to_one` joins). For intra-group timestamp spans like `TIMESTAMP_DIFF(MAX(created_at), MIN(created_at), SECOND)`, define a `hidden: yes` Stage-1 `type: number` measure `TIMESTAMP_DIFF(MAX(${created_raw}), MIN(${created_raw}), SECOND)` on the base refinement (avoiding BigQuery `type: date_time` `FORMAT_TIMESTAMP` strings and `UNIX_SECONDS` sub-second drift; `lookml-to-api --validate` permits fanout-idempotent `MIN`/`MAX` inside `type: number`). Define `customer_frequency_tier` (`type: tier`) and Stage-2 measures (`avg_customer_ltv { type: average sql: ${lifetime_spend} ;; }`) on `silver/user_order_facts.view.lkml`.
 
-Join `user_order_facts` into the fact-anchored `silver/explores/orders.explore.lkml` (`${orders.user_id} = ${user_order_facts.user_id}`, `relationship: many_to_one`, or `${users.id} = ${user_order_facts.user_id}`, `relationship: one_to_one` against the joined `users` view inside `orders.explore.lkml`). Never create a standalone `silver/explores/users.explore.lkml` for a lookup table. When an NDT aggregates at a non-table-PK cohort/session grain with a `HAVING` filter (e.g., `GROUP BY session_id HAVING COUNTIF(event_type = 'purchase') > 0`), filter the measure directly inside `explore_source: { filters: [events.purchase_count: ">0"] }` (which Looker compiles to `HAVING`), declare `primary_key: yes` on `session_id` (plus `measure: count { type: count }` for qualifying session counts), join onto `silver/explores/events.explore.lkml` (`many_to_one`), and filter outer queries on `event_session_facts.session_id: "-NULL"` (for `type: string`) or `"NOT NULL"` (for `type: number`) whenever SQL restricts to qualifying sessions.
+Join `user_order_facts` into the fact-anchored `silver/explores/orders.explore.lkml` (`${orders.user_id} = ${user_order_facts.user_id}`, `relationship: many_to_one`, or `${users.id} = ${user_order_facts.user_id}`, `relationship: one_to_one` against the joined `users` view inside `orders.explore.lkml`). Never create a standalone `silver/explores/users.explore.lkml` for a lookup table. When an NDT aggregates at a non-table-PK cohort/session grain with a `HAVING` filter (e.g., `GROUP BY session_id HAVING COUNTIF(event_type = 'purchase') > 0`), filter the measure directly inside `explore_source: { filters: [events.purchase_count: ">0"] }` (which Looker compiles to `HAVING`), declare `primary_key: yes` (without `hidden: yes` when outer queries/Quick Starts filter `<ndt>.<pk>: "-NULL"` / `"NOT NULL"` for cohort membership) plus `measure: count { type: count }`, and join onto `silver/explores/events.explore.lkml` (`many_to_one`).
 
 ### Distinguish static entity grain from dynamic dashboard-filtered grain
 
@@ -67,11 +67,11 @@ Static lifetime facts that do not depend on dashboard date filters belong in Sil
 
 ```lookml
 # File: silver/user_order_facts.view.lkml
-include: "/silver/explores/orders.explore.lkml"
+include: "/bronze/explores/orders_base.explore.lkml"
 
 view: user_order_facts {
   derived_table: {
-    explore_source: orders {
+    explore_source: orders_base {
       column: user_id {}
       column: lifetime_orders { field: orders.count }
       column: lifetime_spend { field: orders.total_revenue }
@@ -81,7 +81,7 @@ view: user_order_facts {
 
   dimension: user_id {
     primary_key: yes
-    hidden: yes
+    hidden: yes # Omit hidden: yes when outer queries filter <ndt>.<pk>: "-NULL" / "NOT NULL"
     type: number
   }
 

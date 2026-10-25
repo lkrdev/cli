@@ -1273,6 +1273,7 @@ def _match_model_views(
         vname: {vname.lower()} for vname in model_views
     }
     alias_to_view: dict[str, str] = {vname.lower(): vname for vname in model_views}
+    exp_base_alias: dict[str, str] = {}
     for exp_name, exp_obj in (model_obj.explore or {}).items():
         if not isinstance(exp_obj, LookmlExplore):
             continue
@@ -1280,6 +1281,7 @@ def _match_model_views(
         b_view, b_alias, _, _ = _resolve_explore_base(
             exp_name, exp_obj, exp_chain, model_views
         )
+        exp_base_alias[exp_name.lower()] = b_alias
         aliases_for_view.setdefault(b_view, {b_view.lower()}).add(b_alias.lower())
         alias_to_view.setdefault(b_alias.lower(), b_view)
         for j_name, j_obj in (exp_obj.join or {}).items():
@@ -1339,7 +1341,9 @@ def _match_model_views(
                     else col_name.strip()
                 )
                 pfx, fld = (
-                    raw_ref.split(".", 1) if "." in raw_ref else (es_name, raw_ref)
+                    raw_ref.split(".", 1)
+                    if "." in raw_ref
+                    else (exp_base_alias.get(es_name.lower(), es_name), raw_ref)
                 )
                 col_map.setdefault(col_name.lower(), set()).add(
                     (pfx.strip().lower(), fld.strip().lower())
@@ -1620,6 +1624,9 @@ def _match_model_views(
                 for ndt_col, pfx, fld in ndt_cols_by_view.get(cand_view, ())
                 if (fld in src_cands or fld == src_col.lower()) and pfx in src_aliases
             ]
+            ndt_cnt_src = src_col == "COUNT(*)" and any(
+                pfx in src_aliases for _, pfx, _ in ndt_cols_by_view.get(cand_view, ())
+            )
             for c_ftype, c_fname, c_fobj in _iter_view_fields(cand_obj):
                 ckey = (cand_view, c_ftype, c_fname)
                 existing = matched_fields.get(ckey, [])
@@ -1628,12 +1635,19 @@ def _match_model_views(
                     if isinstance(c_fobj, LookmlDimensionGroup)
                     else None
                 )
-                hits_ndt = any(
+                is_ndt_cnt = (
+                    ndt_cnt_src
+                    and c_ftype == "measure"
+                    and getattr(c_fobj, "type", None) == "count"
+                    and not getattr(c_fobj, "filters", None)
+                )
+                hits_ndt = is_ndt_cnt or any(
                     _field_matches_column(ndt_col, c_fname, getattr(c_fobj, "sql", None), c_ftype, tfs)
                     for ndt_col in matched_ndt_cols
                 )
                 if hits_ndt:
-                    m_prop = f"{c_ftype}.sql"
+                    sub_key = "type" if is_ndt_cnt else "sql"
+                    m_prop = f"{c_ftype}.{sub_key}"
                     if not any(x.sql_column == src_col and x.matched_property == m_prop for x in existing):
                         own_ext = {
                             r.split(".", 1)[0].lower()
@@ -1646,9 +1660,11 @@ def _match_model_views(
                             via=[*src_via, f"{src_view}.{src_fname}"],
                             ext_aliases=own_ext,
                             matched_property=m_prop,
-                            property_path=f"view.{cand_view}.{c_ftype}.{c_fname}.sql",
-                            expression=c_fobj.sql.strip() if getattr(c_fobj, "sql", None) else None,
-                            sub_key="sql",
+                            property_path=f"view.{cand_view}.{c_ftype}.{c_fname}.{sub_key}",
+                            expression="count"
+                            if is_ndt_cnt
+                            else (c_fobj.sql.strip() if getattr(c_fobj, "sql", None) else None),
+                            sub_key=sub_key,
                         )
                         matched_fields.setdefault(ckey, []).append(minfo)
                         queue.append((cand_view, c_ftype, c_fname, minfo))
@@ -3157,9 +3173,20 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                 j_type = sj.get("join_type") or ja.get("sql_join_type") or "JOIN"
                 ja["sql_join"] = f"{l_str} {j_type} {r_str}".strip()
         eqs = q.get("explore_queries") or []
+        dedup_eqs: dict[tuple[Any, ...], dict[str, Any]] = {}
         for eq in eqs:
             if eq.get("matched_fields") and isinstance(eq["matched_fields"][0], dict):
-                eq["matched_fields"] = [mf.get("field") for mf in eq["matched_fields"] if mf.get("field")]
+                eq["matched_fields"] = list(
+                    dict.fromkeys(mf.get("field") for mf in eq["matched_fields"] if mf.get("field"))
+                )
+            qkey = (eq.get("model_name"), eq.get("query_name"), eq.get("file"), eq.get("line"))
+            prev_eq = dedup_eqs.get(qkey)
+            if prev_eq is None or (
+                str(prev_eq.get("explore_name") or "").endswith("_base")
+                and not str(eq.get("explore_name") or "").endswith("_base")
+            ):
+                dedup_eqs[qkey] = eq
+        eqs = list(dedup_eqs.values())
         if any(eq.get("coverage") == "exact" for eq in eqs):
             eqs = [eq for eq in eqs if eq.get("coverage") == "exact"]
         else:
@@ -3199,6 +3226,16 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                             prev["via"].append(v_ref)
                 else:
                     dedup_fields[fkey] = fm
+            dedup_fields = {
+                fk: fv
+                for fk, fv in dedup_fields.items()
+                if not (
+                    fv.get("field_type") == "measure"
+                    and bool(fv.get("via"))
+                    and all(str(v).endswith(".count") for v in fv["via"])
+                    and len(_extract_lookml_refs(fv.get("sql"))) > 1
+                )
+            }
             if not dedup_fields and not vm.get("sql_table_name"):
                 continue
             vm["fields"] = list(dedup_fields.values())

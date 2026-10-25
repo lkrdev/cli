@@ -3898,3 +3898,52 @@ def test_compact_sql_to_lookml_pk_type_hidden_via_and_dedup_tests():
     assert id_fld["lookml_type"] == "number" and id_fld["primary_key"] is True
     assert "tests" in q0 and "tests" not in q1 and "tests" not in q2
 
+
+def test_compact_sql_to_lookml_ndt_count_extends_dedup_and_count_ratio_prune():
+    import json
+
+    from typer.testing import CliRunner
+
+    from lkr.main import app
+
+    lkml = (
+        'connection: "bq"\n'
+        "view: events {\n"
+        "  sql_table_name: `proj.ds.events` ;;\n"
+        "  dimension: id { primary_key: yes hidden: yes type: number sql: ${TABLE}.id ;; }\n"
+        "  dimension: session_id { type: string sql: ${TABLE}.session_id ;; }\n"
+        "  dimension: browser { type: string sql: ${TABLE}.browser ;; }\n"
+        "  measure: count { type: count }\n"
+        '  measure: ie_events { type: count filters: [browser: "IE"] }\n'
+        "  measure: ie_share { type: number sql: 1.0 * ${ie_events} / NULLIF(${count}, 0) ;; }\n"
+        "}\n"
+        "explore: events_base {\n"
+        "  hidden: yes\n"
+        "  view_name: events\n"
+        "  query: q_base { dimensions: [session_id] measures: [count] sorts: [events.count: desc] }\n"
+        "}\n"
+        "view: session_facts {\n"
+        "  derived_table: { explore_source: events_base { column: session_id {} } }\n"
+        "  dimension: session_id { primary_key: yes type: string }\n"
+        "  measure: count { type: count }\n"
+        "}\n"
+        "explore: events {\n"
+        "  extends: [events_base]\n"
+        "  view_name: events\n"
+        "  join: session_facts { sql_on: ${events.session_id} = ${session_facts.session_id} ;; relationship: many_to_one }\n"
+        "}\n"
+    )
+    sql = "SELECT COUNT(*) AS c FROM (SELECT session_id FROM `proj.ds.events` GROUP BY 1)"
+    res = CliRunner().invoke(
+        app,
+        ["parse", "sql-lookml-compare", "--sql", sql, "--lookml", lkml, "--offline", "--compact"],
+    )
+    q0 = json.loads(res.output)["queries"][0]
+    ev_flds = {f["field_name"] for f in q0["views"][0]["fields"]}
+    assert "ie_share" not in ev_flds
+    sf_flds = {f["field_name"] for f in q0["views"][1]["fields"]}
+    assert "count" in sf_flds
+    eqs = [eq for eq in q0["explore_queries"] if eq["query_name"] == "q_base"]
+    assert len(eqs) == 1 and eqs[0]["explore_name"] == "events"
+    assert eqs[0]["matched_fields"] == ["events.session_id", "events.count"]
+
