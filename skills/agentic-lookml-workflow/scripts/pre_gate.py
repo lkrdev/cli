@@ -93,7 +93,15 @@ def _sql_meta(sql: str):
             expr = clean[base + pos : base + pos + len(seg)]
             pos += len(seg) + 1
             sel_exprs.append(
-                re.sub(r"\s+", "", re.sub(r'(?i)\s+AS\s+(?:`[^`]+`|"[^"]+"|[A-Za-z_]\w*)\s*$', "", expr.strip())).lower()
+                re.sub(
+                    r"\s+",
+                    "",
+                    re.sub(
+                        r'(?i)(?:\s+AS\s+|(?<![+\-*/=<>,(])\s+|\)\s*)(?!\b(?:END|NULL|TRUE|FALSE|AND|OR|ELSE|THEN)\b)(?:`[^`]+`|"[^"]+"|[A-Za-z_]\w*)\s*$',
+                        "",
+                        expr.strip(),
+                    ),
+                ).lower()
             )
             if re.search(r"(?:\*\s*100(?:\.0*)?(?!\d|\.)|(?<!\d|\.)100(?:\.0*)?\s*\*)", expr):
                 pct_idxs.add(p_idx)
