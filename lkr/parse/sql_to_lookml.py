@@ -1758,7 +1758,7 @@ def _match_model_views(
         pfx, fld = r.split(".", 1)
         pfx_l = pfx.lower()
         return (
-            cur_view.lower() if pfx_l in self_set else alias_to_view.get(pfx_l, pfx_l),
+            cur_view.lower() if pfx_l in self_set else alias_to_view.get(pfx_l, pfx_l).lower(),
             fld.lower(),
         )
 
@@ -3260,7 +3260,7 @@ def _valid_field_keys(views: list[LookmlViewMatch]) -> set[tuple[str, str, str]]
                 fm.field_type == "measure"
                 and fm.via
                 and fm.dep_fields
-                and not (fm.dep_fields <= avail_refs)
+                and not ({(v.lower(), f.lower()) for v, f in fm.dep_fields} <= avail_refs)
             )
         ]
         if len(nxt_fms) == len(valid_fms):

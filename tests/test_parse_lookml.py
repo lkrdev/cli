@@ -4063,7 +4063,7 @@ def test_cross_view_fields_exact_query_coverage_and_explore_oriented_inferred_re
 
     lkml = (
         'connection: "bq"\n'
-        "view: users {\n"
+        "view: Users {\n"
         "  sql_table_name: `proj.ds.users` ;;\n"
         "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
         "  dimension: age { type: number sql: ${TABLE}.age ;; }\n"
@@ -4088,7 +4088,7 @@ def test_cross_view_fields_exact_query_coverage_and_explore_oriented_inferred_re
         "}\n"
         "explore: order_items {\n"
         "  view_name: order_items\n"
-        "  join: users { type: left_outer relationship: many_to_one sql_on: ${order_items.user_id} = ${users.id} ;; }\n"
+        "  join: users { from: Users type: left_outer relationship: many_to_one sql_on: ${order_items.user_id} = ${users.id} ;; }\n"
         "  join: order_items_users_fields { sql: ;; relationship: one_to_one }\n"
         "  query: lat_age_corr {\n"
         '    measures: [order_items_users_fields.lat_price_corr, order_items_users_fields.age_price_corr, users.avg_abs_latitude]\n'
