@@ -80,7 +80,7 @@ measure: stddev_revenue {
 **Hard invariant:** Every LookML measure's identifier, `label:`, `description:`, and `synonyms:` must accurately describe what that measure computes **standalone** (with zero Explore `WHERE` filters applied). Never name, label, or attach a `synonyms:` entry to an unfiltered measure after a `WHERE`-filtered SQL alias.
 
 ### Canonical LookML field naming, `count` / `count_distinct` comma formatting, `synonyms:`, and `alias:`
-- **Sanitize colloquial SQL aliases into canonical domain identifiers:** LookML field names are the permanent public API for downstream NDTs, LookML tests, and Conversational Analytics agents. Normalize quirky or one-off SQL `AS` aliases (`unique_chaotic_sessions`, `distinct_clicking_humans`, `markup_greed_pct`, `avg_markup_greed_pct`) into reusable domain names (`unique_sessions` or `session_count`, `distinct_users` or `user_count`, `markup_ratio`, `avg_markup_ratio`), while preserving business persona terminology and secondary SQL aliases from `metrics.md` / `input.sql` in `label:` (`"Catalog Markup Greed Ratio"`), `description:`, and `synonyms:` (`["catalog markup greed ratio", "markup pct"]`) (`pre_gate.py` pairs unmatched columns deterministically via `inline_query.fields` order).
+- **Sanitize colloquial SQL aliases into canonical domain identifiers (for newly authored fields):** When `sql-lookml-compare` maps a SQL expression to an **already-committed LookML field** (even with a legacy name like `events.unique_chaotic_sessions`), reuse that committed field as-is rather than renaming or duplicating it unless explicitly asked to rename. For **newly authored** fields, normalize quirky or one-off SQL `AS` aliases (`unique_chaotic_sessions`, `distinct_clicking_humans`, `markup_greed_pct`, `avg_markup_greed_pct`) into reusable domain names (`unique_sessions` or `session_count`, `distinct_users` or `user_count`, `markup_ratio`, `avg_markup_ratio`), while preserving business persona terminology and secondary SQL aliases from `metrics.md` / `input.sql` in `label:` (`"Catalog Markup Greed Ratio"`), `description:`, and `synonyms:` (`["catalog markup greed ratio", "markup pct"]`) (`pre_gate.py` pairs unmatched columns deterministically via `inline_query.fields` order).
 - **Default comma formatting on `type: count` and `type: count_distinct`:** Looker applies identical default thousands-separator commas to `type: count` and `type: count_distinct` across Explore tables, tiles, and formatted CSV/TXT/HTML/Markdown exports whenever the field is not a primary key and its LookML name does **not** end in `id`, `year`, or `decade`. Naming a `count_distinct` measure after its key column (`count_distinct_user_id`, `unique_session_id`) suppresses default commas because of the `id` suffix—always use plural/count names (`unique_sessions`, `user_count`) instead. Skip blanket `value_format_name: decimal_0` on non-`*id` count measures unless explicit `.xlsx` `#,##0` styling (or Grid inline sparkline+total / reference-line formatting, or a legitimate `*(id|year|decade)` field name) is required, in which case `type: count` and `type: count_distinct` need `decimal_0` equally.
 - **`synonyms: ["..."]` (API/NLQ vocabulary bridge, zero field bloat):** Use `synonyms:` (requires New LookML Runtime, Looker's default) when `metrics.md` or `input.sql` (`AS <alias>`) uses a genuine business term, acronym (`"GMV"`, `"AOV"`), or standalone-honest SQL column alias that differs from `label:`. Never generate thesaurus filler (`["total cost", "sum of cost"]` when `label: "Total Cost"` covers it), and never attach a `WHERE`-filtered alias (`"unsold units on shelf"`) to an unfiltered field (`inventory_items.count`).
 - **`alias: [old_field_name]` (URL/API rename redirect only):** Use `alias:` **strictly** when renaming an already-committed LookML field so saved Looks, dashboards, `/x/` URLs, and SDK queries referencing `<view>.<old_field_name>` continue working (for `dimension_group`, place `alias: [old_group]` on the group itself). Never put `alias:` on newly authored fields, never copy a SQL `AS` alias into `alias:`, and never reference aliased names inside LookML (`${...}`, `filters:`, `query:`, `explore_source:`, or `test:`).
@@ -90,66 +90,7 @@ When an input query applies a `WHERE` predicate (or repeats the same `CASE WHEN`
 | Scenario | Signal in `input.sql` + `metrics.md` | Prescribed LookML action |
 | :--- | :--- | :--- |
 | **1. Intrinsic filtered domain KPI** | `metrics.md` defines a named, recurring business metric whose meaning inherently depends on the predicate (e.g., *"Unsold Dusty Shelf Inventory Cost: wholesale cash tied up in physical stock sitting unsold on warehouse shelves"* with `WHERE sold_at IS NULL`). | Bake `filters:` directly onto `sunk_dusty_shelf_cost` (`type: sum`, `sql: ${cost} ;;`, `value_format_name: usd`). When the predicate checks date/timestamp nullability (`sold_at IS NULL` / `IS NOT NULL`), promote **one** positive-polarity `type: yesno` dimension on the `raw` timeframe (`is_sold`: `${sold_raw} IS NOT NULL`, see [02-conditional-measures-and-bucketing.md](02-conditional-measures-and-bucketing.md)) and use `filters: [is_sold: "no"]`—never create negated or opposite twins (`is_unsold`, `is_not_sold`, or unrequested `sold_inventory_cost` / `total_cost` measures). |
-| **2. Ad-hoc or report-level `WHERE` slice** | `WHERE` scopes a time window, region, or cohort for the query (`WHERE created_at >= '2026-01-01'`, `WHERE country = 'US'`), or filters general table metrics that are not intrinsically tied to that predicate. | Strip `WHERE` into the Explore Quick Start `query: { filters: [...] }` and `run_inline_query` `filters` (still promoting a `type: yesno` dimension if the slice is a date `NULL`/`-NULL` check), **and** name/label the LookML measures strictly after their unfiltered calculation (`total_cost`, `total_product_retail_price`, `count`). |
-
-### Worked example (`ROUND` + `WHERE sold_at IS NULL`)
-
-**Input SQL:**
-```sql
-SELECT
-  COUNT(id) AS unsold_units_on_shelf,
-  ROUND(SUM(cost), 2) AS sunk_dusty_shelf_cost,
-  ROUND(SUM(product_retail_price), 2) AS hypothetical_retail_value
-FROM `bigquery-public-data.thelook_ecommerce.inventory_items`
-WHERE sold_at IS NULL;
-```
-
-**Business logic (`metrics.md`):** *"Unsold Dusty Shelf Inventory Cost adds up the total wholesale cash currently tied up in physical stock sitting unsold on warehouse shelves, alongside what that stock would fetch at full retail price. Finance reviews this number every Friday afternoon..."*
-
-> **Avoid:** Modeling `sunk_dusty_shelf_cost` without `filters:` (standalone queries will sum sold + unsold rows) or splitting into a hidden `total_cost` (`type: sum`) + visible `type: number` `ROUND(${total_cost}, 2)` wrapper.
-
-**Correct LookML (`bronze/inventory_items.refinement.lkml`):**
-```lookml
-include: "inventory_items.view.lkml"
-
-view: +inventory_items {
-  # Date NULL/-NULL check promoted to a positive type: yesno dimension on the raw timeframe.
-  dimension: is_sold {
-    type: yesno
-    sql: ${sold_raw} IS NOT NULL ;;
-    description: "Whether the inventory unit has been sold (sold_at is populated)."
-  }
-
-  # Reuses autogenerated measure: count with an honest table-grain label (NOT "Unsold Units").
-  measure: count {
-    label: "Inventory Units Count"
-    description: "Total physical inventory units."
-  }
-
-  # Intrinsic filtered KPI: standalone queries always return unsold stock cost; usd handles 2-decimal display.
-  measure: sunk_dusty_shelf_cost {
-    label: "Unsold Dusty Shelf Inventory Cost"
-    description: "Total wholesale cost tied up in physical stock currently sitting unsold on warehouse shelves."
-    type: sum
-    sql: ${cost} ;;
-    filters: [is_sold: "no"]
-    value_format_name: usd
-  }
-
-  # Companion unsold KPI (preserves input.sql's `hypothetical_retail_value` terminology via synonyms:).
-  measure: unsold_retail_value {
-    label: "Unsold Hypothetical Retail Value"
-    description: "Full retail sticker value of physical inventory stock currently sitting unsold on shelves."
-    synonyms: ["hypothetical retail value"]
-    type: sum
-    sql: ${product_retail_price} ;;
-    filters: [is_sold: "no"]
-    value_format_name: usd
-  }
-}
-```
-
-And in `silver/explores/inventory_items.explore.lkml`, the Quick Start `query:` (and `inline_query` payload) applies `filters: [inventory_items.is_sold: "no"]` so `inventory_items.count` is scoped to unsold items for that report while remaining honest everywhere else.
+| **2. Ad-hoc or report-level `WHERE` slice** | `WHERE` scopes a time window, region, or cohort for the query (`WHERE created_at >= '2026-01-01'`, `WHERE country = 'US'`), or filters general table metrics that are not intrinsically tied to that predicate. | Strip `WHERE` into the Explore Quick Start `query: { filters: [...] }` and `run_inline_query` `filters` (still promoting a `type: yesno` dimension if the slice is a date `NULL`/`-NULL` check; for date bounds on `<group>_date`, Looker's `"after YYYY/MM/DD"` is inclusive `>=`, `"before YYYY/MM/DD"` is exclusive `<`, `"YYYY/MM/DD to YYYY/MM/DD"` is half-open `[start, end)`, and `"YYYY/MM/DD"` or `"YYYY-MM"` matches the full day/month), **and** name/label the LookML measures strictly after their unfiltered calculation (`total_cost`, `total_product_retail_price`, `count`). |
 
 ## Parity checks (`pre_gate.py`), `apply_formatting`, and LookML `test:` assertions
 

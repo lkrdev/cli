@@ -50,7 +50,11 @@ def main():
     except NameError:
         t_names = []
     try:
-        f_ids = [x.strip() for x in str(file_ids).split(",") if x.strip()] if file_ids is not None else []  # ty: ignore[unresolved-reference]
+        f_ids = [
+            p
+            for x in str(file_ids).split(",")  # ty: ignore[unresolved-reference]
+            if (p := x.strip().split("/lookml/")[-1].removeprefix("./").lstrip("/"))
+        ] if file_ids is not None else []  # ty: ignore[unresolved-reference]
     except NameError:
         f_ids = []
     try:

@@ -3120,7 +3120,7 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
             return [px for x in val if (px := _prune(x)) not in (None, [], {})]
         return val
 
-    seen_tests: list[Any] | None = None
+    seen_test_keys: set[tuple[Any, Any]] = set()
     for q in data.get("queries") or []:
         if isinstance(pq := q.get("parsed_query"), dict):
             pq.pop("raw_sql", None)
@@ -3139,14 +3139,16 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                 entry["fields"].append(fld)
         if grouped_explores:
             q["explores"] = list(grouped_explores.values())
-        for tm in q.get("tests") or []:
-            tm.pop("field", None)
-            tm.pop("fields", None)
-        t = q.get("tests")
-        if t and t == seen_tests:
-            q.pop("tests", None)
-        else:
-            seen_tests = t or None
+        if q.get("tests"):
+            dedup_tests: list[dict[str, Any]] = []
+            for tm in q["tests"]:
+                tm.pop("field", None)
+                tm.pop("fields", None)
+                tkey = (tm.get("model_name"), tm.get("test_name"))
+                if tkey not in seen_test_keys:
+                    seen_test_keys.add(tkey)
+                    dedup_tests.append(tm)
+            q["tests"] = dedup_tests
         for ja in q.get("join_analysis") or []:
             if isinstance(sj := ja.get("sql_join"), dict):
                 lt, rt = sj.get("left_table"), sj.get("right_table")
@@ -3155,6 +3157,9 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                 j_type = sj.get("join_type") or ja.get("sql_join_type") or "JOIN"
                 ja["sql_join"] = f"{l_str} {j_type} {r_str}".strip()
         eqs = q.get("explore_queries") or []
+        for eq in eqs:
+            if eq.get("matched_fields") and isinstance(eq["matched_fields"][0], dict):
+                eq["matched_fields"] = [mf.get("field") for mf in eq["matched_fields"] if mf.get("field")]
         if any(eq.get("coverage") == "exact" for eq in eqs):
             eqs = [eq for eq in eqs if eq.get("coverage") == "exact"]
         else:
@@ -3164,12 +3169,18 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                 if ja.get("status") == "missing_join"
             }
             eqs = sorted(
-                [eq for eq in eqs if (eq.get("model_name"), eq.get("explore_name")) not in bad_join_exps],
+                [
+                    eq
+                    for eq in eqs
+                    if (eq.get("model_name"), eq.get("explore_name")) not in bad_join_exps
+                    and not (
+                        len(eq.get("matched_fields") or []) == 1
+                        and str(eq["matched_fields"][0]).endswith(".count")
+                        and eq.get("missing_query_fields")
+                    )
+                ],
                 key=lambda eq: -len(eq.get("matched_fields") or []),
             )[:3]
-        for eq in eqs:
-            if eq.get("matched_fields") and isinstance(eq["matched_fields"][0], dict):
-                eq["matched_fields"] = [mf.get("field") for mf in eq["matched_fields"] if mf.get("field")]
         q["explore_queries"] = eqs
         kept_views: list[dict[str, Any]] = []
         for vm in q.get("views") or []:
