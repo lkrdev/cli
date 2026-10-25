@@ -2182,13 +2182,10 @@ def _match_model_views(
                                 for tf in (tfs or ())
                             }
                         exp_entries.append((vm, fm, em, uk, cands))
-                        if (
-                            fm.field_type == "measure"
-                            and getattr(fobj, "type", None) == "count"
-                            and uk != ("*", "count(*)")
-                            and ("*", "count(*)") in non_join_units
-                        ):
-                            exp_entries.append((vm, fm, em, ("*", "count(*)"), cands))
+                        if fm.field_type == "measure" and getattr(fobj, "type", None) == "count":
+                            for cnt_uk in (("*", "count(*)"), (f_sql_tbl.lower(), "count(*)")):
+                                if uk != cnt_uk and cnt_uk in non_join_units:
+                                    exp_entries.append((vm, fm, em, cnt_uk, cands))
                         if (not non_join_units or uk in non_join_units) and (
                             not fm.via or uk not in canon_by_unit
                         ):

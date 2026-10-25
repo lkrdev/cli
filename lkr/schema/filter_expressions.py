@@ -22,7 +22,8 @@ FILTER_EXPRESSION_DEFS: dict[str, Any] = {
         "type": "string",
         "description": (
             "Looker string filter expression (https://docs.cloud.google.com/looker/docs/filter-expressions#string). "
-            "Supports exact ('FOO'), OR list ('FOO,BAR'), wildcards ('%FOO%', 'FOO%', '%FOO', '_UF'), "
+            "Supports exact ('FOO'), OR list ('FOO,BAR'), wildcards ('%FOO%', 'FOO%', '%FOO', '_UF'; "
+            "escape literal '_' or '%' with '^', e.g. '^_items', '100^%'), "
             "negation ('-FOO', '-%FOO%'), and null/empty checks ('EMPTY', 'NULL', '-EMPTY', '-NULL')."
         ),
         "examples": [
@@ -31,6 +32,7 @@ FILTER_EXPRESSION_DEFS: dict[str, Any] = {
             "%FOO%",
             "FOO%",
             "%FOO",
+            "^_FOO",
             "-FOO",
             "EMPTY",
             "NULL",

@@ -45,7 +45,9 @@ measure: _revenue_count {
 }
 
 # 2. Sum of values (if unfiltered total_revenue `type: sum` already exists on the view, reuse ${total_revenue}
-#    instead of creating _revenue_sum, otherwise `--validate` will flag duplicate_field_logic!)
+#    instead of creating _revenue_sum to avoid duplicate_field_logic; conversely, if a later query needs SUM(revenue)
+#    when hidden _revenue_sum already exists, promote _revenue_sum in-place to visible total_revenue with
+#    `alias: [_revenue_sum]` and update stddev_revenue to `${total_revenue}`, which is additive in `lookml snapshot`!)
 measure: _revenue_sum {
   hidden: yes
   type: sum
