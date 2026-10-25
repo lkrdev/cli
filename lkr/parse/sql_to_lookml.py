@@ -1513,10 +1513,10 @@ def _match_model_views(
 
     def _ext_refs(plist: list[_FieldProperty], own: set[str]) -> set[str]:
         return {
-            r.split(".", 1)[0].lower()
+            view_part
             for p in plist
             for r in p.refs
-            if "." in r and r.split(".", 1)[0].lower() not in own
+            if "." in r and (view_part := r.split(".", 1)[0].lower()) not in own
         }
 
     for sql_tbl, raw_table_str, view_name, view_obj, dt_col_pair in matched_sources:
@@ -1647,11 +1647,12 @@ def _match_model_views(
                     for ndt_col in matched_ndt_cols
                 )
                 fp_list = _get_field_properties(c_ftype, c_fname, c_fobj)
-                all_own_ext = _ext_refs(fp_list, cand_self)
+                all_own_ext: set[str] | None = None
                 if hits_ndt:
                     sub_key = "type" if is_ndt_cnt else "sql"
                     m_prop = f"{c_ftype}.{sub_key}"
                     if not any(x.sql_column == src_col and x.matched_property == m_prop for x in existing):
+                        all_own_ext = _ext_refs(fp_list, cand_self)
                         minfo = _FieldMatchInfo(
                             sql_table=src_tbl,
                             sql_column=src_col,
@@ -1693,6 +1694,8 @@ def _match_model_views(
                         x.sql_column == src_col and x.matched_property == fp.prop_type
                         for x in existing
                     ):
+                        if all_own_ext is None:
+                            all_own_ext = _ext_refs(fp_list, cand_self)
                         minfo = _FieldMatchInfo(
                             sql_table=src_tbl,
                             sql_column=src_col,
@@ -3145,11 +3148,7 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                     pj.pop("left_table", None)
                     pj.pop("right_table", None)
         rq = result.queries[qi]
-        q_views = {
-            vm.view_name.lower()
-            for vm in rq.views
-            if vm.sql_table_name or not any(fm.ext_views for fm in vm.fields)
-        }
+        q_views = {vm.view_name.lower() for vm in rq.views}
         bad_ext_fields = {
             (vm.view_name, fm.field_type, fm.field_name)
             for vm in rq.views
