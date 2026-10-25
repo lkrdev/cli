@@ -19,7 +19,7 @@ description: >
 
 ## Prerequisite setup sub-skill
 
-If the repository has not been configured yet (or is missing `uv`, `lkr-dev-cli`, companion skills in `.agents/skills/`, an initial `.model.lkml` file, or `.github/workflows/lookml-pr-checks.yml`), run the setup sub-skill [sub-skills/setup/SKILL.md](sub-skills/setup/SKILL.md) and [scripts/setup_repo.sh](scripts/setup_repo.sh) first.
+If the repository is missing `uv`, `lkr-dev-cli`, `.agents/skills/` (the sole instruction root—there is no repo-root `AGENTS.md`), an initial `.model.lkml`, or `.github/workflows/lookml-pr-checks.yml`, run [sub-skills/setup/SKILL.md](sub-skills/setup/SKILL.md) and [scripts/setup_repo.sh](scripts/setup_repo.sh) first.
 
 ## Bundled scripts & `--var` I/O contracts (no need to read script source)
 

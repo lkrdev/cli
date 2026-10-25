@@ -285,6 +285,7 @@ class LookmlExploreJoinNode(BaseModel):
     equi_joins: list[tuple[tuple[str, str], tuple[str, str]]] = Field(
         default_factory=list
     )
+    sql: str | None = None
     sql_on: str | None = None
     foreign_key: str | None = None
     sql_foreign_key: str | None = None
@@ -467,7 +468,20 @@ def build_explore_join_graph(
             target_view=target_view,
             views_by_alias=views_by_alias,
         )
-        from_v = equi_joins[0][0][0] if equi_joins else base_alias
+        unnest_refs = (
+            _extract_lookml_refs(j_obj.sql)
+            if j_obj.sql and "UNNEST" in j_obj.sql.upper()
+            else []
+        )
+        from_v = (
+            equi_joins[0][0][0]
+            if equi_joins
+            else (
+                unnest_refs[0].split(".", 1)[0]
+                if unnest_refs and "." in unnest_refs[0]
+                else base_alias
+            )
+        )
 
         nodes[j_name] = LookmlExploreJoinNode(
             name=j_name,
@@ -479,6 +493,7 @@ def build_explore_join_graph(
             always_join=is_always,
             from_view=from_v,
             equi_joins=equi_joins,
+            sql=j_obj.sql,
             sql_on=j_obj.sql_on,
             foreign_key=j_obj.foreign_key,
             sql_foreign_key=j_obj.sql_foreign_key,

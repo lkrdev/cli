@@ -964,5 +964,63 @@ def test_pre_gate_order_by_round_ties_and_pr_data_json_compaction():
     assert res_fid["passed"] is True and seen_fids == ["tests/bronze/events.test.lkml"]
 
 
+def test_pre_gate_limit_boundary_tie_and_digit_string_preservation():
+    sql = "SELECT depth, uri_segment, COUNT(id) AS click_hits, APPROX_COUNT_DISTINCT(sid) AS approx_sessions FROM e GROUP BY 1, 2 ORDER BY click_hits DESC LIMIT 3"
+    sql_rows = [
+        {"depth": 0, "uri_segment": "product", "click_hits": 100, "approx_sessions": 80},
+        {"depth": 1, "uri_segment": "men", "click_hits": 60, "approx_sessions": 50},
+        {"depth": 1, "uri_segment": "20095", "click_hits": 59, "approx_sessions": 37},
+    ]
+    top3_looker = [
+        {"u.depth": 0, "u.uri_segment": "product", "e.count": 100, "e.approx_sessions": 80},
+        {"u.depth": 1, "u.uri_segment": "men", "e.count": 60, "e.approx_sessions": 50},
+        {"u.depth": 1, "u.uri_segment": "25560", "e.count": 59, "e.approx_sessions": 41},
+    ]
+    expanded_looker = [
+        *top3_looker,
+        {"u.depth": 1, "u.uri_segment": "20095", "e.count": 59, "e.approx_sessions": 37},
+    ]
+    limits_called: list[str | None] = []
+
+    def fake_inline(**kw):
+        lim = (kw.get("body") or {}).get("limit")
+        limits_called.append(lim)
+        return json.dumps(expanded_looker if lim == "53" else top3_looker)
+
+    q_fields = ["u.depth", "u.uri_segment", "e.count", "e.approx_sessions"]
+    res = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {
+            "raw_sql": sql,
+            "connection_name": "bq",
+            "base_url": "https://demo.cloud.looker.com",
+            "validate": "false",
+            "data_json": json.dumps({"run_id": "r2"}),
+            "inline_queries_json": json.dumps(
+                {"0": {"model": "m", "view": "e", "fields": q_fields, "limit": "3"}}
+            ),
+        },
+        {
+            "create_sql_query": lambda **kw: {"slug": "s0"},
+            "run_sql_query": lambda **kw: json.dumps(sql_rows),
+            "create_query": lambda **kw: {"id": "1", "slug": "q0"},
+            "run_inline_query": fake_inline,
+        },
+    )
+    assert res["passed"] is True and limits_called == ["3", "53"]
+
+    # Digit strings keep string formatting on mismatch; wrong value in tie pool still fails
+    bad_pool = [*top3_looker, {"u.depth": 1, "u.uri_segment": "20095", "e.count": 59, "e.approx_sessions": 999}]
+    ok_bad, diffs_bad = compare_row_sets(
+        sql_rows, top3_looker, sql=sql, looker_fields=q_fields, fetch_extra=lambda _: bad_pool
+    )
+    assert ok_bad is False and "SQL=20095, Looker=25560" in diffs_bad[0]
+
+    # Leading-zero string codes must not collide with stripped integers
+    ok_zip, diffs_zip = compare_row_sets([{"zip": "02110"}], [{"u.zip": "2110"}])
+    assert ok_zip is False and "SQL=02110, Looker=2110" in diffs_zip[0]
+
+
+
 
 
