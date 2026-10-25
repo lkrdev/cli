@@ -3551,7 +3551,7 @@ def test_iter3_value_format_validation_compact_explores_and_diff_tests(tmp_path:
         "# comment with { brace }\n"
         "test: legacy_test {\n"
         '  explore_source: events { filters: { field: events.status value: "a{b}" } }\n'
-        "  assert: ok { expression: ${events.count} = 10 ;; }\n"
+        "  assert: ok { expression: ${events.status} != 'x}y' ;; }\n"
         "}\n"
     )
     head_lkml = (

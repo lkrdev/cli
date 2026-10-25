@@ -14,20 +14,20 @@ def extract_test_blocks(src: str) -> dict[str, str]:
     for m in re.finditer(r"(?m)^\s*test:\s*([A-Za-z0-9_]+)\s*\{", src):
         if m.start() < pos:
             continue
-        depth, i, in_str, in_cmt = 0, m.end() - 1, False, False
+        depth, i, quote_char, in_cmt = 0, m.end() - 1, "", False
         while i < len(src):
             c = src[i]
             if in_cmt:
                 in_cmt = c != "\n"
-            elif in_str:
+            elif quote_char:
                 if c == "\\" and i + 1 < len(src):
                     i += 1
-                elif c == '"':
-                    in_str = False
+                elif c == quote_char:
+                    quote_char = ""
             elif c == "#":
                 in_cmt = True
-            elif c == '"':
-                in_str = True
+            elif c in ('"', "'"):
+                quote_char = c
             elif c == "{":
                 depth += 1
             elif c == "}":
