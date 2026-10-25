@@ -19,11 +19,11 @@ These parameters control the display format of data in Looker. They do **not** a
 ### `value_format_name` (Preferred)
 Looker provides built-in formats. Generally prefer these for consistency.
 
-**Common Built-in Formats:**
-- `decimal_0`, `decimal_1`, `decimal_2`: Number with 0, 1, or 2 decimal places (`type: count` and `type: count_distinct` already render with thousands-separator commas by default unless the field is a primary key or its LookML name ends in `id`, `year`, or `decade`; add `decimal_0` only when `.xlsx` `#,##0` styling or a legitimate `*(id|year|decade)` field name requires it, applying equally to both `count` and `count_distinct`).
-- `usd`, `eur`, `gbp`: Currency formats (localized).
-- `percent_0`, `percent_1`, `percent_2`: Percentages.
-- `id`: Formats as a string, preventing comma separators for IDs.
+**All Built-in `value_format_name` Values (Complete List):**
+- `decimal_0`, `decimal_1`, `decimal_2`, `decimal_3`, `decimal_4`: Number with 0–4 decimal places (`type: count` and `type: count_distinct` already render with thousands-separator commas by default unless the field is a primary key or its LookML name ends in `id`, `year`, or `decade`; add `decimal_0` only when `.xlsx` `#,##0` styling or a legitimate `*(id|year|decade)` field name requires it, applying equally to both `count` and `count_distinct`).
+- `usd`, `usd_0`, `eur`, `eur_0`, `gbp`, `gbp_0`: Localized currency formats with 2 or 0 decimal places.
+- `percent_0`, `percent_1`, `percent_2`, `percent_3`, `percent_4`: Percentages with 0–4 decimal places (multiplies underlying `[0, 1]` ratio by `100` for display).
+- `id`: Formats as a plain integer without thousands-separator commas (`"0"`).
 
 **Example:**
 ```lookml

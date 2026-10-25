@@ -165,11 +165,3 @@ explore: order_items {
   }
 }
 ```
-
-## Architecture rules
-
-Single-table dimensions and measures whose entire dependency DAG stays within a single table live in `bronze/:table.refinement.lkml`. Any dimension or measure that anywhere in its dependency DAG references different views belongs in its own Silver view named alphabetically with `_fields` (`silver/:view_a_:view_b_fields.view.lkml`) and is bare-joined (`sql: ;;`, `relationship: one_to_one`) into the Explore that joins those views.
-
-For ad-hoc filtered measures or cross-column `OR` conditions in a single report, use Custom Measures (`custom_fields`) with [Looker filter expressions](https://docs.cloud.google.com/looker/docs/filter-expressions) and [`matches_filter`](https://docs.cloud.google.com/looker/docs/matches-filter) (`matches_filter(${orders.status}, \`Complete\`) OR ${orders.is_override}`) or Custom Dimensions. Because Looker's declarative `filters:` property on a LookML `measure:` combines multiple field filters with `AND`, canonical LookML measures requiring an `OR` condition across multiple columns must define a `hidden: yes`, `type: yesno` helper dimension and filter the measure via `filters: [helper_dim: "yes"]`.
-
-When analyzing a batch of SQL queries via `lkr parse sql-lookml-compare`, conditional measures or `CASE WHEN` dimensions appearing in two or more queries (or marked as reusable domain KPIs) should be promoted to `bronze/:table.refinement.lkml` (single-table DAG) or `silver/:view_a_:view_b_fields.view.lkml` (multi-view DAG), while single-query ad-hoc slices remain in the Query or Dashboard Layer (`Table Calculation`, `Custom Measure`, or `Custom Dimension`).
