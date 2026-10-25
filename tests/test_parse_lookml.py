@@ -3849,3 +3849,48 @@ def test_validate_join_all_fields_base_path_cross_explore_and_scratch_ignore(
         ],
     )
     assert scoped_res.exit_code == 0, scoped_res.output
+
+
+def test_compact_sql_to_lookml_pk_type_hidden_via_and_dedup_tests():
+    import json
+
+    from typer.testing import CliRunner
+
+    from lkr.main import app
+
+    lkml = (
+        'connection: "bq"\n'
+        "view: users {\n"
+        "  sql_table_name: `proj.ds.users` ;;\n"
+        "  dimension: id { primary_key: yes hidden: yes type: number sql: ${TABLE}.id ;; }\n"
+        "  measure: count { type: count }\n"
+        "}\n"
+        "view: orders {\n"
+        "  sql_table_name: `proj.ds.orders` ;;\n"
+        "  dimension: id { primary_key: yes hidden: yes type: number sql: ${TABLE}.id ;; }\n"
+        "  dimension: user_id { type: number sql: ${TABLE}.user_id ;; }\n"
+        "}\n"
+        "view: orders_users_fields {\n"
+        "  dimension: pk { primary_key: yes hidden: yes sql: CONCAT(${users.id}, '_', ${orders.id}) ;; }\n"
+        "}\n"
+        "explore: orders {\n"
+        "  join: users { sql_on: ${orders.user_id} = ${users.id} ;; relationship: many_to_one }\n"
+        "  join: orders_users_fields { sql: ;; relationship: one_to_one }\n"
+        "}\n"
+        "test: t_users { explore_source: orders { column: count { field: users.count } } assert: ok { expression: ${users.count} >= 0 ;; } }\n"
+    )
+    sql = (
+        "SELECT u.id, COUNT(*) AS c FROM `proj.ds.users` u LEFT JOIN `proj.ds.orders` o ON u.id = o.user_id GROUP BY 1; "
+        "SELECT COUNT(id) AS c FROM `proj.ds.users`"
+    )
+    res = CliRunner().invoke(
+        app,
+        ["parse", "sql-lookml-compare", "--sql", sql, "--lookml", lkml, "--offline", "--compact"],
+    )
+    q0, q1 = json.loads(res.output)["queries"]
+    assert "left_table" not in q0["parsed_query"]["joins"][0]
+    assert [v["view_name"] for v in q0["views"]] == ["users", "orders"]
+    id_fld = next(f for f in q0["views"][0]["fields"] if f["field_name"] == "id")
+    assert id_fld["lookml_type"] == "number" and id_fld["primary_key"] is True
+    assert "tests" in q0 and "tests" not in q1
+

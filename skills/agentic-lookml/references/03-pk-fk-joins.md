@@ -70,9 +70,9 @@ Map the audit results to the LookML `relationship:` parameter:
 - When `duplicate_rows == 0` on both tables, set `relationship: one_to_one`.
 - When `duplicate_rows > 0` on the right table and `0` on the left, set `relationship: one_to_many`.
 
-### Default `INNER JOIN` to `LEFT JOIN` (and `"NOT NULL"` on `type: number` PKs)
+### Default `INNER JOIN` to `LEFT JOIN` (`"NOT NULL"` and `"NULL"` on child PKs)
 
-Default SQL `INNER JOIN` to `type: left_outer` in Silver Explores unless dropping unmatched rows is an invariant across all queries on that Explore; when a specific query needs `INNER JOIN` semantics on a `left_outer` Explore, filter the child PK (`child.id: "NOT NULL"` for `type: number` PKs—never `"-NULL"`, which is valid only on `type: string`).
+Default SQL `INNER JOIN` to `type: left_outer` in Silver Explores unless dropping unmatched rows is an invariant across all queries on that Explore; when a specific query needs `INNER JOIN` semantics on a `left_outer` Explore, filter the child PK (`child.id: "NOT NULL"` for `type: number` PKs—never `"-NULL"`, which is valid only on `type: string`), and for `LEFT JOIN` anti-join / 0-activity counts (`WHERE child.id IS NULL` or `CASE WHEN child.id IS NULL`), filter `child.id: "NULL"` (valid on both `type: number` and `type: string`).
 
 ### Role-playing joins & `1:M` fanout `AVG(parent.col)` parity
 
@@ -88,6 +88,12 @@ Any dimension or measure that anywhere in its dependency DAG references differen
 ```lookml
 # File: silver/order_items_users_fields.view.lkml
 view: order_items_users_fields {
+  dimension: pk {
+    primary_key: yes
+    hidden: yes
+    sql: CONCAT(CAST(${users.id} AS STRING), '_', CAST(COALESCE(${order_items.id}, 0) AS STRING)) ;;
+  }
+
   measure: revenue_per_user {
     type: number
     sql: 1.0 * ${order_items.gross_revenue} / NULLIF(${users.count}, 0) ;;

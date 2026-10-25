@@ -304,6 +304,9 @@ class LookmlFieldMatch(BaseModel):
     sql_column: str
     field_type: str
     field_name: str
+    lookml_type: str | None = None
+    primary_key: bool = False
+    hidden: bool = False
     sql: str | None = None
     matched_property: str = "sql"
     property_path: str | None = None

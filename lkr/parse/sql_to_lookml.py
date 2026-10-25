@@ -1780,6 +1780,13 @@ def _match_model_views(
                         sql_column=minfo.sql_column,
                         field_type=ftype,
                         field_name=fname,
+                        lookml_type=getattr(fobj, "type", None) or None,
+                        primary_key=bool(getattr(fobj, "primary_key", False)),
+                        hidden=bool(
+                            fobj.hidden
+                            if getattr(fobj, "hidden", None) is not None
+                            else assembled_view.fields_hidden_by_default
+                        ),
                         sql=fobj.sql.strip() if getattr(fobj, "sql", None) else None,
                         matched_property=minfo.matched_property,
                         property_path=minfo.property_path,
@@ -3113,9 +3120,14 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
             return [px for x in val if (px := _prune(x)) not in (None, [], {})]
         return val
 
+    seen_tests: list[Any] | None = None
     for q in data.get("queries") or []:
-        if isinstance(q.get("parsed_query"), dict):
-            q["parsed_query"].pop("raw_sql", None)
+        if isinstance(pq := q.get("parsed_query"), dict):
+            pq.pop("raw_sql", None)
+            for pj in pq.get("joins") or []:
+                if isinstance(pj, dict):
+                    pj.pop("left_table", None)
+                    pj.pop("right_table", None)
         q.pop("usages", None)
         grouped_explores: dict[tuple[Any, ...], dict[str, Any]] = {}
         for em in q.get("explores") or []:
@@ -3130,6 +3142,10 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
         for tm in q.get("tests") or []:
             tm.pop("field", None)
             tm.pop("fields", None)
+        if (t := q.get("tests")) and t == seen_tests:
+            q.pop("tests", None)
+        elif t:
+            seen_tests = t
         for ja in q.get("join_analysis") or []:
             if isinstance(sj := ja.get("sql_join"), dict):
                 lt, rt = sj.get("left_table"), sj.get("right_table")
@@ -3154,10 +3170,15 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
             if eq.get("matched_fields") and isinstance(eq["matched_fields"][0], dict):
                 eq["matched_fields"] = [mf.get("field") for mf in eq["matched_fields"] if mf.get("field")]
         q["explore_queries"] = eqs
+        kept_views: list[dict[str, Any]] = []
         for vm in q.get("views") or []:
-            vm.setdefault("unmodeled_db_columns", [])
+            if vm.get("sql_table_name"):
+                vm.setdefault("unmodeled_db_columns", [])
+            had_fields = bool(vm.get("fields"))
             dedup_fields: dict[tuple[Any, Any], dict[str, Any]] = {}
             for fm in vm.get("fields") or []:
+                if fm.get("hidden") and fm.get("via"):
+                    continue
                 for dup_key in ("explores", "tests", "aggregate_tables", "explore_queries", "usages"):
                     fm.pop(dup_key, None)
                 fkey = (fm.get("field_type"), fm.get("field_name"))
@@ -3167,6 +3188,9 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                             prev["via"].append(v_ref)
                 else:
                     dedup_fields[fkey] = fm
-            if dedup_fields:
-                vm["fields"] = list(dedup_fields.values())
+            if had_fields and not dedup_fields and not vm.get("sql_table_name"):
+                continue
+            vm["fields"] = list(dedup_fields.values())
+            kept_views.append(vm)
+        q["views"] = kept_views
     return _prune(data)

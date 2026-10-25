@@ -89,10 +89,9 @@ view: +orders {
     sql: ${status} = 'Complete' OR ${is_override} ;;
   }
 
-  measure: order_count {
-    type: count_distinct
-    sql: ${order_id} ;;
-    value_format_name: decimal_0
+  measure: count {
+    label: "Orders Count"
+    description: "Total number of orders."
   }
 
   measure: total_revenue {
@@ -117,7 +116,7 @@ view: +orders {
 
   measure: average_order_value {
     type: number
-    sql: 1.0 * ${total_revenue} / NULLIF(${order_count}, 0) ;;
+    sql: 1.0 * ${total_revenue} / NULLIF(${count}, 0) ;;
     value_format_name: usd
   }
 }
@@ -129,6 +128,12 @@ view: +orders {
 # File: silver/inventory_items_order_items_fields.view.lkml
 # (Alphabetically concatenated view names + _fields for any dimension/measure whose DAG spans inventory_items and order_items)
 view: inventory_items_order_items_fields {
+  dimension: pk {
+    primary_key: yes
+    hidden: yes
+    sql: ${order_items.id} ;;
+  }
+
   dimension: gross_margin {
     type: number
     sql: ${order_items.sale_price} - ${inventory_items.cost} ;;
