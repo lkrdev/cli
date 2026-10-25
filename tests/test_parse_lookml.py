@@ -4124,3 +4124,80 @@ def test_cross_view_fields_exact_query_coverage_and_explore_oriented_inferred_re
     raw_jas = parse_sql_to_lookml(sql=sql.split(";")[0], lookml=lkml, offline=True).queries[0].join_analysis
     unjoined_ja = next(j for j in raw_jas if j.explore_name == "items_unjoined")
     assert unjoined_ja.status == "missing_join" and unjoined_ja.inferred_relationship == "many_to_one"
+
+
+def test_cte_dead_projection_pruning_count_alias_and_unnest_virtual_view():
+    import json
+
+    from typer.testing import CliRunner
+
+    from lkr.main import app
+
+    lkml = (
+        'connection: "bq"\n'
+        "view: events {\n"
+        "  sql_table_name: `proj.ds.events` ;;\n"
+        "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+        "  dimension: session_id { type: string sql: ${TABLE}.session_id ;; }\n"
+        "  dimension: user_id { type: number sql: ${TABLE}.user_id ;; }\n"
+        "  dimension: event_type { type: string sql: ${TABLE}.event_type ;; }\n"
+        "  dimension: uri { type: string sql: ${TABLE}.uri ;; }\n"
+        "  dimension: uri_dept { type: string sql: REGEXP_EXTRACT(${uri}, r'^/department/([^/?#]+)') ;; }\n"
+        "  dimension: uri_segments { hidden: yes sql: SPLIT(TRIM(${uri}, '/'), '/') ;; }\n"
+        "  measure: count { type: count }\n"
+        '  measure: dept_events { type: count filters: [uri_dept: "-NULL"] }\n'
+        "  measure: approx_sessions { type: number sql: APPROX_COUNT_DISTINCT(${session_id}) ;; }\n"
+        "}\n"
+        "view: events__uri_segments {\n"
+        "  dimension: pk { primary_key: yes hidden: yes type: string sql: CONCAT(CAST(${events.id} AS STRING), '_', CAST(events__uri_segments_offset AS STRING)) ;; }\n"
+        "  dimension: depth_level { type: number sql: events__uri_segments_offset ;; }\n"
+        "  dimension: uri_segment { type: string sql: ${TABLE} ;; }\n"
+        "}\n"
+        "explore: events {\n"
+        "  view_name: events\n"
+        "  join: events__uri_segments {\n"
+        "    sql: LEFT JOIN UNNEST(${events.uri_segments}) AS events__uri_segments WITH OFFSET AS events__uri_segments_offset ;;\n"
+        "    relationship: one_to_many\n"
+        "  }\n"
+        "  query: by_event_type { dimensions: [events.event_type] measures: [events.count, events.dept_events] }\n"
+        "  query: by_uri { dimensions: [events.uri] measures: [events.count, events.approx_sessions] }\n"
+        "  query: top_uri_segments {\n"
+        "    dimensions: [events__uri_segments.depth_level, events__uri_segments.uri_segment]\n"
+        "    measures: [events.count, events.approx_sessions]\n"
+        '    filters: [events__uri_segments.uri_segment: "-EMPTY"]\n'
+        "  }\n"
+        "}\n"
+    )
+    sql = (
+        "WITH raw_e AS (SELECT id AS event_id, session_id, user_id, event_type, uri FROM `proj.ds.events`), "
+        "parsed AS (SELECT event_id, session_id, user_id, event_type, "
+        "REGEXP_EXTRACT(uri, r'^/department/([^/?#]+)') AS uri_dept FROM raw_e) "
+        "SELECT event_type, COUNT(event_id) AS total_events, COUNTIF(uri_dept IS NOT NULL) AS dept_cnt "
+        "FROM parsed GROUP BY 1; "
+        "WITH parsed AS (SELECT uri, event_type, session_id FROM `proj.ds.events`) "
+        "SELECT uri, COUNT(*) AS cnt, APPROX_COUNT_DISTINCT(session_id) AS sess FROM parsed GROUP BY 1; "
+        "SELECT segment_offset, uri_segment, COUNT(e.id) AS hits, APPROX_COUNT_DISTINCT(e.session_id) AS sess "
+        "FROM `proj.ds.events` e CROSS JOIN UNNEST(SPLIT(TRIM(e.uri, '/'), '/')) AS uri_segment WITH OFFSET AS segment_offset "
+        "WHERE segment_offset <= 2 AND uri_segment != '' GROUP BY 1, 2"
+    )
+    res = CliRunner().invoke(
+        app,
+        ["parse", "sql-lookml-compare", "--sql", sql, "--lookml", lkml, "--offline", "--compact"],
+    )
+    assert res.exit_code == 0, res.output
+    q0, q1, q2 = json.loads(res.output)["queries"]
+
+    q0_fnames = {f["field_name"] for v in q0["views"] for f in v["fields"]}
+    assert "session_id" not in q0_fnames and "user_id" not in q0_fnames
+    assert [(eq["query_name"], eq["coverage"]) for eq in q0["explore_queries"]] == [("by_event_type", "exact")]
+
+    q1_vnames = {v["view_name"] for v in q1["views"]}
+    assert "events__uri_segments" not in q1_vnames
+    assert [(eq["query_name"], eq["coverage"]) for eq in q1["explore_queries"]] == [("by_uri", "exact")]
+
+    q2_vnames = {v["view_name"] for v in q2["views"]}
+    assert "events__uri_segments" in q2_vnames
+    assert q2["join_analysis"][0]["status"] == "exact_match"
+    assert q2["join_analysis"][0]["matched_explore_join"] == "events__uri_segments"
+    assert [(eq["query_name"], eq["coverage"]) for eq in q2["explore_queries"]] == [("top_uri_segments", "exact")]
+

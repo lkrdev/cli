@@ -30,6 +30,8 @@ def split_sql_statements(raw_sql: str) -> list[str]:
 
 def _to_float(v):
     if v is not None and not isinstance(v, bool):
+        if isinstance(v, str) and re.match(r"^0\d+$", v.strip()):
+            return None
         try:
             return float(v.strip() if isinstance(v, str) else v)
         except (ValueError, TypeError):
@@ -124,7 +126,8 @@ def _sql_meta(sql: str):
             ).strip()
             if spec:
                 order_specs.append(spec)
-    return scales, pct_cols, pct_idxs, sel_exprs, bool(om), order_specs
+    lm = re.search(r"(?i)\bLIMIT\s+(\d+)\b", top)
+    return scales, pct_cols, pct_idxs, sel_exprs, bool(om), order_specs, (int(lm.group(1)) if lm else None)
 
 
 def _cell_key(v, digits: int, mult: float = 1.0):
@@ -135,18 +138,39 @@ def _cell_key(v, digits: int, mult: float = 1.0):
     return (2, float(nv), "") if isinstance(nv, (int, float)) else (3, 0.0, str(nv))
 
 
-def compare_row_sets(sql_rows, looker_rows, sql: str = "", looker_fields: list[str] | None = None):
+def _cmp_pair(rs, rl, digits: int, mult: float):
+    if (
+        isinstance(rs, str)
+        and isinstance(rl, str)
+        and re.match(r"^\d+$", rs.strip())
+        and re.match(r"^\d+$", rl.strip())
+    ):
+        return rs.strip(), rl.strip()
+    sv, lv = normalize_val(rs, digits), normalize_val(rl, digits)
+    lf = _to_float(rl)
+    return sv, (round(lf * mult, digits) if (mult != 1.0 and lf is not None) else lv)
+
+
+def compare_row_sets(
+    sql_rows,
+    looker_rows,
+    sql: str = "",
+    looker_fields: list[str] | None = None,
+    fetch_extra=None,
+):
     if len(sql_rows) != len(looker_rows):
         return False, [f"Row count mismatch: SQL={len(sql_rows)}, Looker={len(looker_rows)}"]
     if not sql_rows:
         return True, []
-    scales, pct_cols, pct_idxs, sel_exprs, has_order_by, order_specs = _sql_meta(sql)
+    scales, pct_cols, pct_idxs, sel_exprs, has_order_by, order_specs, limit_n = _sql_meta(sql)
     f_norm = [f.lower() for f in (looker_fields or [])]
-    sr_leaves = [{k.split(".")[-1].lower(): v for k, v in sr.items()} for sr in sql_rows]
-    lr_leaves = []
-    for lr in looker_rows:
+
+    def _norm_lr(lr):
         raw_lr = {k.lower(): v for k, v in lr.items()}
-        lr_leaves.append({k: raw_lr[k] for k in [k for k in f_norm if k in raw_lr] + list(raw_lr)})
+        return {k: raw_lr[k] for k in [k for k in f_norm if k in raw_lr] + list(raw_lr)}
+
+    sr_leaves = [{k.split(".")[-1].lower(): v for k, v in sr.items()} for sr in sql_rows]
+    lr_leaves = [_norm_lr(lr) for lr in looker_rows]
     bad_cols = [
         f"Row {i} column count mismatch: SQL={len(sr)}, Looker={len(lr)}"
         for i, (sr, lr) in enumerate(zip(sr_leaves, lr_leaves))
@@ -177,11 +201,13 @@ def compare_row_sets(sql_rows, looker_rows, sql: str = "", looker_fields: list[s
                 mult = 100.0
         same_leaf = lk == sk or (lk.split(".")[-1] == sk and len(l_by_leaf.get(sk, ())) == 1)
         cols.append((sk if same_leaf else f"{sk}->{lk}", sk, lk, digits, mult))
+    order_idxs: list[int] = []
+    s_ob = None
+    tied_ob = False
     if len(sr_leaves) > 1 and not has_order_by:
         sr_leaves.sort(key=lambda r: tuple(_cell_key(r[sk], d, 1.0) for _, sk, _, d, _ in cols))
         lr_leaves.sort(key=lambda r: tuple(_cell_key(r[lk], d, m) for _, _, lk, d, m in cols))
-    elif len(sr_leaves) > 1 and order_specs:
-        order_idxs = []
+    elif order_specs:
         for spec in order_specs:
             ident, norm_ob = spec.strip('`"').lower(), re.sub(r"\s+", "", spec).lower()
             leaf_hits = [i for i, sk in enumerate(s_keys) if sk == ident.split(".")[-1]]
@@ -202,27 +228,73 @@ def compare_row_sets(sql_rows, looker_rows, sql: str = "", looker_fields: list[s
             s_ob = [tuple(_cell_key(r[cols[i][1]], cols[i][3], 1.0) for i in order_idxs) for r in sr_leaves]
             l_ob = [tuple(_cell_key(r[cols[i][2]], cols[i][3], cols[i][4]) for i in order_idxs) for r in lr_leaves]
             if s_ob == l_ob:
-                sr_tied, lr_tied, start = [], [], 0
-                while start < len(sr_leaves):
-                    end = start + 1
-                    while end < len(sr_leaves) and s_ob[end] == s_ob[start]:
-                        end += 1
-                    sr_tied.extend(
-                        sorted(sr_leaves[start:end], key=lambda r: tuple(_cell_key(r[sk], d, 1.0) for _, sk, _, d, _ in cols))
-                    )
-                    lr_tied.extend(
-                        sorted(lr_leaves[start:end], key=lambda r: tuple(_cell_key(r[lk], d, m) for _, _, lk, d, m in cols))
-                    )
-                    start = end
-                sr_leaves, lr_leaves = sr_tied, lr_tied
+                tied_ob = True
+                if len(sr_leaves) > 1:
+                    sr_tied, lr_tied, start = [], [], 0
+                    while start < len(sr_leaves):
+                        end = start + 1
+                        while end < len(sr_leaves) and s_ob[end] == s_ob[start]:
+                            end += 1
+                        sr_tied.extend(
+                            sorted(
+                                sr_leaves[start:end],
+                                key=lambda r: tuple(_cell_key(r[sk], d, 1.0) for _, sk, _, d, _ in cols),
+                            )
+                        )
+                        lr_tied.extend(
+                            sorted(
+                                lr_leaves[start:end],
+                                key=lambda r: tuple(_cell_key(r[lk], d, m) for _, _, lk, d, m in cols),
+                            )
+                        )
+                        start = end
+                    sr_leaves, lr_leaves = sr_tied, lr_tied
     mismatches = []
+    bad_idxs = []
     for idx, (sr_leaf, lr_leaf) in enumerate(zip(sr_leaves, lr_leaves)):
+        row_bad = False
         for label, sk, lk, digits, mult in cols:
-            sv, lv = normalize_val(sr_leaf[sk], digits), normalize_val(lr_leaf[lk], digits)
-            lf = _to_float(lr_leaf[lk])
-            lv_cmp = round(lf * mult, digits) if (mult != 1.0 and lf is not None) else lv
+            sv, lv_cmp = _cmp_pair(sr_leaf[sk], lr_leaf[lk], digits, mult)
             if sv != lv_cmp:
                 mismatches.append(f"Row {idx} ({label}): SQL={sv}, Looker={lv_cmp}")
+                row_bad = True
+        if row_bad:
+            bad_idxs.append(idx)
+    if mismatches and fetch_extra is not None and tied_ob and s_ob and limit_n == len(sr_leaves) <= 450:
+        last_key = s_ob[-1]
+        last_start = len(s_ob) - 1
+        while last_start > 0 and s_ob[last_start - 1] == last_key:
+            last_start -= 1
+        if bad_idxs[0] >= last_start:
+            try:
+                extra_rows = fetch_extra(min(limit_n + 50, 500)) or []
+            except Exception:
+                extra_rows = []
+            pool = [
+                norm_lr
+                for lr in extra_rows
+                for norm_lr in [_norm_lr(lr)]
+                if len(norm_lr) == len(sr_leaves[0])
+                and all(lk in norm_lr for _, _, lk, _, _ in cols)
+                and tuple(_cell_key(norm_lr[cols[i][2]], cols[i][3], cols[i][4]) for i in order_idxs) == last_key
+            ]
+            all_found = True
+            for sr_leaf in sr_leaves[last_start:]:
+                hit_i = -1
+                for p_i, cand_lr in enumerate(pool):
+                    if all(
+                        pair[0] == pair[1]
+                        for _, sk, lk, d, m in cols
+                        for pair in [_cmp_pair(sr_leaf[sk], cand_lr[lk], d, m)]
+                    ):
+                        hit_i = p_i
+                        break
+                if hit_i < 0:
+                    all_found = False
+                    break
+                pool.pop(hit_i)
+            if all_found:
+                return True, []
     return not mismatches, mismatches[:5]
 
 
@@ -351,8 +423,19 @@ def main():
                 for d in dfs
                 if isinstance(d, dict) and (d.get("table_calculation") or d.get("measure") or d.get("dimension"))
             ]
+            def _fetch_tie_pool(new_lim: int, _q=active_q):
+                ext_q = dict(_q)
+                ext_q["limit"] = str(new_lim)
+                ext_raw = run_inline_query(result_format="json", body=ext_q)  # ty: ignore[unresolved-reference]
+                ext_parsed = json.loads(ext_raw) if isinstance(ext_raw, str) else (ext_raw or [])
+                return ext_parsed if isinstance(ext_parsed, list) else []
+
             matched, mismatches = compare_row_sets(
-                s_rows, l_rows, sql=str(q.get("sql") or ""), looker_fields=q_fields
+                s_rows,
+                l_rows,
+                sql=str(q.get("sql") or ""),
+                looker_fields=q_fields,
+                fetch_extra=_fetch_tie_pool if isinstance(active_q, dict) else None,
             )
             q["parity_status"] = "matched" if matched else "mismatched"
             q["mismatches"] = mismatches

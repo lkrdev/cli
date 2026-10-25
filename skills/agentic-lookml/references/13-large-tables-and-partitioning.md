@@ -108,7 +108,9 @@ view: +telemetry_events {
     type: number
     label: "Approximate Unique Users"
     description: "HyperLogLog approximate count distinct for high-volume analysis"
+    tags: ["non_additive"]
     sql: APPROX_COUNT_DISTINCT(${user_id}) ;;
+    value_format_name: decimal_0
   }
 }
 ```

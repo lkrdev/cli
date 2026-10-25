@@ -43,7 +43,9 @@ from lkr.parse.sql import (
     ParsedQuery,
     TableRef,
     _apply_default_db_schema,
+    _get_star,
     _has_projection_star,
+    _main_select,
     _normalize_sql_join_type,
     _optimize_stars,
     _split_table_ref,
@@ -444,6 +446,47 @@ def _extract_query_columns(
                     default_db=default_db,
                     default_schema=default_schema,
                 )
+                ctes = list(opt_expr.find_all(exp.CTE))
+                all_cols = list(opt_expr.find_all(exp.Column))
+                cte_names = {cte.alias_or_name.lower() for cte in ctes if cte.alias_or_name}
+                dead_col_ids: set[int] = set()
+                cte_simple_cols: dict[str, dict[str, exp.Column]] = {}
+                has_outer_star = bool(ctes) and any(
+                    _get_star(p) is not None
+                    for s in opt_expr.find_all(exp.Select)
+                    if not s.find_ancestor(exp.CTE)
+                    for p in s.selects
+                )
+                cte_col_sets = [{id(c) for c in cte.find_all(exp.Column)} for cte in ctes]
+                outer_col_ids = {id(c) for c in all_cols if not c.find_ancestor(exp.CTE)}
+                for idx in range(len(ctes) - 1, -1, -1):
+                    cte = ctes[idx]
+                    c_sel = _main_select(cte.this) if cte.alias_or_name and cte.this is not None else None
+                    if c_sel is None:
+                        continue
+                    cte_name = cte.alias_or_name.lower()
+                    cte_simple_cols[cte_name] = {}
+                    downstream_ids = outer_col_ids.union(*cte_col_sets[idx + 1 :])
+                    ext_names = {
+                        c.name.lower()
+                        for c in all_cols
+                        if id(c) in downstream_ids and id(c) not in dead_col_ids and c.name
+                    }
+                    can_prune = not has_outer_star and not c_sel.args.get("group") and not c_sel.args.get("distinct")
+                    for proj in c_sel.selects:
+                        if _get_star(proj) is not None or not proj.alias_or_name:
+                            continue
+                        p_name = proj.alias_or_name.lower()
+                        if can_prune and p_name not in ext_names:
+                            dead_col_ids.update(id(c) for c in proj.find_all(exp.Column))
+                            continue
+                        inner = proj.this if isinstance(proj, exp.Alias) else proj
+                        if isinstance(inner, exp.Column) and inner.name and not isinstance(inner.this, exp.Star):
+                            cte_simple_cols[cte_name][p_name] = inner
+                cte_alias_map: dict[str, set[str]] = {n: {n} for n in cte_names}
+                for tbl in opt_expr.find_all(exp.Table):
+                    if cte_names and tbl.name and tbl.name.lower() in cte_names:
+                        cte_alias_map.setdefault((tbl.alias or tbl.name).lower(), set()).add(tbl.name.lower())
                 on_col_ids = (
                     {
                         id(c)
@@ -455,6 +498,8 @@ def _extract_query_columns(
                     else set()
                 )
                 cnt_col_ids: set[int] = set()
+                cnt_chains: list[tuple[set[str], list[exp.Column]]] = []
+                traced_chain_ids: set[int] = set()
                 for cnt_expr in opt_expr.find_all(exp.Count):
                     if isinstance(cnt_expr.parent, exp.Filter):
                         continue
@@ -481,13 +526,74 @@ def _extract_query_columns(
                             and c.name
                             and not isinstance(c.this, exp.Star)
                             and id(c) not in on_col_ids
+                            and id(c) not in dead_col_ids
                         ):
                             cnt_col_ids.add(id(c))
-                            _add(c.table or None, f"COUNT({c.name})")
-                for col_expr in opt_expr.find_all(exp.Column):
+                            curr_c = c
+                            chain: list[exp.Column] = []
+                            seen_ids: set[int] = {id(c)}
+                            if not c.table or c.table.lower() in cte_alias_map:
+                                while True:
+                                    t_low = (curr_c.table or "").lower()
+                                    c_low = curr_c.name.lower()
+                                    sel = curr_c.find_ancestor(exp.Select)
+                                    sel_tbls = (
+                                        [
+                                            t
+                                            for t in sel.find_all(exp.Table)
+                                            if t.find_ancestor(exp.Select) is sel and t.name
+                                        ]
+                                        if sel is not None
+                                        else []
+                                    )
+                                    if t_low:
+                                        cand_ctes = {
+                                            t.name.lower()
+                                            for t in sel_tbls
+                                            if (t.alias or t.name).lower() == t_low
+                                        } or cte_alias_map.get(t_low, set())
+                                    else:
+                                        cand_ctes = (
+                                            {t.name.lower() for t in sel_tbls}
+                                            if sel_tbls
+                                            else set(cte_simple_cols)
+                                        )
+                                    cands = [
+                                        cte_simple_cols[cn][c_low]
+                                        for cn in cand_ctes
+                                        if cn in cte_simple_cols and c_low in cte_simple_cols[cn]
+                                    ]
+                                    if len(cands) == 1 and id(cands[0]) not in seen_ids:
+                                        curr_c = cands[0]
+                                        seen_ids.add(id(curr_c))
+                                        chain.append(curr_c)
+                                        continue
+                                    break
+                            if chain:
+                                aliases = {c.name.lower()} | {sc.name.lower() for sc in chain[:-1]}
+                                cnt_chains.append((aliases, chain))
+                                traced_chain_ids.update(id(sc) for sc in chain)
+                                _add(curr_c.table or None, f"COUNT({curr_c.name})")
+                            else:
+                                _add(c.table or None, f"COUNT({c.name})")
+                non_cnt_cte_refs = {
+                    ce.name.lower()
+                    for ce in all_cols
+                    if id(ce) not in traced_chain_ids
+                    and id(ce) not in on_col_ids
+                    and id(ce) not in cnt_col_ids
+                    and id(ce) not in dead_col_ids
+                    and ce.name
+                    and (not ce.table or ce.table.lower() in cte_alias_map)
+                }
+                for aliases, chain in cnt_chains:
+                    suppress = chain[:-1] if (aliases & non_cnt_cte_refs) else chain
+                    cnt_col_ids.update(id(sc) for sc in suppress)
+                for col_expr in all_cols:
                     if (
                         id(col_expr) not in on_col_ids
                         and id(col_expr) not in cnt_col_ids
+                        and id(col_expr) not in dead_col_ids
                         and col_expr.name
                         and col_expr.arg_key != "except_"
                         and not isinstance(col_expr.this, exp.Star)
@@ -1274,6 +1380,7 @@ def _match_model_views(
     }
     alias_to_view: dict[str, str] = {vname.lower(): vname for vname in model_views}
     exp_base_alias: dict[str, str] = {}
+    unnest_by_view: dict[str, list[tuple[str, str, str, str]]] = {}
     for exp_name, exp_obj in (model_obj.explore or {}).items():
         if not isinstance(exp_obj, LookmlExplore):
             continue
@@ -1284,10 +1391,21 @@ def _match_model_views(
         exp_base_alias[exp_name.lower()] = b_alias
         aliases_for_view.setdefault(b_view, {b_view.lower()}).add(b_alias.lower())
         alias_to_view.setdefault(b_alias.lower(), b_view)
-        for j_name, j_obj in (exp_obj.join or {}).items():
-            jv_name = j_obj.from_ or j_obj.view_name or j_name
-            aliases_for_view.setdefault(jv_name, {jv_name.lower()}).add(j_name.lower())
-            alias_to_view.setdefault(j_name.lower(), jv_name)
+        for _, e_item, _ in [*exp_chain, ("", exp_obj, {})]:
+            for j_name, j_obj in (e_item.join or {}).items():
+                jv_name = j_obj.from_ or j_obj.view_name or j_name
+                aliases_for_view.setdefault(jv_name, {jv_name.lower()}).add(j_name.lower())
+                alias_to_view.setdefault(j_name.lower(), jv_name)
+                if j_obj.sql and (
+                    um := re.search(r"(?i)\bUNNEST\s*\(\s*\$\{\s*([a-zA-Z0-9_.]+)\s*\}", str(j_obj.sql))
+                ):
+                    u_ref = um.group(1)
+                    u_pfx, u_fld = u_ref.split(".", 1) if "." in u_ref else (b_alias, u_ref)
+                    off_m = re.search(r"(?i)\bWITH\s+OFFSET\s+(?:AS\s+)?([a-zA-Z0-9_]+)", str(j_obj.sql))
+                    off_alias = off_m.group(1).lower() if off_m else f"{j_name.lower()}_offset"
+                    pair = (u_pfx.lower(), u_fld.lower(), j_name.lower(), off_alias)
+                    if pair not in unnest_by_view.setdefault(jv_name, []):
+                        unnest_by_view[jv_name].append(pair)
 
     test_infos = _collect_model_test_infos(
         model_name=model_name,
@@ -1509,7 +1627,12 @@ def _match_model_views(
             split_count_cols=True,
         )
     }
-    non_join_units: set[tuple[str, str]] = set()
+    raw_sql_lower = pq.raw_sql.lower()
+    has_sql_unnest = any(
+        (j.right_table.name if j.right_table else "").upper().startswith("UNNEST(")
+        for j in pq.joins
+    )
+    non_join_units: set[tuple[str, str]] = {("*", "__unnest__")} if has_sql_unnest else set()
 
     def _ext_refs(plist: list[_FieldProperty], own: set[str]) -> set[str]:
         return {
@@ -1651,6 +1774,11 @@ def _match_model_views(
             ndt_cnt_src = src_col == "COUNT(*)" and any(
                 pfx in src_aliases for _, pfx, _ in ndt_cols_by_view.get(cand_view, ())
             )
+            unnest_hits = [
+                (j_al, off_al)
+                for u_pfx, u_fld, j_al, off_al in unnest_by_view.get(cand_view, ())
+                if has_sql_unnest and (u_fld in src_cands or u_fld == src_col.lower()) and u_pfx in src_aliases
+            ]
             for c_ftype, c_fname, c_fobj in _iter_view_fields(cand_obj):
                 ckey = (cand_view, c_ftype, c_fname)
                 existing = matched_fields.get(ckey, [])
@@ -1665,7 +1793,16 @@ def _match_model_views(
                     and getattr(c_fobj, "type", None) == "count"
                     and not getattr(c_fobj, "filters", None)
                 )
-                hits_ndt = is_ndt_cnt or any(
+                c_sql_raw = str(getattr(c_fobj, "sql", None) or "").strip()
+                hits_unnest = False
+                if unnest_hits and c_ftype in ("dimension", "dimension_group") and not getattr(c_fobj, "primary_key", False):
+                    subcols = re.findall(r"\$\{\s*TABLE\s*\}\.([a-zA-Z0-9_]+)", c_sql_raw, re.IGNORECASE)
+                    hits_unnest = (
+                        (bool(subcols) and all(sc.lower() in raw_sql_lower for sc in subcols))
+                        or bool(re.search(r"\$\{\s*TABLE\s*\}(?!\s*\.)", c_sql_raw, re.IGNORECASE))
+                        or any(re.search(rf"\b{re.escape(off_al)}\b", c_sql_raw, re.IGNORECASE) for _, off_al in unnest_hits)
+                    )
+                hits_ndt = is_ndt_cnt or hits_unnest or any(
                     _field_matches_column(ndt_col, c_fname, getattr(c_fobj, "sql", None), c_ftype, tfs)
                     for ndt_col in matched_ndt_cols
                 )
@@ -1750,7 +1887,6 @@ def _match_model_views(
         )
     }
     views_lower = {vn.lower(): vobj for vn, vobj in model_views.items()}
-    raw_sql_lower = pq.raw_sql.lower()
 
     def _resolve_ref(r: str, cur_view: str, self_set: set[str]) -> tuple[str, str]:
         if "." not in r:
@@ -2042,6 +2178,7 @@ def _match_model_views(
         )
 
     valid_fkeys = _valid_field_keys(results)
+    unnest_views_lower = {vn.lower() for vn in unnest_by_view}
     query_canon_by_unit: dict[tuple[str, str], str] = {}
     for vm in results:
         for fm in vm.fields:
@@ -2052,6 +2189,8 @@ def _match_model_views(
                 not fm.via or uk not in query_canon_by_unit
             ):
                 query_canon_by_unit[uk] = f"{vm.view_name}.{fm.field_name}"
+            if has_sql_unnest and vm.view_name.lower() in unnest_views_lower and ("*", "__unnest__") not in query_canon_by_unit:
+                query_canon_by_unit[("*", "__unnest__")] = f"{vm.view_name}.{fm.field_name}"
 
     for exp_name, exp_val in (model_obj.explore or {}).items():
         for exp_obj in _as_list(exp_val):
@@ -2326,6 +2465,10 @@ def _match_model_views(
                                 for tf in (tfs or ())
                             }
                         exp_entries.append((vm, fm, em, uk, cands))
+                        if has_sql_unnest and vm.view_name.lower() in unnest_views_lower:
+                            exp_entries.append((vm, fm, em, ("*", "__unnest__"), cands))
+                            if ("*", "__unnest__") not in canon_by_unit:
+                                canon_by_unit[("*", "__unnest__")] = em.field
                         if fm.field_type == "measure" and getattr(fobj, "type", None) == "count":
                             for cnt_uk in (("*", "count(*)"), (f_sql_tbl_low, "count(*)")):
                                 if uk != cnt_uk and cnt_uk in non_join_units:
@@ -2802,6 +2945,7 @@ def _analyze_query_joins(
 
             matched_j: LookmlExploreJoinNode | None = None
             matched_inverted = False
+            is_unnest_join = right_name.startswith("unnest(")
 
             for j_name, j_node in target_graph.joins.items():
                 jv_tail = _view_table_tail(m_views.get(j_node.target_view))
@@ -2815,18 +2959,28 @@ def _analyze_query_joins(
                 from_tail = _view_table_tail(m_views.get(j_node.from_view or ""))
                 from_names = {from_v} | ({from_tail} if from_tail else set())
 
-                fwd_match = (right_name in j_names or right_alias in j_names) and (
-                    left_name in base_names
-                    or left_alias in base_names
-                    or left_name in from_names
-                    or left_alias in from_names
-                )
-                rev_match = (left_name in j_names or left_alias in j_names) and (
-                    right_name in base_names
-                    or right_alias in base_names
-                    or right_name in from_names
-                    or right_alias in from_names
-                )
+                if is_unnest_join:
+                    fwd_match = "UNNEST(" in (j_node.sql or "").upper() and (
+                        not left_name
+                        or left_name in base_names
+                        or left_alias in base_names
+                        or left_name in from_names
+                        or left_alias in from_names
+                    )
+                    rev_match = False
+                else:
+                    fwd_match = (right_name in j_names or right_alias in j_names) and (
+                        left_name in base_names
+                        or left_alias in base_names
+                        or left_name in from_names
+                        or left_alias in from_names
+                    )
+                    rev_match = (left_name in j_names or left_alias in j_names) and (
+                        right_name in base_names
+                        or right_alias in base_names
+                        or right_name in from_names
+                        or right_alias in from_names
+                    )
                 if fwd_match or rev_match:
                     matched_j = j_node
                     matched_inverted = rev_match and not fwd_match
@@ -2881,7 +3035,11 @@ def _analyze_query_joins(
             if matched_j is not None:
                 sql_type = _normalize_sql_join_type(sql_join.side, sql_join.kind)
                 lkml_type = _normalize_lookml_join_type(matched_j.type)
-                type_match = (sql_type == lkml_type)
+                type_match = (
+                    True
+                    if is_unnest_join and "UNNEST(" in (matched_j.sql or "").upper()
+                    else (sql_type == lkml_type)
+                )
 
                 equi_match = True
                 if sql_join.equi_joins and matched_j.equi_joins:
