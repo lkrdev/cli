@@ -79,7 +79,7 @@ All workflow helper scripts live in `.agents/skills/agentic-lookml-workflow/scri
   bash .agents/skills/agentic-lookml-workflow/scripts/preflight.sh
   lkr --client-id="$LOOKERSDK_CLIENT_ID" --client-secret="$LOOKERSDK_CLIENT_SECRET" --base-url="$BASE_URL" --dev auth add-access-token
   ```
-- Parse `$SQL_FILE` offline (`lkr parse sql --file "$SQL_FILE"`), reset the developer workspace to production, create branch `YYYYMMDD_HHMMSS_mmm_<looker_user_id>`, resolve existing `model_name` + `connection_name`, and pre-generate any missing `bronze/:table.view.lkml` files via [scripts/init_branch.py](scripts/init_branch.py); then initialize `./data/$RUN_ID/`, pull LookML once, and—whenever `init_branch.py` returned an existing `model_name`—sync includes, baseline snapshots (`-u`), and `compare_initial.json` in the **same shell call**:
+- Parse `$SQL_FILE` offline (`lkr parse sql --file "$SQL_FILE"`), reset the developer workspace to production, create branch `YYYYMMDD_HHMMSS_mmm_<looker_user_id>`, resolve existing `model_name` + `connection_name`, and pre-generate any missing `bronze/:table.view.lkml` files via [scripts/init_branch.py](scripts/init_branch.py); then initialize `./data/$RUN_ID/`, pull LookML once, and—whenever `init_branch.py` returned an existing `model_name`—sync includes, baseline snapshots (`-u`), and `compare_initial.json` in the **same shell call** (read `compare_initial.json` via `read_file` rather than `cat`ting it to stdout):
   ```bash
   PARSED_SQL_JSON=$(lkr parse sql --file "$SQL_FILE")
   RAW_BRANCH=$(lkr --base-url="$BASE_URL" --dev code-mode sandbox \
@@ -131,9 +131,9 @@ All workflow helper scripts live in `.agents/skills/agentic-lookml-workflow/scri
     lkr parse sql-lookml-compare --compact --sql-file "./data/$RUN_ID/input.sql" --path "./data/$RUN_ID/lookml" --output "./data/$RUN_ID/compare_initial.json"
   fi
   ```
-- Follow [agentic-lookml](../agentic-lookml/SKILL.md) and [measures-and-sql-functions.md](../agentic-lookml/references/measures-and-sql-functions.md) to author Bronze refinements, Bronze/Silver/Gold explores, and views **together before the first push** (ensuring every standalone `.explore.lkml` and `.test.lkml` explicitly `include:`s its referenced files, syncing `$MODEL_NAME.model.lkml` globs via `LOOKML_DIR="./data/$RUN_ID/lookml" ... setup_repo.sh --skip-preflight`). Validate offline with `lkr parse lookml-to-api --validate` and batch `lkr schema validate` once per distinct target explore (passing `[Q0, Q1, ...]` for that explore), then push once:
+- Follow [agentic-lookml](../agentic-lookml/SKILL.md) and [measures-and-sql-functions.md](../agentic-lookml/references/measures-and-sql-functions.md) to author Bronze refinements, Bronze/Silver/Gold explores, and views **together before the first push** (ensuring every standalone `.explore.lkml` and `.test.lkml` explicitly `include:`s its referenced files, syncing `$MODEL_NAME.model.lkml` globs via `LOOKML_DIR="./data/$RUN_ID/lookml" ... setup_repo.sh --skip-preflight`). Validate offline with `lkr parse lookml-to-api --validate --base-path "."` (comparing against repo `HEAD` just like CI) and batch `lkr schema validate` once per distinct target explore (passing `[Q0, Q1, ...]` for that explore), then push once (`lookml push --no-reset --only-changed` automatically deletes any renamed/removed remote orphan files):
   ```bash
-  lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" -m "$MODEL_NAME" -e "$EXPLORE_NAME" --validate -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json"
+  lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" --base-path "." -m "$MODEL_NAME" -e "$EXPLORE_NAME" --validate -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json"
   lkr schema generate -m "$MODEL_NAME" -e "$EXPLORE_NAME" --explore-file "./data/$RUN_ID/explore_${EXPLORE_NAME}.json" -o "./data/$RUN_ID/schema_${EXPLORE_NAME}.json"
   lkr schema validate --schema-file "./data/$RUN_ID/schema_${EXPLORE_NAME}.json" --query "$INLINE_QUERIES_ARRAY_JSON"
   lkr --base-url="$BASE_URL" --dev tools lookml push "./data/$RUN_ID/lookml" --project-id="$PROJECT_ID" --no-reset --only-changed
