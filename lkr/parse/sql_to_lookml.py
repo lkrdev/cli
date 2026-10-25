@@ -1511,6 +1511,14 @@ def _match_model_views(
     }
     non_join_units: set[tuple[str, str]] = set()
 
+    def _ext_refs(plist: list[_FieldProperty], own: set[str]) -> set[str]:
+        return {
+            r.split(".", 1)[0].lower()
+            for p in plist
+            for r in p.refs
+            if "." in r and r.split(".", 1)[0].lower() not in own
+        }
+
     for sql_tbl, raw_table_str, view_name, view_obj, dt_col_pair in matched_sources:
         self_names = self_names_by_view[view_name]
         pks = _view_pk_columns(view_obj)
@@ -1583,19 +1591,12 @@ def _match_model_views(
                     if view_name not in direct_views:
                         direct_views[view_name] = raw_table_str
                         view_order.append(view_name)
-                    refs = fp_obj.refs if fp_obj else []
-                    ext_aliases = {
-                        r.split(".", 1)[0].lower()
-                        for r in refs
-                        if "." in r
-                        and r.split(".", 1)[0].lower() not in self_names
-                    }
                     prop_path = f"view.{view_name}.{ftype}.{fname}.{sub_key}"
                     minfo = _FieldMatchInfo(
                         sql_table=raw_table_str,
                         sql_column=col_name,
                         via=[],
-                        ext_aliases=ext_aliases,
+                        ext_aliases=_ext_refs(props, self_names),
                         matched_property=m_prop,
                         property_path=prop_path,
                         expression=expr_val,
@@ -1645,20 +1646,17 @@ def _match_model_views(
                     _field_matches_column(ndt_col, c_fname, getattr(c_fobj, "sql", None), c_ftype, tfs)
                     for ndt_col in matched_ndt_cols
                 )
+                fp_list = _get_field_properties(c_ftype, c_fname, c_fobj)
+                all_own_ext = _ext_refs(fp_list, cand_self)
                 if hits_ndt:
                     sub_key = "type" if is_ndt_cnt else "sql"
                     m_prop = f"{c_ftype}.{sub_key}"
                     if not any(x.sql_column == src_col and x.matched_property == m_prop for x in existing):
-                        own_ext = {
-                            r.split(".", 1)[0].lower()
-                            for r in _extract_lookml_refs(getattr(c_fobj, "sql", None))
-                            if "." in r and r.split(".", 1)[0].lower() not in cand_self
-                        }
                         minfo = _FieldMatchInfo(
                             sql_table=src_tbl,
                             sql_column=src_col,
                             via=[*src_via, f"{src_view}.{src_fname}"],
-                            ext_aliases=own_ext,
+                            ext_aliases=all_own_ext,
                             matched_property=m_prop,
                             property_path=f"view.{cand_view}.{c_ftype}.{c_fname}.{sub_key}",
                             expression="count"
@@ -1671,7 +1669,7 @@ def _match_model_views(
                         if cand_view not in direct_views and cand_view not in view_order:
                             view_order.append(cand_view)
 
-                for fp in _get_field_properties(c_ftype, c_fname, c_fobj):
+                for fp in fp_list:
                     hits_ref = (
                         not getattr(c_fobj, "_sql_defaulted", False)
                         and bool(fp.refs)
@@ -1695,25 +1693,20 @@ def _match_model_views(
                         x.sql_column == src_col and x.matched_property == fp.prop_type
                         for x in existing
                     ):
-                            own_ext = {
-                                r.split(".", 1)[0].lower()
-                                for r in fp.refs
-                                if "." in r and r.split(".", 1)[0].lower() not in cand_self
-                            }
-                            minfo = _FieldMatchInfo(
-                                sql_table=src_tbl,
-                                sql_column=src_col,
-                                via=[*src_via, f"{src_view}.{src_fname}"],
-                                ext_aliases=src_ext | own_ext,
-                                matched_property=fp.prop_type,
-                                property_path=f"view.{cand_view}.{c_ftype}.{c_fname}.{fp.sub_key}",
-                                expression=fp.expr,
-                                sub_key=fp.sub_key,
-                            )
-                            matched_fields.setdefault(ckey, []).append(minfo)
-                            queue.append((cand_view, c_ftype, c_fname, minfo))
-                            if cand_view not in direct_views and cand_view not in view_order:
-                                view_order.append(cand_view)
+                        minfo = _FieldMatchInfo(
+                            sql_table=src_tbl,
+                            sql_column=src_col,
+                            via=[*src_via, f"{src_view}.{src_fname}"],
+                            ext_aliases=src_ext | all_own_ext,
+                            matched_property=fp.prop_type,
+                            property_path=f"view.{cand_view}.{c_ftype}.{c_fname}.{fp.sub_key}",
+                            expression=fp.expr,
+                            sub_key=fp.sub_key,
+                        )
+                        matched_fields.setdefault(ckey, []).append(minfo)
+                        queue.append((cand_view, c_ftype, c_fname, minfo))
+                        if cand_view not in direct_views and cand_view not in view_order:
+                            view_order.append(cand_view)
 
     results: list[LookmlViewMatch] = []
     for view_name in view_order:
@@ -1797,6 +1790,7 @@ def _match_model_views(
                         field_type=ftype,
                         field_name=fname,
                         lookml_type=getattr(fobj, "type", None) or None,
+                        timeframes=list(tfs) if tfs else None,
                         primary_key=bool(getattr(fobj, "primary_key", False)),
                         hidden=bool(
                             fobj.hidden
@@ -1808,6 +1802,7 @@ def _match_model_views(
                         property_path=minfo.property_path,
                         expression=minfo.expression,
                         via=minfo.via,
+                        ext_views={alias_to_view.get(a, a).lower() for a in minfo.ext_aliases},
                         file=loc.file,
                         line=loc.line,
                         end_line=loc.end_line,
@@ -3121,6 +3116,8 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
         "property_path",
         "matched_property",
         "end_line",
+        "raw_sql",
+        "usages",
     }
 
     def _prune(val: Any) -> Any:
@@ -3137,27 +3134,94 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
         return val
 
     seen_test_keys: set[tuple[Any, Any]] = set()
-    for q in data.get("queries") or []:
+    for qi, q in enumerate(data.get("queries") or []):
         if isinstance(pq := q.get("parsed_query"), dict):
-            pq.pop("raw_sql", None)
+            if pq.get("ctes"):
+                pq["ctes"] = [
+                    c["name"] for c in pq["ctes"] if isinstance(c, dict) and c.get("name")
+                ]
             for pj in pq.get("joins") or []:
                 if isinstance(pj, dict):
                     pj.pop("left_table", None)
                     pj.pop("right_table", None)
-        q.pop("usages", None)
+        rq = result.queries[qi]
+        q_views = {
+            vm.view_name.lower()
+            for vm in rq.views
+            if vm.sql_table_name or not any(fm.ext_views for fm in vm.fields)
+        }
+        bad_ext_fields = {
+            (vm.view_name, fm.field_type, fm.field_name)
+            for vm in rq.views
+            for fm in vm.fields
+            if not (fm.ext_views <= q_views)
+        }
+        kept_views: list[dict[str, Any]] = []
+        for vm in q.get("views") or []:
+            if vm.get("sql_table_name"):
+                vm.setdefault("unmodeled_db_columns", [])
+            dedup_fields: dict[tuple[Any, Any], dict[str, Any]] = {}
+            for fm in vm.get("fields") or []:
+                if (vm.get("view_name"), fm.get("field_type"), fm.get("field_name")) in bad_ext_fields:
+                    continue
+                if fm.get("hidden") and fm.get("via"):
+                    continue
+                for dup_key in ("explores", "tests", "aggregate_tables", "explore_queries", "usages"):
+                    fm.pop(dup_key, None)
+                fkey = (fm.get("field_type"), fm.get("field_name"))
+                if prev := dedup_fields.get(fkey):
+                    for v_ref in fm.get("via") or []:
+                        if v_ref not in prev.setdefault("via", []):
+                            prev["via"].append(v_ref)
+                else:
+                    dedup_fields[fkey] = fm
+            dedup_fields = {
+                fk: fv
+                for fk, fv in dedup_fields.items()
+                if not (
+                    fv.get("field_type") == "measure"
+                    and bool(fv.get("via"))
+                    and all(str(v).endswith(".count") for v in fv["via"])
+                    and len(_extract_lookml_refs(fv.get("sql"))) > 1
+                )
+            }
+            if not dedup_fields and not vm.get("sql_table_name"):
+                continue
+            vm["fields"] = list(dedup_fields.values())
+            kept_views.append(vm)
+        q["views"] = kept_views
+        kept_view_fields = {
+            (vm.get("view_name"), f.get("field_name"))
+            for vm in kept_views
+            for f in (vm.get("fields") or [])
+        }
         grouped_explores: dict[tuple[Any, ...], dict[str, Any]] = {}
+        kept_explore_fields: set[str] = set()
         for em in q.get("explores") or []:
+            fld = em.get("field")
+            if not fld or (em.get("view_name"), str(fld).split(".", 1)[-1]) not in kept_view_fields:
+                continue
+            kept_explore_fields.add(str(fld))
             ekey = (em.get("model_name"), em.get("explore_name"), em.get("view_alias"), em.get("join_name"))
             entry = grouped_explores.setdefault(
                 ekey, {**{k: v for k, v in em.items() if k != "field"}, "fields": []}
             )
-            if (fld := em.get("field")) and fld not in entry["fields"]:
+            if fld not in entry["fields"]:
                 entry["fields"].append(fld)
-        if grouped_explores:
-            q["explores"] = list(grouped_explores.values())
+        non_base_exps = {
+            (m, str(e)) for m, e, *_ in grouped_explores if not str(e or "").endswith("_base")
+        }
+        q["explores"] = [
+            v
+            for (m, e, *_), v in grouped_explores.items()
+            if not (str(e or "").endswith("_base") and (m, str(e)[:-5]) in non_base_exps)
+        ]
         if q.get("tests"):
             dedup_tests: list[dict[str, Any]] = []
             for tm in q["tests"]:
+                t_flds = tm.get("fields") or ([tm["field"]] if tm.get("field") else [])
+                if kept_explore_fields and not any(f in kept_explore_fields for f in t_flds):
+                    continue
                 tm.pop("field", None)
                 tm.pop("fields", None)
                 tkey = (tm.get("model_name"), tm.get("test_name"))
@@ -3209,36 +3273,4 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                 key=lambda eq: -len(eq.get("matched_fields") or []),
             )[:3]
         q["explore_queries"] = eqs
-        kept_views: list[dict[str, Any]] = []
-        for vm in q.get("views") or []:
-            if vm.get("sql_table_name"):
-                vm.setdefault("unmodeled_db_columns", [])
-            dedup_fields: dict[tuple[Any, Any], dict[str, Any]] = {}
-            for fm in vm.get("fields") or []:
-                if fm.get("hidden") and fm.get("via"):
-                    continue
-                for dup_key in ("explores", "tests", "aggregate_tables", "explore_queries", "usages"):
-                    fm.pop(dup_key, None)
-                fkey = (fm.get("field_type"), fm.get("field_name"))
-                if prev := dedup_fields.get(fkey):
-                    for v_ref in fm.get("via") or []:
-                        if v_ref not in prev.setdefault("via", []):
-                            prev["via"].append(v_ref)
-                else:
-                    dedup_fields[fkey] = fm
-            dedup_fields = {
-                fk: fv
-                for fk, fv in dedup_fields.items()
-                if not (
-                    fv.get("field_type") == "measure"
-                    and bool(fv.get("via"))
-                    and all(str(v).endswith(".count") for v in fv["via"])
-                    and len(_extract_lookml_refs(fv.get("sql"))) > 1
-                )
-            }
-            if not dedup_fields and not vm.get("sql_table_name"):
-                continue
-            vm["fields"] = list(dedup_fields.values())
-            kept_views.append(vm)
-        q["views"] = kept_views
     return _prune(data)

@@ -132,7 +132,7 @@ Escalate to Silver NDTs/SDTs or Gold specialty explores **only** when grain-chan
 
 ### Silver layer (`silver/`)
 
-- **Cross-view `*_fields` views (`silver/:view_a_:view_b_fields.view.lkml`):** Any dimension or measure whose dependency DAG touches multiple views goes into a dedicated view named by sorting the referenced view names alphabetically + `_fields` (e.g., `silver/order_items_users_fields.view.lkml`) and is bare-joined (`sql: ;;`, `relationship: one_to_one`) into the Silver Explore.
+- **Cross-view `*_fields` views (`silver/:view_a_:view_b_fields.view.lkml`):** Any dimension or measure whose dependency DAG touches multiple views goes into a dedicated view named by sorting the direct LookML view names referenced via `${view.field}` alphabetically + `_fields` (treating NDTs like `user_cohort_facts` as their own view name, e.g., `silver/order_items_user_cohort_facts_fields.view.lkml`), always declares a hidden `dimension: pk { primary_key: yes hidden: yes ... }`, and is bare-joined (`sql: ;;`, `relationship: one_to_one`) only onto Silver Explores whose grain preserves every referenced measure's standalone meaning.
 - **Silver derived views (`silver/:name.view.lkml`):**
   1. Consolidated entity-grain NDTs (`explore_source:`, ephemeral by default; `derived_column:` for post-`GROUP BY` windows; never write `GROUP BY` SDTs with `{{ measure._sql }}`).
   2. Pre-`GROUP BY` row-window or single-table CDC `QUALIFY` SDTs (`extends: [base_view]` using `FROM (${EXTENDED}) AS {{ _table }}` or `FROM ${base_view.SQL_TABLE_NAME} AS {{ _table }}`).

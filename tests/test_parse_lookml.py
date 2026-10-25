@@ -3911,11 +3911,19 @@ def test_compact_sql_to_lookml_ndt_count_extends_dedup_and_count_ratio_prune():
         "view: events {\n"
         "  sql_table_name: `proj.ds.events` ;;\n"
         "  dimension: id { primary_key: yes hidden: yes type: number sql: ${TABLE}.id ;; }\n"
+        "  dimension_group: created { type: time timeframes: [raw, year] sql: ${TABLE}.created_at ;; }\n"
         "  dimension: session_id { type: string sql: ${TABLE}.session_id ;; }\n"
         "  dimension: browser { type: string sql: ${TABLE}.browser ;; }\n"
         "  measure: count { type: count }\n"
         '  measure: ie_events { type: count filters: [browser: "IE"] }\n'
         "  measure: ie_share { type: number sql: 1.0 * ${ie_events} / NULLIF(${count}, 0) ;; }\n"
+        "}\n"
+        "view: orders {\n"
+        "  sql_table_name: `proj.ds.orders` ;;\n"
+        "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+        "}\n"
+        "view: events_orders_fields {\n"
+        '  measure: unord_events { type: count_distinct sql: ${events.session_id} ;; filters: [orders.id: "NULL"] }\n'
         "}\n"
         "explore: events_base {\n"
         "  hidden: yes\n"
@@ -3931,18 +3939,24 @@ def test_compact_sql_to_lookml_ndt_count_extends_dedup_and_count_ratio_prune():
         "  extends: [events_base]\n"
         "  view_name: events\n"
         "  join: session_facts { sql_on: ${events.session_id} = ${session_facts.session_id} ;; relationship: many_to_one }\n"
+        "  join: orders { sql_on: ${events.id} = ${orders.id} ;; relationship: many_to_one }\n"
+        "  join: events_orders_fields { sql: ;; relationship: one_to_one }\n"
         "}\n"
     )
-    sql = "SELECT COUNT(*) AS c FROM (SELECT session_id FROM `proj.ds.events` GROUP BY 1)"
+    sql = "WITH c1 AS (SELECT session_id, MAX(created_at) AS mc FROM `proj.ds.events` GROUP BY 1) SELECT COUNT(*) AS c FROM c1"
     res = CliRunner().invoke(
         app,
         ["parse", "sql-lookml-compare", "--sql", sql, "--lookml", lkml, "--offline", "--compact"],
     )
     q0 = json.loads(res.output)["queries"][0]
-    ev_flds = {f["field_name"] for f in q0["views"][0]["fields"]}
-    assert "ie_share" not in ev_flds
+    assert "raw_sql" not in q0 and q0["parsed_query"]["ctes"] == ["c1"]
+    assert [v["view_name"] for v in q0["views"]] == ["events", "session_facts"]
+    ev_by_name = {f["field_name"]: f for f in q0["views"][0]["fields"]}
+    assert "ie_share" not in ev_by_name
+    assert ev_by_name["created"]["timeframes"] == ["raw", "year"]
     sf_flds = {f["field_name"] for f in q0["views"][1]["fields"]}
     assert "count" in sf_flds
+    assert {e["explore_name"] for e in q0["explores"]} == {"events"}
     eqs = [eq for eq in q0["explore_queries"] if eq["query_name"] == "q_base"]
     assert len(eqs) == 1 and eqs[0]["explore_name"] == "events"
     assert eqs[0]["matched_fields"] == ["events.session_id", "events.count"]
