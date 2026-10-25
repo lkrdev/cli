@@ -450,21 +450,28 @@ def _extract_query_columns(
                 all_cols = list(opt_expr.find_all(exp.Column))
                 cte_names = {cte.alias_or_name.lower() for cte in ctes if cte.alias_or_name}
                 dead_col_ids: set[int] = set()
-                cte_simple_cols: dict[str, exp.Column | None] = {}
+                cte_simple_cols: dict[str, dict[str, exp.Column]] = {}
                 has_outer_star = bool(ctes) and any(
                     _get_star(p) is not None
                     for s in opt_expr.find_all(exp.Select)
                     if not s.find_ancestor(exp.CTE)
                     for p in s.selects
                 )
-                all_cte_col_ids: set[int] = set()
-                for cte in ctes:
+                cte_col_sets = [{id(c) for c in cte.find_all(exp.Column)} for cte in ctes]
+                outer_col_ids = {id(c) for c in all_cols if not c.find_ancestor(exp.CTE)}
+                for idx in range(len(ctes) - 1, -1, -1):
+                    cte = ctes[idx]
                     c_sel = _main_select(cte.this) if cte.alias_or_name and cte.this is not None else None
                     if c_sel is None:
                         continue
-                    in_cte_ids = {id(c) for c in cte.find_all(exp.Column)}
-                    all_cte_col_ids |= in_cte_ids
-                    ext_names = {c.name.lower() for c in all_cols if id(c) not in in_cte_ids and c.name}
+                    cte_name = cte.alias_or_name.lower()
+                    cte_simple_cols[cte_name] = {}
+                    downstream_ids = outer_col_ids.union(*cte_col_sets[idx + 1 :])
+                    ext_names = {
+                        c.name.lower()
+                        for c in all_cols
+                        if id(c) in downstream_ids and id(c) not in dead_col_ids and c.name
+                    }
                     can_prune = not has_outer_star and not c_sel.args.get("group") and not c_sel.args.get("distinct")
                     for proj in c_sel.selects:
                         if _get_star(proj) is not None or not proj.alias_or_name:
@@ -475,12 +482,11 @@ def _extract_query_columns(
                             continue
                         inner = proj.this if isinstance(proj, exp.Alias) else proj
                         if isinstance(inner, exp.Column) and inner.name and not isinstance(inner.this, exp.Star):
-                            cte_simple_cols[p_name] = None if p_name in cte_simple_cols else inner
-                cte_aliases = set(cte_names) | {
-                    (tbl.alias or tbl.name).lower()
-                    for tbl in opt_expr.find_all(exp.Table)
-                    if cte_names and tbl.name and tbl.name.lower() in cte_names
-                }
+                            cte_simple_cols[cte_name][p_name] = inner
+                cte_alias_map: dict[str, set[str]] = {n: {n} for n in cte_names}
+                for tbl in opt_expr.find_all(exp.Table):
+                    if cte_names and tbl.name and tbl.name.lower() in cte_names:
+                        cte_alias_map.setdefault((tbl.alias or tbl.name).lower(), set()).add(tbl.name.lower())
                 on_col_ids = (
                     {
                         id(c)
@@ -492,7 +498,8 @@ def _extract_query_columns(
                     else set()
                 )
                 cnt_col_ids: set[int] = set()
-                cnt_cte_targets: dict[str, list[exp.Column]] = {}
+                cnt_chains: list[tuple[set[str], list[exp.Column]]] = []
+                traced_chain_ids: set[int] = set()
                 for cnt_expr in opt_expr.find_all(exp.Count):
                     if isinstance(cnt_expr.parent, exp.Filter):
                         continue
@@ -522,24 +529,66 @@ def _extract_query_columns(
                             and id(c) not in dead_col_ids
                         ):
                             cnt_col_ids.add(id(c))
-                            c_low = c.name.lower()
-                            src_c = cte_simple_cols.get(c_low)
-                            if (not c.table or c.table.lower() in cte_aliases) and src_c is not None:
-                                cnt_cte_targets.setdefault(c_low, []).append(src_c)
-                                _add(src_c.table or None, f"COUNT({src_c.name})")
+                            curr_c = c
+                            chain: list[exp.Column] = []
+                            seen_ids: set[int] = {id(c)}
+                            if not c.table or c.table.lower() in cte_alias_map:
+                                while True:
+                                    t_low = (curr_c.table or "").lower()
+                                    c_low = curr_c.name.lower()
+                                    sel = curr_c.find_ancestor(exp.Select)
+                                    sel_tbls = (
+                                        [
+                                            t
+                                            for t in sel.find_all(exp.Table)
+                                            if t.find_ancestor(exp.Select) is sel and t.name
+                                        ]
+                                        if sel is not None
+                                        else []
+                                    )
+                                    if t_low:
+                                        cand_ctes = {
+                                            t.name.lower()
+                                            for t in sel_tbls
+                                            if (t.alias or t.name).lower() == t_low
+                                        } or cte_alias_map.get(t_low, set())
+                                    else:
+                                        cand_ctes = (
+                                            {t.name.lower() for t in sel_tbls}
+                                            if sel_tbls
+                                            else set(cte_simple_cols)
+                                        )
+                                    cands = [
+                                        cte_simple_cols[cn][c_low]
+                                        for cn in cand_ctes
+                                        if cn in cte_simple_cols and c_low in cte_simple_cols[cn]
+                                    ]
+                                    if len(cands) == 1 and id(cands[0]) not in seen_ids:
+                                        curr_c = cands[0]
+                                        seen_ids.add(id(curr_c))
+                                        chain.append(curr_c)
+                                        continue
+                                    break
+                            if chain:
+                                aliases = {c.name.lower()} | {sc.name.lower() for sc in chain[:-1]}
+                                cnt_chains.append((aliases, chain))
+                                traced_chain_ids.update(id(sc) for sc in chain)
+                                _add(curr_c.table or None, f"COUNT({curr_c.name})")
                             else:
                                 _add(c.table or None, f"COUNT({c.name})")
-                non_cnt_ext = {
+                non_cnt_cte_refs = {
                     ce.name.lower()
                     for ce in all_cols
-                    if id(ce) not in all_cte_col_ids
+                    if id(ce) not in traced_chain_ids
                     and id(ce) not in on_col_ids
                     and id(ce) not in cnt_col_ids
+                    and id(ce) not in dead_col_ids
                     and ce.name
+                    and (not ce.table or ce.table.lower() in cte_alias_map)
                 }
-                for c_low, src_cols in cnt_cte_targets.items():
-                    if c_low not in non_cnt_ext:
-                        cnt_col_ids.update(id(sc) for sc in src_cols)
+                for aliases, chain in cnt_chains:
+                    suppress = chain[:-1] if (aliases & non_cnt_cte_refs) else chain
+                    cnt_col_ids.update(id(sc) for sc in suppress)
                 for col_expr in all_cols:
                     if (
                         id(col_expr) not in on_col_ids

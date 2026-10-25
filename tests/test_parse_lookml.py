@@ -4169,8 +4169,9 @@ def test_cte_dead_projection_pruning_count_alias_and_unnest_virtual_view():
         "}\n"
     )
     sql = (
-        "WITH parsed AS (SELECT id AS event_id, session_id, user_id, event_type, uri, "
-        "REGEXP_EXTRACT(uri, r'^/department/([^/?#]+)') AS uri_dept FROM `proj.ds.events`) "
+        "WITH raw_e AS (SELECT id AS event_id, session_id, user_id, event_type, uri FROM `proj.ds.events`), "
+        "parsed AS (SELECT event_id, session_id, user_id, event_type, "
+        "REGEXP_EXTRACT(uri, r'^/department/([^/?#]+)') AS uri_dept FROM raw_e) "
         "SELECT event_type, COUNT(event_id) AS total_events, COUNTIF(uri_dept IS NOT NULL) AS dept_cnt "
         "FROM parsed GROUP BY 1; "
         "WITH parsed AS (SELECT uri, event_type, session_id FROM `proj.ds.events`) "
