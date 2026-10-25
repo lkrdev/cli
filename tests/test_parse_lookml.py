@@ -4054,3 +4054,73 @@ def test_compact_sql_to_lookml_pk_count_join_filter_and_precedent_pruning():
     assert [p["target_view"] for p in miss_orders.get("precedents", [])] == ["orders"]
 
 
+def test_cross_view_fields_exact_query_coverage_and_explore_oriented_inferred_rel():
+    import json
+
+    from typer.testing import CliRunner
+
+    from lkr.main import app
+
+    lkml = (
+        'connection: "bq"\n'
+        "view: Users {\n"
+        "  sql_table_name: `proj.ds.users` ;;\n"
+        "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+        "  dimension: age { type: number sql: ${TABLE}.age ;; }\n"
+        "  dimension: latitude { type: number sql: ${TABLE}.latitude ;; }\n"
+        "  dimension: abs_latitude { type: number sql: ABS(${latitude}) ;; }\n"
+        "  measure: avg_abs_latitude { type: average sql: ${abs_latitude} ;; }\n"
+        "}\n"
+        "view: order_items {\n"
+        "  sql_table_name: `proj.ds.order_items` ;;\n"
+        "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+        "  dimension: user_id { type: number sql: ${TABLE}.user_id ;; }\n"
+        "  dimension: sale_price { type: number sql: ${TABLE}.sale_price ;; }\n"
+        "  dimension_group: created { type: time timeframes: [raw, hour] sql: ${TABLE}.created_at ;; }\n"
+        "  measure: count { type: count }\n"
+        '  measure: night_revenue { type: sum sql: ${sale_price} ;; filters: [created_hour: "0"] }\n'
+        "  measure: night_share { type: number sql: 1.0 * ${night_revenue} / NULLIF(${count}, 0) ;; }\n"
+        "}\n"
+        "view: order_items_users_fields {\n"
+        "  measure: avg_weighted_age { type: average sql: ${users.age} ;; }\n"
+        "  measure: lat_price_corr { type: number sql: CORR(${users.abs_latitude}, ${order_items.sale_price}) ;; }\n"
+        "  measure: age_price_corr { type: number sql: CORR(${users.age}, ${order_items.sale_price}) ;; }\n"
+        "}\n"
+        "explore: order_items {\n"
+        "  view_name: order_items\n"
+        "  join: users { from: Users type: left_outer relationship: many_to_one sql_on: ${order_items.user_id} = ${users.id} ;; }\n"
+        "  join: order_items_users_fields { sql: ;; relationship: one_to_one }\n"
+        "  query: lat_age_corr {\n"
+        '    measures: [order_items_users_fields.lat_price_corr, order_items_users_fields.age_price_corr, users.avg_abs_latitude]\n'
+        '    filters: [users.id: "NOT NULL"]\n'
+        "  }\n"
+        "  query: midnight_owl { measures: [order_items.count, order_items.night_revenue, order_items.night_share] }\n"
+        "}\n"
+        "explore: items_unjoined { view_name: order_items }\n"
+    )
+    sql = (
+        "SELECT ROUND(CORR(ABS(u.latitude), oi.sale_price), 4) AS lat_corr, "
+        "ROUND(CORR(u.age, oi.sale_price), 4) AS age_corr, "
+        "ROUND(AVG(ABS(u.latitude)), 2) AS avg_lat "
+        "FROM `proj.ds.users` u INNER JOIN `proj.ds.order_items` oi ON u.id = oi.user_id; "
+        "SELECT COUNT(id) AS cnt, SUM(sale_price) AS rev FROM `proj.ds.order_items`"
+    )
+    res = CliRunner().invoke(
+        app,
+        ["parse", "sql-lookml-compare", "--sql", sql, "--lookml", lkml, "--offline", "--compact"],
+    )
+    assert res.exit_code == 0, res.output
+    q0, q1 = json.loads(res.output)["queries"]
+    xf_view = next(v for v in q0["views"] if v["view_name"] == "order_items_users_fields")
+    assert "sql_table" not in xf_view
+    assert [(eq["query_name"], eq["coverage"]) for eq in q0["explore_queries"]] == [("lat_age_corr", "exact")]
+    oi_ja = next(j for j in q0["join_analysis"] if j["explore_name"] == "order_items")
+    assert oi_ja["relationship"] == "many_to_one" and oi_ja["inferred_relationship"] == "many_to_one"
+    assert "safety_warnings" not in oi_ja
+    assert "explore_queries" not in q1
+
+    from lkr.parse import parse_sql_to_lookml
+
+    raw_jas = parse_sql_to_lookml(sql=sql.split(";")[0], lookml=lkml, offline=True).queries[0].join_analysis
+    unjoined_ja = next(j for j in raw_jas if j.explore_name == "items_unjoined")
+    assert unjoined_ja.status == "missing_join" and unjoined_ja.inferred_relationship == "many_to_one"

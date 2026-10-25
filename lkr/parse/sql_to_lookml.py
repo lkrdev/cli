@@ -1758,7 +1758,7 @@ def _match_model_views(
         pfx, fld = r.split(".", 1)
         pfx_l = pfx.lower()
         return (
-            cur_view.lower() if pfx_l in self_set else alias_to_view.get(pfx_l, pfx_l),
+            cur_view.lower() if pfx_l in self_set else alias_to_view.get(pfx_l, pfx_l).lower(),
             fld.lower(),
         )
 
@@ -1805,7 +1805,6 @@ def _match_model_views(
                 sql_tbl_loc = _make_location(fpath, st_pos["$p"])
 
         v_fields: list[LookmlFieldMatch] = []
-        v_sql_tbl = direct_views.get(view_name, "")
         for ftype, fname, fobj in _iter_view_fields(assembled_view):
             key = (view_name, ftype, fname)
             if key not in matched_fields:
@@ -1822,8 +1821,6 @@ def _match_model_views(
                 else False
             )
             for minfo in matched_fields[key]:
-                if not v_sql_tbl:
-                    v_sql_tbl = minfo.sql_table
 
                 f_loc: LookmlSourceLocation | None = None
                 for fpath, _, p_dict in chain:
@@ -1913,6 +1910,8 @@ def _match_model_views(
 
         db_cols = db_cols_by_view.get(view_name) if view_name in direct_views else None
         v_cols = set(view_cols_by_name.get(view_name, {}))
+        v_tbls = {u.sql_table for f in v_fields for u in f.usages if u.sql_table}
+        v_sql_tbl = direct_views.get(view_name) or (next(iter(v_tbls)) if len(v_tbls) == 1 else "")
         results.append(
             LookmlViewMatch(
                 sql_table=v_sql_tbl,
@@ -2019,7 +2018,9 @@ def _match_model_views(
                     return True, vm.sql_table, col, cv, None
         for v_name, vm in matched_vms.items():
             tbl_clean = vm.sql_table.rsplit(".", 1)[-1].lower()
-            if re.search(rf"\b{re.escape(tbl_clean)}\b", expr, re.IGNORECASE) or re.search(rf"\b{re.escape(v_name)}\b", expr, re.IGNORECASE):
+            if (
+                tbl_clean and re.search(rf"\b{re.escape(tbl_clean)}\b", expr, re.IGNORECASE)
+            ) or re.search(rf"\b{re.escape(v_name)}\b", expr, re.IGNORECASE):
                 for col_name, fm in matched_cols_by_view.get(v_name, {}).items():
                     if re.search(rf"\b{re.escape(col_name)}\b", expr, re.IGNORECASE):
                         return True, vm.sql_table, fm.sql_column, v_name, fm.field_name
@@ -2028,6 +2029,11 @@ def _match_model_views(
                 return True, vm.sql_table, None, v_name, None
         return False, None, None, None, None
 
+    def _fm_tbl_low(vm: LookmlViewMatch, fm: LookmlFieldMatch) -> str:
+        return (
+            fm.usages[0].sql_table if fm.usages and fm.usages[0].sql_table else vm.sql_table
+        ).lower()
+
     def _unit_key(t_low: str, col: str) -> tuple[str, str]:
         return (
             ("*", "count(*)")
@@ -2035,11 +2041,13 @@ def _match_model_views(
             else (t_low, "count(*)" if col.startswith("COUNT(") else col.lower())
         )
 
+    valid_fkeys = _valid_field_keys(results)
     query_canon_by_unit: dict[tuple[str, str], str] = {}
     for vm in results:
-        t_low = vm.sql_table.lower()
         for fm in vm.fields:
-            uk = _unit_key(t_low, fm.sql_column)
+            if (vm.view_name, fm.field_type, fm.field_name) not in valid_fkeys:
+                continue
+            uk = _unit_key(_fm_tbl_low(vm, fm), fm.sql_column)
             if (not non_join_units or uk in non_join_units) and (
                 not fm.via or uk not in query_canon_by_unit
             ):
@@ -2292,8 +2300,10 @@ def _match_model_views(
             ] = []
             canon_by_unit: dict[tuple[str, str], str] = dict(query_canon_by_unit)
             for vm in results:
-                f_sql_tbl_low = vm.sql_table.lower()
                 for fm in vm.fields:
+                    if (vm.view_name, fm.field_type, fm.field_name) not in valid_fkeys:
+                        continue
+                    f_sql_tbl_low = _fm_tbl_low(vm, fm)
                     uk = _unit_key(f_sql_tbl_low, fm.sql_column)
                     fobj = getattr(model_views[vm.view_name], fm.field_type)[
                         fm.field_name
@@ -2895,25 +2905,18 @@ def _analyze_query_joins(
                     else "type_mismatch"
                 )
                 if inferred_rel is None:
-                    inferred_rel = (
-                        _FLIP_REL.get(matched_j.relationship, matched_j.relationship)
-                        if matched_inverted
-                        else matched_j.relationship
-                    )
+                    inferred_rel = matched_j.relationship
                 else:
-                    expected_explore_rel = (
-                        _FLIP_REL.get(inferred_rel, inferred_rel)
-                        if matched_inverted
-                        else inferred_rel
-                    )
-                    if expected_explore_rel != matched_j.relationship:
+                    if matched_inverted:
+                        inferred_rel = _FLIP_REL.get(inferred_rel, inferred_rel)
+                    if inferred_rel != matched_j.relationship:
                         safety_warnings.append(
                             JoinSafetyWarning(
                                 rule="relationship_mismatch",
                                 severity="warning",
                                 message=(
                                     f"Join '{matched_j.name}' declares relationship '{matched_j.relationship}', "
-                                    f"but primary keys infer '{expected_explore_rel}'"
+                                    f"but primary keys infer '{inferred_rel}'"
                                 ),
                                 joins=[matched_j.name],
                             )
@@ -3029,6 +3032,8 @@ def _analyze_query_joins(
                 if inferred_rel is None and both_precedents:
                     rel0 = both_precedents[0].relationship
                     inferred_rel = _FLIP_REL.get(rel0, rel0) if (rel0 and both_inverted[0]) else rel0
+                if inferred_rel and right_present and not left_present:
+                    inferred_rel = _FLIP_REL.get(inferred_rel, inferred_rel)
 
                 results.append(
                     ExploreJoinComparison(
@@ -3231,6 +3236,39 @@ def parse_sql_to_lookml(
     )
 
 
+def _valid_field_keys(views: list[LookmlViewMatch]) -> set[tuple[str, str, str]]:
+    q_views = {vm.view_name.lower() for vm in views}
+    valid_fms = [
+        (vm.view_name, fm)
+        for vm in views
+        for fm in vm.fields
+        if (fm.ext_views <= q_views) and not (fm.via and fm.unmatched_filter)
+    ]
+    while True:
+        avail_refs = {
+            (vn.lower(), n)
+            for vn, fm in valid_fms
+            for n in (
+                fm.field_name.lower(),
+                *(f"{fm.field_name}_{tf}".lower() for tf in (fm.timeframes or ())),
+            )
+        }
+        nxt_fms = [
+            (vn, fm)
+            for vn, fm in valid_fms
+            if not (
+                fm.field_type == "measure"
+                and fm.via
+                and fm.dep_fields
+                and not ({(v.lower(), f.lower()) for v, f in fm.dep_fields} <= avail_refs)
+            )
+        ]
+        if len(nxt_fms) == len(valid_fms):
+            break
+        valid_fms = nxt_fms
+    return {(vn, fm.field_type, fm.field_name) for vn, fm in valid_fms}
+
+
 def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
     """Serialize SqlToLookmlResult without duplicate per-field cross-refs, 0-indexed positions, or empty defaults."""
     data = result.model_dump(by_alias=True, exclude_none=True, exclude_defaults=True)
@@ -3253,10 +3291,10 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                 for k, v in val.items()
                 if k not in drop_keys
                 and not (k == "expression" and v == val.get("sql"))
-                and ((pv := _prune(v)) not in (None, [], {}) or k in ("queries", "unmodeled_db_columns"))
+                and ((pv := _prune(v)) not in (None, "", [], {}) or k in ("queries", "unmodeled_db_columns"))
             }
         if isinstance(val, list):
-            return [px for x in val if (px := _prune(x)) not in (None, [], {})]
+            return [px for x in val if (px := _prune(x)) not in (None, "", [], {})]
         return val
 
     seen_test_keys: set[tuple[Any, Any]] = set()
@@ -3270,29 +3308,7 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                 if isinstance(pj, dict):
                     pj.pop("left_table", None)
                     pj.pop("right_table", None)
-        rq = result.queries[qi]
-        q_views = {vm.view_name.lower() for vm in rq.views}
-        valid_fms = [
-            (vm.view_name, fm)
-            for vm in rq.views
-            for fm in vm.fields
-            if (fm.ext_views <= q_views) and not (fm.via and fm.unmatched_filter)
-        ]
-        while True:
-            avail_refs = {
-                (vn.lower(), n)
-                for vn, fm in valid_fms
-                for n in (fm.field_name.lower(), *(f"{fm.field_name}_{tf}".lower() for tf in (fm.timeframes or ())))
-            }
-            nxt_fms = [
-                (vn, fm)
-                for vn, fm in valid_fms
-                if not (fm.field_type == "measure" and fm.via and fm.dep_fields and not (fm.dep_fields <= avail_refs))
-            ]
-            if len(nxt_fms) == len(valid_fms):
-                break
-            valid_fms = nxt_fms
-        keep_fkeys = {(vn, fm.field_type, fm.field_name) for vn, fm in valid_fms}
+        keep_fkeys = _valid_field_keys(result.queries[qi].views)
         kept_views: list[dict[str, Any]] = []
         for vm in q.get("views") or []:
             if vm.get("sql_table_name"):
