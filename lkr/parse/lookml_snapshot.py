@@ -95,32 +95,50 @@ def _find_position(
     matched_file = f"{file_key}.lkml" if file_key and not file_key.endswith(".lkml") else (file_key or "unknown.lkml")
     matched_line = 1
 
-    # Look up in pos_files (refinements override base declarations)
-    target_files = (
-        [matched_file]
-        if matched_file in pos_files
-        else sorted(pos_files.keys(), key=lambda fn: (fn.endswith(".refinement"), fn))
+    # Look up in pos_files (stem-filtered fast path; refinements override base declarations)
+    clean_key = (file_key or "").removesuffix(".lkml")
+    base_stem = clean_key.rsplit("/", 1)[-1].split(".", 1)[0]
+
+    def _matches_stem(fn: str) -> bool:
+        return fn == clean_key or (
+            bool(base_stem) and fn.rsplit("/", 1)[-1].split(".", 1)[0] == base_stem
+        )
+
+    fast_files = sorted(
+        (fn for fn in pos_files if _matches_stem(fn)),
+        key=lambda fn: (fn.endswith(".refinement"), fn),
     )
-    for f_name in target_files:
-        curr = pos_files.get(f_name)
-        if not isinstance(curr, dict):
-            continue
-        found = True
-        for k in keys:
-            if isinstance(curr, dict) and f"+{k}" in curr:
-                curr = curr[f"+{k}"]
-                if isinstance(curr, list) and curr:
-                    curr = curr[-1]
-            elif isinstance(curr, dict) and str(k) in curr:
-                curr = curr[str(k)]
-            else:
-                found = False
-                break
-        if found and isinstance(curr, dict) and "$p" in curr:
-            raw_p = curr["$p"]
-            if isinstance(raw_p, (list, tuple)) and len(raw_p) >= 2:
-                matched_line = int(raw_p[0]) + 1
-                matched_file = f_name if f_name.endswith(".lkml") else f"{f_name}.lkml"
+    fallback_files = sorted(
+        (fn for fn in pos_files if not _matches_stem(fn)),
+        key=lambda fn: (fn.endswith(".refinement"), fn),
+    )
+    for group in (fast_files, fallback_files):
+        matched_in_group = False
+        for f_name in group:
+            curr = pos_files.get(f_name)
+            if not isinstance(curr, dict):
+                continue
+            found = True
+            for k in keys:
+                if isinstance(curr, dict) and f"+{k}" in curr:
+                    curr = curr[f"+{k}"]
+                    if isinstance(curr, list) and curr:
+                        curr = curr[-1]
+                elif isinstance(curr, dict) and str(k) in curr:
+                    curr = curr[str(k)]
+                else:
+                    found = False
+                    break
+            if found and isinstance(curr, dict) and "$p" in curr:
+                raw_p = curr["$p"]
+                if isinstance(raw_p, (list, tuple)) and len(raw_p) >= 2:
+                    matched_line = int(raw_p[0]) + 1
+                    matched_file = (
+                        f_name if f_name.endswith(".lkml") else f"{f_name}.lkml"
+                    )
+                    matched_in_group = True
+        if matched_in_group:
+            break
 
     return (matched_file, matched_line)
 

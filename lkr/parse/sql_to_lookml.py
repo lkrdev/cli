@@ -3083,7 +3083,9 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                 if k != "position"
                 and ((pv := _prune(v)) not in (None, [], {}) or k in ("queries", "unmodeled_db_columns"))
             }
-        return [_prune(x) for x in val] if isinstance(val, list) else val
+        if isinstance(val, list):
+            return [px for x in val if (px := _prune(x)) not in (None, [], {})]
+        return val
 
     for q in data.get("queries") or []:
         if isinstance(q.get("parsed_query"), dict):
