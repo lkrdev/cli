@@ -2151,15 +2151,15 @@ def _match_model_views(
             ] = []
             canon_by_unit: dict[tuple[str, str], str] = {}
             for vm in results:
+                f_sql_tbl_low = vm.sql_table.lower()
                 for fm in vm.fields:
-                    f_sql_tbl = vm.sql_table
                     col_name = fm.sql_column
                     uk = (
                         ("*", "count(*)")
                         if col_name == "COUNT(*)"
-                        else (f_sql_tbl.lower(), "count(*)")
+                        else (f_sql_tbl_low, "count(*)")
                         if col_name.startswith("COUNT(")
-                        else (f_sql_tbl.lower(), col_name.lower())
+                        else (f_sql_tbl_low, col_name.lower())
                     )
                     fobj = getattr(model_views[vm.view_name], fm.field_type)[
                         fm.field_name
@@ -2183,7 +2183,7 @@ def _match_model_views(
                             }
                         exp_entries.append((vm, fm, em, uk, cands))
                         if fm.field_type == "measure" and getattr(fobj, "type", None) == "count":
-                            for cnt_uk in (("*", "count(*)"), (f_sql_tbl.lower(), "count(*)")):
+                            for cnt_uk in (("*", "count(*)"), (f_sql_tbl_low, "count(*)")):
                                 if uk != cnt_uk and cnt_uk in non_join_units:
                                     exp_entries.append((vm, fm, em, cnt_uk, cands))
                         if (not non_join_units or uk in non_join_units) and (
