@@ -3480,9 +3480,11 @@ def test_iter3_value_format_validation_compact_explores_and_diff_tests(tmp_path:
     (tmp_path / "orders.view.lkml").write_text(
         "view: orders {\n"
         "  sql_table_name: `proj.ds.orders` ;;\n"
+        "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
         "  dimension: status { type: string sql: ${TABLE}.status ;; }\n"
         "  dimension: sale_price { type: number sql: ${TABLE}.sale_price ;; }\n"
         "  measure: count { type: count }\n"
+        '  measure: cancelled_orders { type: count filters: [status: "Cancelled"] }\n'
         "  measure: ratio_ok { type: number sql: ${sale_price} ;; value_format_name: decimal_3 }\n"
         "}\n",
         encoding="utf-8",
@@ -3493,6 +3495,7 @@ def test_iter3_value_format_validation_compact_explores_and_diff_tests(tmp_path:
         "explore: orders {\n"
         "  query: q_exact { dimensions: [status] measures: [count, ratio_ok] }\n"
         "  query: q_sibling { measures: [count] }\n"
+        "  query: q_remorse { measures: [cancelled_orders] }\n"
         "}\n",
         encoding="utf-8",
     )
@@ -3503,24 +3506,31 @@ def test_iter3_value_format_validation_compact_explores_and_diff_tests(tmp_path:
         == 0
     )
 
-    comp = json.loads(
+    comp_qs = json.loads(
         runner.invoke(
             app,
             [
                 "parse",
                 "sql-lookml-compare",
                 "--sql",
-                "SELECT status, COUNT(*) AS c, SUM(sale_price) AS s FROM `proj.ds.orders` GROUP BY 1",
+                (
+                    "SELECT status, COUNT(*) AS c, SUM(sale_price) AS s FROM `proj.ds.orders` GROUP BY 1; "
+                    "SELECT COUNT(id) AS c FROM `proj.ds.orders` WHERE status = 'Cancelled'"
+                ),
                 "--path",
                 str(tmp_path),
                 "--offline",
                 "--compact",
             ],
         ).output
-    )["queries"][0]
+    )["queries"]
+    comp, comp_remorse = comp_qs[0], comp_qs[1]
     assert len(comp["explores"]) == 1
     assert set(comp["explores"][0]["fields"]) >= {"orders.status", "orders.count"}
     assert [eq["query_name"] for eq in comp["explore_queries"]] == ["q_exact"]
+    assert [(eq["query_name"], eq["coverage"]) for eq in comp_remorse["explore_queries"]] == [
+        ("q_remorse", "exact")
+    ]
 
     bad_dir = tmp_path / "bad"
     bad_dir.mkdir()

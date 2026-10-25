@@ -1,6 +1,6 @@
 # Working with large tables and partitioning (`large_tables_and_partitioning`)
 
-This category (`large_tables_and_partitioning`) documents partition minimum dates and clustering keys in `bronze/:table.refinement.lkml`, enforces mandatory `always_filter:` guards in `bronze/explores/:table_base.explore.lkml` (`extension: required`), inherits those guards in `silver/explores/:name.explore.lkml` (`extends: [table_base]`), and isolates `aggregate_table` materializations in `gold/explores/:name.explore.lkml`. Changes use Tier 2 batch confirmation.
+This category (`large_tables_and_partitioning`) documents partition minimum dates and clustering keys in `bronze/:table.refinement.lkml`, enforces mandatory `always_filter:` guards directly in `bronze/explores/:table.explore.lkml` (`hidden: no` while unjoined; detach `:table_base.explore.lkml` with `hidden: yes` + `silver/explores/:name.explore.lkml` `extends: [:table_base]` only when cross-table joins, `*_fields`, or NDTs exist), and isolates `aggregate_table` materializations in `gold/explores/:name.explore.lkml`. Changes use Tier 2 batch confirmation.
 
 ## Tool categorization rule (`lkr parse`)
 
@@ -45,7 +45,7 @@ On clickstream, telemetry, and large fact tables, proactively set `suggestable: 
 
 ### Enforce `always_filter` in Bronze Explores whenever a table has a datetime partition
 
-Datetime partitioning is physical storage management. Leaving partition filters to Silver or user discretion causes queries to error out or trigger runaway scans. Define `bronze/explores/:table_base.explore.lkml` with `extension: required` and `view_name: :table`, and add `always_filter:` with a safe default window (such as `7 days` or `30 days`). The `silver/explores/:table.explore.lkml` file then declares `extends: [table_base]` and `view_name: :table`, guaranteeing every user-facing Explore is guarded without retyping boilerplate.
+Datetime partitioning is physical storage management. Enforce `always_filter:` (with a safe default window like `7 days` or `30 days`) directly on `bronze/explores/:table.explore.lkml` (`hidden: no`, `view_name: :table`) while unjoined. When cross-table joins, `*_fields`, or NDTs are needed, detach into `bronze/explores/:table_base.explore.lkml` (`hidden: yes`) and extend in `silver/explores/:table.explore.lkml` (`extends: [:table_base]`, `view_name: :table`)—never create joinless pass-through Silver explores.
 
 ### Use Gold aggregate awareness (`aggregate_table`) for executive rollups
 
@@ -114,12 +114,12 @@ view: +telemetry_events {
 ```
 
 ```lookml
-# File: bronze/explores/telemetry_events_base.explore.lkml
+# File: bronze/explores/telemetry_events.explore.lkml (unjoined: hidden: no; detach to telemetry_events_base + silver/explores/ ONLY when joins exist)
 include: "/bronze/telemetry_events.view.lkml"
 include: "/bronze/telemetry_events.refinement.lkml"
 
-explore: telemetry_events_base {
-  extension: required
+explore: telemetry_events {
+  hidden: no
   view_name: telemetry_events
 
   # Mandatory partition guard: prevents warehouse require_partition_filter errors
@@ -130,19 +130,8 @@ explore: telemetry_events_base {
 ```
 
 ```lookml
-# File: silver/explores/telemetry_events.explore.lkml
-include: "/bronze/explores/telemetry_events_base.explore.lkml"
-
-explore: telemetry_events {
-  extends: [telemetry_events_base]
-  view_name: telemetry_events
-  # Pure PK = FK joins live here cleanly
-}
-```
-
-```lookml
-# File: gold/explores/telemetry_events_daily_summary.explore.lkml
-include: "/silver/explores/telemetry_events.explore.lkml"
+# File: gold/explores/telemetry_events_daily_summary.explore.lkml (extends Silver explore when joined, or Bronze explore when single-table)
+include: "/bronze/explores/telemetry_events.explore.lkml"
 
 explore: telemetry_events_daily_summary {
   extends: [telemetry_events]
@@ -164,4 +153,4 @@ explore: telemetry_events_daily_summary {
 
 ## Architecture rules
 
-Partitioned tables are modeled directly off their physical timestamp or date `dimension_group` in Bronze (no redundant `_PARTITIONDATE` dimension and no `conditionally_filter:`). The `bronze/:table.refinement.lkml` file documents the minimum partition date and clustering columns in `description:` and header comments, and defines `APPROX_COUNT_DISTINCT(${field})` measures when needed. The `bronze/explores/:table_base.explore.lkml` (`extension: required`) file enforces `always_filter:`. When `lkr code-mode` is connected, query `INFORMATION_SCHEMA.PARTITIONS` to populate the minimum partition date in `bronze/:table.refinement.lkml`.
+Partitioned tables are modeled directly off their physical timestamp or date `dimension_group` in Bronze (no redundant `_PARTITIONDATE` dimension and no `conditionally_filter:`). `bronze/:table.refinement.lkml` documents the minimum partition date and clustering columns in `description:` and header comments and defines `APPROX_COUNT_DISTINCT(${field})` measures (`tags: ["non_additive"]`) when needed; `bronze/explores/:table.explore.lkml` (`hidden: no` until joined in Silver) enforces `always_filter:`.

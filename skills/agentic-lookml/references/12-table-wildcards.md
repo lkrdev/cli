@@ -1,6 +1,6 @@
 # Table wildcards and sharded tables (`table_wildcards`)
 
-This category (`table_wildcards`) consolidates date-sharded tables into a single wildcard Bronze view (`bronze/:prefix.view.lkml`), refines `_TABLE_SUFFIX` and its filter control in `bronze/:prefix.refinement.lkml`, enforces physical shard pruning in `bronze/explores/:prefix_base.explore.lkml` (`extension: required`), and extends that base explore in `silver/explores/:prefix.explore.lkml` (`extends: [prefix_base]`). Changes use Tier 2 batch confirmation.
+This category (`table_wildcards`) consolidates sharded tables into a single wildcard Bronze view (`bronze/:prefix.view.lkml`), refines `_TABLE_SUFFIX` and its filter control in `bronze/:prefix.refinement.lkml`, and enforces physical shard pruning via `always_filter:` + Liquid `sql_always_where:` directly in `bronze/explores/:prefix.explore.lkml` (`hidden: no` while unjoined; detach into `:prefix_base.explore.lkml` with `hidden: yes` + `silver/explores/:prefix.explore.lkml` `extends: [:prefix_base]` only when cross-table joins, `*_fields`, or NDTs exist). Changes use Tier 2 batch confirmation.
 
 ## Tool categorization rule (`lkr parse`)
 
@@ -32,14 +32,13 @@ GROUP BY 1, 2
 
 ### Wildcard pruning is a Bronze layer activity (the Liquid exception)
 
-Wildcard table pruning is physical storage management, not business logic. Leaving wildcard pruning to Silver or Gold exposes the warehouse to accidental multi-terabyte scans if an analyst builds an Explore without guards. Wildcard pruning therefore lives in Bronze, and the Liquid required to prune `_TABLE_SUFFIX` in `bronze/explores/:prefix_base.explore.lkml` is the sole sanctioned exception to the rule against Liquid outside Gold.
+Wildcard table pruning is physical storage management, not business logic. Leaving wildcard pruning to Silver or Gold exposes the warehouse to accidental multi-terabyte scans if an analyst builds an Explore without guards. Wildcard pruning therefore lives in Bronze, and the Liquid required to prune `_TABLE_SUFFIX` in `bronze/explores/:prefix.explore.lkml` (or `:prefix_base.explore.lkml` once joined in Silver) is the sole sanctioned exception to the rule against Liquid outside Gold.
 
-### The Looker Discourse wildcard pattern
+### The Looker wildcard pattern (date-sharded & categorical `_TABLE_SUFFIX`)
 
-1. Consolidate shards into a single wildcard Bronze view (`bronze/events.view.lkml`) with `sql_table_name: \`project.analytics_12345.events_*\` ;;`.
-2. In `bronze/:table.refinement.lkml`, define a filter-only field (`filter: event_date_filter` with `type: date`) to capture user date ranges, a hidden dimension (`dimension: table_suffix` with `sql: ${TABLE}._TABLE_SUFFIX ;;`), and a partition dimension group (`dimension_group: event_partition` with `sql: SAFE.PARSE_DATE('%Y%m%d', ${table_suffix}) ;;`) for grouping and slicing.
-3. In `bronze/explores/events_base.explore.lkml`, set `extension: required` (or `hidden: yes`) and enforce `always_filter:` (defaulting to `"7 days"`) so unconstrained queries never scan all historical shards. In `sql_always_where:`, combine non-date shard exclusion (`${events.table_suffix} NOT LIKE 'intraday_%'`), suffix pruning via formatted `{% date_start %}` and `{% date_end %}` using `>=` and `<` (which is safer than `BETWEEN` because `date_end` in Looker evaluates to the next day's midnight), and row-level filtering via `{% condition events.event_date_filter %} ${events.event_raw} {% endcondition %}`. This unifies physical shard pruning and row-level date filtering under a single user-facing filter.
-4. In `silver/explores/events.explore.lkml`, declare `extends: [events_base]` and `view_name: events` so business users get a clean Explore with zero Liquid boilerplate in Silver, protected by the physical table pruning inherited from Bronze.
+1. **Wildcard base view (`bronze/:prefix.view.lkml`):** Because Looker's generator cannot introspect a `*` table pattern directly, generate from a representative concrete shard if schemas are identical—or when heterogeneous tables match `prefix*` (e.g., `order*` matching `orders` and `order_items`), author `bronze/:prefix.view.lkml` with `sql_table_name: \`project.dataset.prefix*\` ;;` containing only the shared physical column intersection (omitting `primary_key: yes` if no single column is unique across all shards).
+2. **Date-sharded suffixes (`%Y%m%d`, e.g. `events_*`):** In `bronze/:prefix.refinement.lkml`, define `filter: event_date_filter` (`type: date`), `dimension: table_suffix` (`hidden: yes`, `sql: ${TABLE}._TABLE_SUFFIX ;;`), and `dimension_group: event_partition` (`sql: SAFE.PARSE_DATE('%Y%m%d', ${table_suffix}) ;;`). Guard `bronze/explores/:prefix.explore.lkml` (`hidden: no` while unjoined) with `always_filter: [filters: [events.event_date_filter: "7 days"]]` and `sql_always_where:` combining `${events.table_suffix} NOT LIKE 'intraday_%'`, formatted `{% date_start %}` / `{% date_end %}` (`>=` and `<`), and `{% condition events.event_date_filter %} ${events.event_raw} {% endcondition %}`.
+3. **Categorical / named suffixes (`_TABLE_SUFFIX IN ('s', '_items')`):** Keep `dimension: table_suffix` visible (`hidden: no`) when queries slice or `GROUP BY` shard, set `always_filter:` on `table_suffix` (escaping literal `_` or `%` in Looker string filter values with `^`, e.g. `"s, ^_items"` so `_items` is not parsed as a `LIKE` single-character wildcard), and prune in `sql_always_where:` via `{% if view.table_suffix._is_filtered %}{% condition view.table_suffix %} ${view.table_suffix} {% endcondition %}{% else %}${view.table_suffix} IN ('s', '_items'){% endif %}`.
 
 ## LookML template
 
@@ -103,15 +102,15 @@ view: +events {
 ```
 
 ```lookml
-# File: bronze/explores/events_base.explore.lkml
+# File: bronze/explores/events.explore.lkml (unjoined: hidden: no; detach to events_base + silver/explores/events.explore.lkml ONLY when joins exist)
 include: "/bronze/events.view.lkml"
 include: "/bronze/events.refinement.lkml"
 
-explore: events_base {
-  extension: required
+explore: events {
+  hidden: no
   view_name: events
 
-  # Mandatory guardrail: queries must provide a date range
+  # Mandatory guardrail: queries must provide a date range (or shard list, escaping '_' as '^_')
   always_filter: {
     filters: [events.event_date_filter: "7 days"]
   }
@@ -130,17 +129,6 @@ explore: events_base {
 }
 ```
 
-```lookml
-# File: silver/explores/events.explore.lkml
-include: "/bronze/explores/events_base.explore.lkml"
-
-explore: events {
-  extends: [events_base]
-  view_name: events
-  # Add pure PK = FK joins here if needed (e.g., join: users)
-}
-```
-
 ## Architecture rules
 
-Date-sharded tables (`events_20260101`, `events_20260102`) are consolidated into a single wildcard Bronze view (`bronze/:prefix.view.lkml` with `sql_table_name: \`...events_*\` ;;`), refined with `_TABLE_SUFFIX` in `bronze/:prefix.refinement.lkml`, and guarded via `always_filter:` and `sql_always_where:` in `bronze/explores/:prefix_base.explore.lkml` (`extension: required`).
+Sharded tables are consolidated into a single wildcard Bronze view (`bronze/:prefix.view.lkml` with `sql_table_name: \`...prefix*\` ;;`), refined with `_TABLE_SUFFIX` in `bronze/:prefix.refinement.lkml`, and guarded via `always_filter:` and Liquid `sql_always_where:` in `bronze/explores/:prefix.explore.lkml` (`hidden: no` until joined in Silver).
