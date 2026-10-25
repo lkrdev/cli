@@ -26,10 +26,10 @@ def test_push_command(tmp_path, mock_sdk, mock_auth):
     # Setup local folder and files
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
-    
+
     models_dir = project_dir / "models"
     models_dir.mkdir()
-    
+
     model_file = models_dir / "test.model.lkml"
     model_file.write_text('connection: "my_conn"\ninclude: "/views/**/*.view.lkml"')
 
@@ -51,9 +51,7 @@ def test_push_command(tmp_path, mock_sdk, mock_auth):
     )
 
     expected_content = 'connection: "my_conn"\ninclude: "/views/**/*.view.lkml"'
-    expected_fc = FileContent(
-        path="models/test.model.lkml", content=expected_content
-    )
+    expected_fc = FileContent(path="models/test.model.lkml", content=expected_content)
     mock_sdk.create_file.assert_not_called()
     mock_sdk.update_file.assert_called_with(
         project_id="test_project", file_content=expected_fc
@@ -61,15 +59,13 @@ def test_push_command(tmp_path, mock_sdk, mock_auth):
 
     # Verify deploy flags
     mock_sdk.commit.assert_called_once()
-    mock_sdk.deploy_to_production.assert_called_once_with(
-        project_id="test_project"
-    )
+    mock_sdk.deploy_to_production.assert_called_once_with(project_id="test_project")
 
 
 def test_pull_command(tmp_path, mock_sdk, mock_auth):
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
-    
+
     # Create a local orphan that should be removed
     local_orphan = project_dir / "local_orphan.lkml"
     local_orphan.write_text("old content")
@@ -95,18 +91,16 @@ def test_pull_command(tmp_path, mock_sdk, mock_auth):
 
     # Verify commit and deploy
     mock_sdk.commit.assert_called_once()
-    mock_sdk.deploy_to_production.assert_called_once_with(
-        project_id="test_project"
-    )
+    mock_sdk.deploy_to_production.assert_called_once_with(project_id="test_project")
 
 
 def test_pull_ghost_file(tmp_path, mock_sdk, mock_auth):
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
-    
+
     views_dir = project_dir / "views"
     views_dir.mkdir()
-    
+
     affinity_file = views_dir / "affinity.view.lkml"
     affinity_file.write_text("old content")
 
@@ -125,9 +119,7 @@ def test_pull_ghost_file(tmp_path, mock_sdk, mock_auth):
 
 def test_deploy_command(mock_sdk, mock_auth):
     with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
-        result = runner.invoke(
-            app, ["tools", "lookml", "deploy", "my_deploy_project"]
-        )
+        result = runner.invoke(app, ["tools", "lookml", "deploy", "my_deploy_project"])
         assert result.exit_code == 0
 
     mock_sdk.commit.assert_called_once()
@@ -139,7 +131,7 @@ def test_deploy_command(mock_sdk, mock_auth):
 def test_push_warning(tmp_path, mock_sdk, mock_auth):
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
-    
+
     # Create an unsupported file locally
     unsupported_file = project_dir / "unsupported.xyz"
     unsupported_file.write_text("random")
@@ -148,10 +140,13 @@ def test_push_warning(tmp_path, mock_sdk, mock_auth):
         {"id": "remote_unsupported.abc"},
     ]
 
-    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth), patch("lkr.tools.lookml.logger.warning") as mock_warn:
+    with (
+        patch("lkr.tools.lookml.get_auth", return_value=mock_auth),
+        patch("lkr.tools.lookml.logger.warning") as mock_warn,
+    ):
         result = runner.invoke(app, ["tools", "lookml", "push", str(project_dir)])
         assert result.exit_code == 0
-        
+
         # Check warnings called for both local and remote unsupported extensions
         mock_warn.assert_any_call(
             "Local file 'unsupported.xyz' has an extension not supported by Looker and will be skipped."
@@ -165,7 +160,7 @@ def test_push_warning(tmp_path, mock_sdk, mock_auth):
 def test_pull_warning(tmp_path, mock_sdk, mock_auth):
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
-    
+
     # Create an unsupported local orphan
     unsupported_local = project_dir / "unsupported_local.py"
     unsupported_local.write_text("print('hello')")
@@ -174,7 +169,10 @@ def test_pull_warning(tmp_path, mock_sdk, mock_auth):
         {"id": "remote_unsupported.doc"},
     ]
 
-    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth), patch("lkr.tools.lookml.logger.warning") as mock_warn:
+    with (
+        patch("lkr.tools.lookml.get_auth", return_value=mock_auth),
+        patch("lkr.tools.lookml.logger.warning") as mock_warn,
+    ):
         result = runner.invoke(app, ["tools", "lookml", "pull", str(project_dir)])
         assert result.exit_code == 0
 
@@ -185,7 +183,7 @@ def test_pull_warning(tmp_path, mock_sdk, mock_auth):
         mock_warn.assert_any_call(
             "Local file 'unsupported_local.py' has an extension not supported by Looker and will not be synchronized or deleted."
         )
-        
+
         # Verify unsupported local orphan was NOT deleted
         assert unsupported_local.exists()
 
@@ -201,9 +199,10 @@ def test_pull_path_traversal(tmp_path, mock_sdk, mock_auth):
     ]
     mock_sdk.get_file_content.return_value = "malicious content"
 
-    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth), patch(
-        "lkr.tools.lookml.logger.warning"
-    ) as mock_warn:
+    with (
+        patch("lkr.tools.lookml.get_auth", return_value=mock_auth),
+        patch("lkr.tools.lookml.logger.warning") as mock_warn,
+    ):
         result = runner.invoke(app, ["tools", "lookml", "pull", str(project_dir)])
         assert result.exit_code == 0
 
@@ -294,9 +293,7 @@ def test_push_single_file_option(tmp_path, mock_sdk, mock_auth):
         assert result.exit_code == 0
 
     # Verify update_file was called only for target.view.lkml
-    expected_fc = FileContent(
-        path="views/target.view.lkml", content="view: target {}"
-    )
+    expected_fc = FileContent(path="views/target.view.lkml", content="view: target {}")
     mock_sdk.update_file.assert_called_once_with(
         project_id="test_project", file_content=expected_fc
     )
@@ -364,9 +361,10 @@ def test_push_single_file_path_traversal(tmp_path, mock_sdk, mock_auth):
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
-    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth), patch(
-        "lkr.tools.lookml.logger.error"
-    ) as mock_err:
+    with (
+        patch("lkr.tools.lookml.get_auth", return_value=mock_auth),
+        patch("lkr.tools.lookml.logger.error") as mock_err,
+    ):
         result = runner.invoke(
             app,
             [
@@ -379,16 +377,19 @@ def test_push_single_file_path_traversal(tmp_path, mock_sdk, mock_auth):
             ],
         )
         assert result.exit_code == 1
-        mock_err.assert_called_with("Path traversal detected and blocked: ../outside.view.lkml")
+        mock_err.assert_called_with(
+            "Path traversal detected and blocked: ../outside.view.lkml"
+        )
 
 
 def test_pull_single_file_path_traversal(tmp_path, mock_sdk, mock_auth):
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
-    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth), patch(
-        "lkr.tools.lookml.logger.error"
-    ) as mock_err:
+    with (
+        patch("lkr.tools.lookml.get_auth", return_value=mock_auth),
+        patch("lkr.tools.lookml.logger.error") as mock_err,
+    ):
         result = runner.invoke(
             app,
             [
@@ -401,7 +402,9 @@ def test_pull_single_file_path_traversal(tmp_path, mock_sdk, mock_auth):
             ],
         )
         assert result.exit_code == 1
-        mock_err.assert_called_with("Path traversal detected and blocked: ../outside.view.lkml")
+        mock_err.assert_called_with(
+            "Path traversal detected and blocked: ../outside.view.lkml"
+        )
 
 
 def test_push_reset_and_new_model(tmp_path, mock_sdk, mock_auth):
@@ -474,7 +477,9 @@ def test_push_update_lookml_model_on_connection_change(tmp_path, mock_sdk, mock_
     assert "updated_conn" in updated_kwargs["body"].allowed_db_connection_names
 
 
-def test_push_and_pull_include_snap_strings_json_and_skip_generic_json(tmp_path, mock_sdk, mock_auth):
+def test_push_and_pull_include_snap_strings_json_and_skip_generic_json(
+    tmp_path, mock_sdk, mock_auth
+):
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
     (project_dir / "orders.view.lkml").write_text("view: orders {}")
@@ -506,7 +511,9 @@ def test_push_and_pull_include_snap_strings_json_and_skip_generic_json(tmp_path,
         }
 
 
-def test_push_and_pull_skip_dot_directories_unless_sync_hidden(tmp_path, mock_sdk, mock_auth):
+def test_push_and_pull_skip_dot_directories_unless_sync_hidden(
+    tmp_path, mock_sdk, mock_auth
+):
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
     (project_dir / "main.view.lkml").write_text("view: main {}")
@@ -537,7 +544,15 @@ def test_push_and_pull_skip_dot_directories_unless_sync_hidden(tmp_path, mock_sd
         # 2. Push with --sync-hidden includes .agents
         mock_sdk.update_file.reset_mock()
         res_push_hidden = runner.invoke(
-            app, ["tools", "lookml", "push", str(project_dir), "--no-reset", "--sync-hidden"]
+            app,
+            [
+                "tools",
+                "lookml",
+                "push",
+                str(project_dir),
+                "--no-reset",
+                "--sync-hidden",
+            ],
         )
         assert res_push_hidden.exit_code == 0
         pushed_hidden = {
@@ -588,7 +603,9 @@ def test_push_only_changed_and_skills_lock_ignored(tmp_path, mock_sdk, mock_auth
         assert pull_res.exit_code == 0
 
         # Modify one file, add one new file, leave users.view.lkml untouched
-        (project_dir / "orders.view.lkml").write_text("view: orders { dimension: id {} }")
+        (project_dir / "orders.view.lkml").write_text(
+            "view: orders { dimension: id {} }"
+        )
         (project_dir / "new.explore.lkml").write_text("explore: orders {}")
 
         mock_sdk.update_file.reset_mock()
@@ -596,7 +613,14 @@ def test_push_only_changed_and_skills_lock_ignored(tmp_path, mock_sdk, mock_auth
 
         push_res = runner.invoke(
             app,
-            ["tools", "lookml", "push", str(project_dir), "--no-reset", "--only-changed"],
+            [
+                "tools",
+                "lookml",
+                "push",
+                str(project_dir),
+                "--no-reset",
+                "--only-changed",
+            ],
         )
         assert push_res.exit_code == 0
 
@@ -610,16 +634,66 @@ def test_push_only_changed_and_skills_lock_ignored(tmp_path, mock_sdk, mock_auth
             assert "skills-lock.json" not in str(call)
 
         # Switching Looker instance base_url must not collide with prior sync cache
-        mock_sdk.auth = MagicMock(settings=MagicMock(base_url="https://staging.looker.com"))
+        mock_sdk.auth = MagicMock(
+            settings=MagicMock(base_url="https://staging.looker.com")
+        )
         mock_sdk.update_file.reset_mock()
         push_staging = runner.invoke(
             app,
-            ["tools", "lookml", "push", str(project_dir), "--no-reset", "--only-changed"],
+            [
+                "tools",
+                "lookml",
+                "push",
+                str(project_dir),
+                "--no-reset",
+                "--only-changed",
+            ],
         )
         assert push_staging.exit_code == 0
         staging_pushed = {
             call.kwargs["file_content"].path
             for call in mock_sdk.update_file.call_args_list
         }
-        assert staging_pushed == {"orders.view.lkml", "users.view.lkml", "new.explore.lkml"}
+        assert staging_pushed == {
+            "orders.view.lkml",
+            "users.view.lkml",
+            "new.explore.lkml",
+        }
 
+
+def test_pull_retries_transient_502_and_aborts_before_orphan_delete(
+    tmp_path, mock_sdk, mock_auth
+):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+    local_file = project_dir / "silver.view.lkml"
+    local_file.write_text("view: silver {}")
+
+    rf = MagicMock()
+    rf.id = "silver.view.lkml"
+    rf.path = "silver.view.lkml"
+    mock_sdk.all_project_files.return_value = [rf]
+
+    # 1. Transient 502 recovers on retry
+    mock_sdk.get_file_content.side_effect = [
+        Exception("502 Bad Gateway"),
+        "view: silver_updated {}",
+    ]
+    with (
+        patch("lkr.tools.lookml.get_auth", return_value=mock_auth),
+        patch("lkr.tools.lookml.time.sleep"),
+    ):
+        ok_res = runner.invoke(app, ["tools", "lookml", "pull", str(project_dir)])
+        assert ok_res.exit_code == 0
+    assert local_file.read_text() == "view: silver_updated {}"
+
+    # 2. Persistent 502 exits 1 and NEVER deletes existing local file as an orphan
+    mock_sdk.get_file_content.side_effect = Exception("502 Bad Gateway")
+    with (
+        patch("lkr.tools.lookml.get_auth", return_value=mock_auth),
+        patch("lkr.tools.lookml.time.sleep"),
+    ):
+        fail_res = runner.invoke(app, ["tools", "lookml", "pull", str(project_dir)])
+        assert fail_res.exit_code == 1
+    assert local_file.exists()
+    assert local_file.read_text() == "view: silver_updated {}"

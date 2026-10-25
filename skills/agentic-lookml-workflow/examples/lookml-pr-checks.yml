@@ -176,6 +176,7 @@ jobs:
             --file="$SCRIPT_DIR/validate_and_commit_branch.py" \
             --var project_id="$PROJECT_ID" \
             --var branch_name="$BRANCH_NAME" \
+            --var head_sha="$HEAD_SHA" \
             --var skip_tests="true")
           echo "$OUT"
           echo "$OUT" | sed -n '/^{/,$p' | jq -e '.passed == true' >/dev/null
@@ -230,8 +231,8 @@ jobs:
 
   query-parity:
     name: SQL-to-LookML Query Parity Gate
-    needs: [validator]
-    if: needs.validator.outputs.has_lookml == 'true'
+    needs: [validator, data-tests]
+    if: always() && needs.validator.result == 'success' && needs.validator.outputs.has_lookml == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -94,7 +94,6 @@ __all__ = [
 ]
 
 
-
 def _titleize(name: str) -> str:
     words = name.replace("_", " ").split(" ")
     out: list[str] = []
@@ -159,11 +158,7 @@ def _extract_measure_filters(
         return None
     out: list[ApiLookmlModelExploreFieldMeasureFilters] = []
     for item in raw_filters if isinstance(raw_filters, list) else [raw_filters]:
-        d = (
-            item.model_dump(exclude_none=True)
-            if isinstance(item, BaseModel)
-            else item
-        )
+        d = item.model_dump(exclude_none=True) if isinstance(item, BaseModel) else item
         if not isinstance(d, dict):
             continue
         pairs = (
@@ -259,9 +254,7 @@ def _build_tier_metadata(
                 (f"[{nums[-1]},inf)", f"{sql_expr} >= {nums[-1]}"),
             ]
             if style == "classic":
-                raw_cases = [
-                    (f"T{i:02d} {v}", c) for i, (v, c) in enumerate(raw_cases)
-                ]
+                raw_cases = [(f"T{i:02d} {v}", c) for i, (v, c) in enumerate(raw_cases)]
                 else_val = "TXX Undefined"
             else:
                 else_val = "Undefined"
@@ -415,15 +408,12 @@ def _build_field(
         )
     )
     ti_raw = TIMEFRAME_INTERVALS.get(ftype)
-    time_interval = (
-        ApiLookmlModelExploreFieldTimeInterval(**ti_raw) if ti_raw else None
-    )
+    time_interval = ApiLookmlModelExploreFieldTimeInterval(**ti_raw) if ti_raw else None
     is_timeframe = time_interval is not None
     is_fiscal = ftype.startswith("date_fiscal_")
     can_time_filter = category == "dimension" and bool(
         ti_raw
-        and ti_raw["name"]
-        in ("hour", "minute", "second", "millisecond", "microsecond")
+        and ti_raw["name"] in ("hour", "minute", "second", "millisecond", "microsecond")
     )
 
     eff_vfn = value_format_name
@@ -438,9 +428,7 @@ def _build_field(
         or (nvf.value_format if isinstance(nvf, LookmlNamedValueFormat) else None)
         or (VALUE_FORMAT_MAP.get(eff_vfn) if eff_vfn else None)
         or (
-            '#,##0"%"'
-            if ftype in ("percent_of_total", "percent_of_previous")
-            else None
+            '#,##0"%"' if ftype in ("percent_of_total", "percent_of_previous") else None
         )
         or ("0" if ftype.startswith("duration_") else None)
     )
@@ -494,8 +482,7 @@ def _build_field(
             )
         else:
             enumerations = [
-                ApiLookmlModelExploreFieldEnumeration(**e)
-                for e in DEFAULT_ENUMS[ftype]
+                ApiLookmlModelExploreFieldEnumeration(**e) for e in DEFAULT_ENUMS[ftype]
             ]
 
     src_path = (
@@ -550,8 +537,7 @@ def _build_field(
             suggestable_override
             if suggestable_override is not None
             else (
-                bool(sql_case)
-                or (ftype in SUGGESTABLE_TYPES and category != "measure")
+                bool(sql_case) or (ftype in SUGGESTABLE_TYPES and category != "measure")
             )
         ),
         is_fiscal=is_fiscal,
@@ -722,7 +708,9 @@ def _expand_view_for_explore(
                 continue
             full_name = _qualify_field_ref(fname, view_alias)
             _record_aliases(fobj.alias, full_name)
-            dim_type = "tier" if fobj.type in ("tier", "bin") else (fobj.type or "string")
+            dim_type = (
+                "tier" if fobj.type in ("tier", "bin") else (fobj.type or "string")
+            )
             base_short = fobj.label or _titleize(fname.split(".", 1)[-1])
             if dim_type == "yesno":
                 base_short = f"{base_short} (Yes / No)"
@@ -1008,9 +996,7 @@ def _expand_view_for_explore(
                 _build_tier_metadata(fobj)
                 if fobj.case is not None
                 else (
-                    fobj.suggestions
-                    if isinstance(fobj.suggestions, list)
-                    else None,
+                    fobj.suggestions if isinstance(fobj.suggestions, list) else None,
                     None,
                     None,
                     None,
@@ -1104,9 +1090,7 @@ def _expand_view_for_explore(
                     has_allowed_values=bool(p_enums),
                     enumerations=p_enums or None,
                     suggestions=(
-                        fobj.suggestions
-                        if isinstance(fobj.suggestions, list)
-                        else None
+                        fobj.suggestions if isinstance(fobj.suggestions, list) else None
                     ),
                 )
             )
@@ -1151,20 +1135,15 @@ def _build_turtle_looks(
             for m in (q_val.get("measures") or [])
         ]
         pivots = [
-            _qualify_field_ref(str(p), base_alias)
-            for p in (q_val.get("pivots") or [])
+            _qualify_field_ref(str(p), base_alias) for p in (q_val.get("pivots") or [])
         ]
         filters_dict: dict[str, str] = {}
         raw_filters = q_val.get("filters") or []
-        for f_item in (
-            raw_filters if isinstance(raw_filters, list) else [raw_filters]
-        ):
+        for f_item in raw_filters if isinstance(raw_filters, list) else [raw_filters]:
             if isinstance(f_item, dict):
                 for fk, fv in f_item.items():
                     if not fk.startswith("$"):
-                        filters_dict[_qualify_field_ref(str(fk), base_alias)] = str(
-                            fv
-                        )
+                        filters_dict[_qualify_field_ref(str(fk), base_alias)] = str(fv)
         sorts_list: list[dict[str, Any]] = []
         raw_sorts = q_val.get("sorts") or []
         for s_item in raw_sorts if isinstance(raw_sorts, list) else [raw_sorts]:
@@ -1372,12 +1351,14 @@ def _find_percent_scaling_errors(
             ),
         }
         for f in (*all_dims, *all_meas)
-        if f.sql and re.search(r"""(?:"[^"]*%|'[^']*%|\\\%)""", vf := (f.value_format or ""))
+        if f.sql
+        and re.search(r"""(?:"[^"]*%|'[^']*%|\\\%)""", vf := (f.value_format or ""))
         if _has_mul_100(f.sql)
         or any(
             _qualify_field_ref(r, f.view) in scaled_dims
             for r in re.findall(r"\$\{\s*([a-zA-Z0-9_.]+)\s*\}", f.sql)
-            if r.upper() not in ("TABLE", "EXTENDED") and not r.endswith(".SQL_TABLE_NAME")
+            if r.upper() not in ("TABLE", "EXTENDED")
+            and not r.endswith(".SQL_TABLE_NAME")
         )
     ]
 
@@ -1523,16 +1504,23 @@ def _build_explore_from_assembled(
         view_sets_by_alias[base_alias] = vset
 
     api_joins: list[ApiLookmlModelExploreJoins] = []
+    join_errors: list[dict[str, Any]] = []
     for j_name, j_obj, jv_name, jv in join_entries:
         j_chain = _build_chain(jv_name, view_base_decls, view_ref_decls)
-        j_vlabel = (
-            j_obj.view_label
-            or jv.view_label
-            or jv.label
-            or _titleize(j_name)
-        )
+        j_vlabel = j_obj.view_label or jv.view_label or jv.label or _titleize(j_name)
         rel = j_obj.relationship or ""
         is_sym = (rel or "many_to_one") != "one_to_one"
+        if any(
+            t and t.lstrip("-").strip().upper() == "ALL_FIELDS*"
+            for t in (j_obj.fields or [])
+        ):
+            join_errors.append(
+                {
+                    "type": "invalid_join_field_set",
+                    "field": f"{j_name}.ALL_FIELDS*",
+                    "message": f"join '{j_name}' cannot reference 'ALL_FIELDS*' in fields: [...] — move fields: [ALL_FIELDS*, ...] onto explore '{explore_name}'.",
+                }
+            )
         d, m, fl, pa, vset, al = _expand_view_for_explore(
             view_alias=j_name,
             original_view_name=jv_name,
@@ -1566,7 +1554,11 @@ def _build_explore_from_assembled(
         ):
             for ref in _extract_lookml_refs(sql_snippet):
                 dep_fields.append(_qualify_field_ref(ref, j_name))
-            if sql_snippet is j_obj.foreign_key and sql_snippet and not _extract_lookml_refs(sql_snippet):
+            if (
+                sql_snippet is j_obj.foreign_key
+                and sql_snippet
+                and not _extract_lookml_refs(sql_snippet)
+            ):
                 dep_fields.append(_qualify_field_ref(sql_snippet, base_alias))
 
         api_joins.append(
@@ -1659,17 +1651,12 @@ def _build_explore_from_assembled(
                     value=view_sets_by_alias[v_alias],
                 )
             )
-    sets_list.append(
-        ApiLookmlModelExploreSet(name="ALL_FIELDS", value=all_fields_flat)
-    )
+    sets_list.append(ApiLookmlModelExploreSet(name="ALL_FIELDS", value=all_fields_flat))
 
-    raw_tbl = (
-        exp_obj.sql_table_name
-        or (base_view.sql_table_name if isinstance(base_view, LookmlView) else None)
+    raw_tbl = exp_obj.sql_table_name or (
+        base_view.sql_table_name if isinstance(base_view, LookmlView) else None
     )
-    sql_table_name = (
-        f"{raw_tbl.strip()}  AS {base_alias}" if raw_tbl else None
-    )
+    sql_table_name = f"{raw_tbl.strip()}  AS {base_alias}" if raw_tbl else None
 
     model_label = model_obj.label or _titleize(model_name)
     exp_label = (
@@ -1719,6 +1706,7 @@ def _build_explore_from_assembled(
         index_fields = list(dict.fromkeys(index_fields))
 
     dup_errors = [
+        *join_errors,
         *_find_duplicate_explore_fields(all_dims, all_meas, views_by_alias),
         *_find_raw_sql_aggregate_errors(all_meas),
         *_find_percent_scaling_errors(all_dims, all_meas, views_by_alias),

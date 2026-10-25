@@ -685,7 +685,7 @@ def test_validate_and_commit_branch_checks_out_pr_branch_and_workflow_serializes
     assert "needs" not in jobs["snapshots"]
     assert "needs" not in jobs["validator"]
     assert jobs["data-tests"]["needs"] == ["validator"]
-    assert jobs["query-parity"]["needs"] == ["validator"]
+    assert jobs["query-parity"]["needs"] == ["validator", "data-tests"]
     assert jobs["query-parity"]["permissions"]["pull-requests"] == "read"
 
     # validator mode: skip_tests="true" runs validate_project only

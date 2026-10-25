@@ -36,7 +36,7 @@ GROUP BY 1, 2
 
 ## How to handle (triage matrix)
 
-The easiest way to author a Custom Measure in the Query or Dashboard Layer is using [Looker filter expressions](https://docs.cloud.google.com/looker/docs/filter-expressions) (escaping literal `_` or `%` in string filter values with `^`, e.g. `"^_items"`, `"100^%"`) or Looker's [`matches_filter` syntax](https://docs.cloud.google.com/looker/docs/matches-filter) (`matches_filter(${view.field}, \`filter_expression\`)`). Note that Custom Fields (`custom_fields`) and Table Calculations (`table_calculations`) live in the Looker API query payload (`dynamic_fields`), Saved Looks, or LookML Dashboards (`.dashboard.lookml`), and cannot be placed inside an `explore: { query: {} }` Quick Start block.
+The easiest way to author a Custom Measure in the Query or Dashboard Layer is using [Looker filter expressions](https://docs.cloud.google.com/looker/docs/filter-expressions) (joining OR values with `,` and no space after the comma, e.g. `"Socks,Socks & Hosiery"`, and escaping literal `_`, `%`, `,`, or leading `-`/` ` with `^`, e.g. `"^_items"`, `"100^%"`, `"foo^, bar"`) or Looker's [`matches_filter` syntax](https://docs.cloud.google.com/looker/docs/matches-filter) (`matches_filter(${view.field}, \`filter_expression\`)`). Note that Custom Fields (`custom_fields`) and Table Calculations (`table_calculations`) live in the Looker API query payload (`dynamic_fields`), Saved Looks, or LookML Dashboards (`.dashboard.lookml`), and cannot be placed inside an `explore: { query: {} }` Quick Start block.
 
 | Sub-pattern | Condition | Resolution | Target location |
 | :--- | :--- | :--- | :--- |

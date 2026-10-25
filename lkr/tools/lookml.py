@@ -5,6 +5,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -57,20 +58,32 @@ def _hash_content(content: str) -> str:
 
 
 def _sdk_base_url(sdk: Any) -> str:
-    s = getattr(getattr(sdk, "auth", None), "settings", None) or getattr(sdk, "settings", None)
+    s = getattr(getattr(sdk, "auth", None), "settings", None) or getattr(
+        sdk, "settings", None
+    )
     url = getattr(s, "base_url", "")
     return url.rstrip("/") if isinstance(url, str) else ""
 
 
 def _sync_cache(lookml_dir: str, project_id: str, base_url: str = "") -> Path:
-    d = Path(tempfile.gettempdir()) / f"lkr_lookml_sync_{getattr(os, 'getuid', lambda: 'user')()}"
+    d = (
+        Path(tempfile.gettempdir())
+        / f"lkr_lookml_sync_{getattr(os, 'getuid', lambda: 'user')()}"
+    )
     d.mkdir(mode=0o700, exist_ok=True)
-    return d / f"{_hash_content(f'{os.path.abspath(lookml_dir)}:{project_id}:{base_url}')}.json"
+    return (
+        d
+        / f"{_hash_content(f'{os.path.abspath(lookml_dir)}:{project_id}:{base_url}')}.json"
+    )
 
 
-def _load_sync_hashes(lookml_dir: str, project_id: str, base_url: str = "") -> dict[str, str]:
+def _load_sync_hashes(
+    lookml_dir: str, project_id: str, base_url: str = ""
+) -> dict[str, str]:
     try:
-        data = json.loads(_sync_cache(lookml_dir, project_id, base_url).read_text("utf-8"))
+        data = json.loads(
+            _sync_cache(lookml_dir, project_id, base_url).read_text("utf-8")
+        )
         return data if isinstance(data, dict) else {}
     except Exception:  # noqa: BLE001
         return {}
@@ -80,7 +93,9 @@ def _save_sync_hashes(
     lookml_dir: str, project_id: str, hashes: dict[str, str], base_url: str = ""
 ) -> None:
     try:
-        _sync_cache(lookml_dir, project_id, base_url).write_text(json.dumps(hashes), "utf-8")
+        _sync_cache(lookml_dir, project_id, base_url).write_text(
+            json.dumps(hashes), "utf-8"
+        )
     except Exception as e:  # noqa: BLE001
         logger.debug(f"Sync cache write notice: {e}")
 
@@ -100,9 +115,7 @@ def _is_hidden_path(path: str) -> bool:
     return any(p.startswith(".") and p not in (".", "..") for p in parts)
 
 
-def _resolve_project_id(
-    folder_name: str | None, project_id_opt: str | None
-) -> str:
+def _resolve_project_id(folder_name: str | None, project_id_opt: str | None) -> str:
     if project_id_opt:
         return project_id_opt
     if folder_name:
@@ -136,9 +149,7 @@ def _ensure_remote_directory(
 def _ensure_model_configuration(
     sdk: ExtendedLooker40SDK, project_id: str, files_to_push: list[dict[str, str]]
 ) -> None:
-    model_files = [
-        f for f in files_to_push if f["root_name"].endswith(".model.lkml")
-    ]
+    model_files = [f for f in files_to_push if f["root_name"].endswith(".model.lkml")]
     if not model_files:
         return
 
@@ -206,9 +217,7 @@ def _ensure_model_configuration(
                     allowed_db_connection_names=allowed_conns,
                 )
                 try:
-                    sdk.update_lookml_model(
-                        lookml_model_name=model_name, body=body
-                    )
+                    sdk.update_lookml_model(lookml_model_name=model_name, body=body)
                 except Exception as e:  # noqa: BLE001
                     logger.debug(f"Notice updating LookML model '{model_name}': {e}")
 
@@ -301,10 +310,11 @@ def push(
             except Exception as copy_err:  # noqa: BLE001
                 logger.debug(f"Developer copy / reset notice: {copy_err}")
 
-
     files_to_push = []
     if file_opt:
-        full_path = file_opt if os.path.isabs(file_opt) else os.path.join(lookml_dir, file_opt)
+        full_path = (
+            file_opt if os.path.isabs(file_opt) else os.path.join(lookml_dir, file_opt)
+        )
         full_path = os.path.abspath(full_path)
         try:
             if os.path.commonpath([lookml_dir, full_path]) != lookml_dir:
@@ -320,7 +330,9 @@ def push(
 
         filename = os.path.basename(full_path)
         if not any(filename.endswith(ext) for ext in VALID_EXTENSIONS):
-            logger.error(f"Local file '{filename}' has an extension not supported by Looker.")
+            logger.error(
+                f"Local file '{filename}' has an extension not supported by Looker."
+            )
             raise typer.Exit(1)
 
         rel_path = os.path.relpath(full_path, lookml_dir).replace("\\", "/")
@@ -331,17 +343,21 @@ def push(
             raise typer.Exit(1)
         with open(full_path, "r", encoding="utf-8") as f:
             content = f.read()
-        files_to_push.append({
-            "path": rel_path,
-            "root_name": filename,
-            "content": content,
-        })
+        files_to_push.append(
+            {
+                "path": rel_path,
+                "root_name": filename,
+                "content": content,
+            }
+        )
     else:
         if not os.path.exists(lookml_dir):
             logger.error(f"Local folder does not exist: {lookml_dir}")
             raise typer.Exit(1)
 
-        logger.info(f"Reading local files from {lookml_dir} for project {project_id}...")
+        logger.info(
+            f"Reading local files from {lookml_dir} for project {project_id}..."
+        )
         for root, dirs, files in os.walk(lookml_dir):
             if not sync_hidden:
                 dirs[:] = [d for d in dirs if not d.startswith(".")]
@@ -357,11 +373,13 @@ def push(
                 if any(file.endswith(ext) for ext in VALID_EXTENSIONS):
                     with open(full_path, "r", encoding="utf-8") as f:
                         content = f.read()
-                    files_to_push.append({
-                        "path": rel_path,
-                        "root_name": file,
-                        "content": content,
-                    })
+                    files_to_push.append(
+                        {
+                            "path": rel_path,
+                            "root_name": file,
+                            "content": content,
+                        }
+                    )
                 else:
                     logger.warning(
                         f"Local file '{file}' has an extension not supported by Looker and will be skipped."
@@ -369,7 +387,9 @@ def push(
 
     base_url = _sdk_base_url(sdk)
     prior_hashes = (
-        _load_sync_hashes(lookml_dir, project_id, base_url) if (only_changed or file_opt) else {}
+        _load_sync_hashes(lookml_dir, project_id, base_url)
+        if (only_changed or file_opt)
+        else {}
     )
     cached_hashes = prior_hashes if (only_changed and not reset) else {}
     existing_remote = (
@@ -553,8 +573,20 @@ def pull(
     target_dir = os.path.abspath(folder_name)
     os.makedirs(target_dir, exist_ok=True)
 
+    def _fetch_file_with_retry(rf_path: str) -> str:
+        for attempt in range(2):
+            try:
+                return sdk.get_file_content(project_id=project_id, file_path=rf_path)
+            except Exception as exc:
+                if "not found" in str(exc).lower():
+                    raise
+                time.sleep(0.5 * (2**attempt))
+        return sdk.get_file_content(project_id=project_id, file_path=rf_path)
+
     if file_opt:
-        full_path = file_opt if os.path.isabs(file_opt) else os.path.join(target_dir, file_opt)
+        full_path = (
+            file_opt if os.path.isabs(file_opt) else os.path.join(target_dir, file_opt)
+        )
         resolved_local = os.path.abspath(full_path)
         try:
             if os.path.commonpath([target_dir, resolved_local]) != target_dir:
@@ -571,16 +603,14 @@ def pull(
             )
             raise typer.Exit(1)
         if not any(rf_path.endswith(ext) for ext in VALID_EXTENSIONS):
-            logger.error(
-                f"File '{rf_path}' has an extension not supported by Looker."
-            )
+            logger.error(f"File '{rf_path}' has an extension not supported by Looker.")
             raise typer.Exit(1)
 
         try:
-            content = sdk.get_file_content(project_id=project_id, file_path=rf_path)
+            content = _fetch_file_with_retry(rf_path)
         except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to fetch content for remote file {rf_path}: {e}")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
 
         os.makedirs(os.path.dirname(resolved_local), exist_ok=True)
         with open(resolved_local, "w", encoding="utf-8") as f:
@@ -597,6 +627,7 @@ def pull(
 
         remote_paths = set()
         synced_hashes: dict[str, str] = {}
+        pull_failures: list[str] = []
         for rf in existing_remote:
             rf_path = _get_file_id(rf)
             if not sync_hidden and _is_hidden_path(rf_path):
@@ -622,14 +653,17 @@ def pull(
                 continue
 
             try:
-                content = sdk.get_file_content(project_id=project_id, file_path=rf_path)
+                content = _fetch_file_with_retry(rf_path)
             except Exception as e:  # noqa: BLE001
                 if "not found" in str(e).lower():
                     logger.debug(
                         f"Remote file {rf_path} not found in dev workspace (likely a deleted ghost file in git tracking)."
                     )
                 else:
-                    logger.error(f"Failed to fetch content for remote file {rf_path}: {e}")
+                    logger.error(
+                        f"Failed to fetch content for remote file {rf_path}: {e}"
+                    )
+                    pull_failures.append(rf_path)
                 continue
 
             remote_paths.add(rf_path)
@@ -639,6 +673,12 @@ def pull(
             with open(local_path, "w", encoding="utf-8") as f:
                 f.write(content)
             logger.info(f"Pulled file: {rf_path}")
+
+        if pull_failures:
+            logger.error(
+                f"Pull aborted before orphan cleanup due to {len(pull_failures)} failed file(s): {', '.join(pull_failures)}"
+            )
+            raise typer.Exit(1)
 
         _save_sync_hashes(target_dir, project_id, synced_hashes, base_url)
 
@@ -719,9 +759,7 @@ def deploy_cmd(
         f"Committing and deploying project {resolved_project_id} to production..."
     )
     try:
-        commit_req = ProjectCommitRequest(message=message).model_dump(
-            exclude_none=True
-        )
+        commit_req = ProjectCommitRequest(message=message).model_dump(exclude_none=True)
         sdk.commit(
             project_id=resolved_project_id,
             body=commit_req,
@@ -734,7 +772,9 @@ def deploy_cmd(
 
 
 def _attr(obj: Any, key: str, default: Any = "") -> Any:
-    return (obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)) or default
+    return (
+        obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+    ) or default
 
 
 def is_autogenerated_view(content: str) -> bool:
@@ -816,7 +856,9 @@ class BigQueryAuditMetadata(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
-    table_creation: BigQueryTableEvent | None = Field(default=None, alias="tableCreation")
+    table_creation: BigQueryTableEvent | None = Field(
+        default=None, alias="tableCreation"
+    )
     table_change: BigQueryTableEvent | None = Field(default=None, alias="tableChange")
 
 
@@ -1019,7 +1061,13 @@ def create_lookml_views(
     for ds, sch, tbl in targets:
         target_folder = (
             folder
-            or (f"views/{ds}/{sch}" if ds and sch else f"views/{sch}" if sch else "views")
+            or (
+                f"views/{ds}/{sch}"
+                if ds and sch
+                else f"views/{sch}"
+                if sch
+                else "views"
+            )
         ).strip("/")
         view_path = f"{target_folder}/{tbl}.view.lkml"
 
@@ -1297,6 +1345,3 @@ def create_cmd(
             raise typer.Exit(1)
     if not res["synced_views"] and not res["errors"]:
         typer.echo("No matching tables found to synchronize.")
-
-
-
