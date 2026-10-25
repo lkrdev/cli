@@ -94,16 +94,13 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
     lkr parse sql-lookml-compare --compact --sql-file "./data/$RUN_ID/input.sql" --path "./data/$RUN_ID/lookml" --output "./data/$RUN_ID/compare_initial.json"
   fi
   ```
-- Follow [agentic-lookml](../agentic-lookml/SKILL.md) and [measures-and-sql-functions.md](../agentic-lookml/references/measures-and-sql-functions.md) to author Bronze refinements, Bronze/Silver/Gold explores, and views **together before the first push** (ensuring every standalone `.explore.lkml` and `.test.lkml` explicitly `include:`s its referenced files, syncing `$MODEL_NAME.model.lkml` globs via `LOOKML_DIR="./data/$RUN_ID/lookml" ... setup_repo.sh --skip-preflight` without manually reading `.model.lkml` or `connections.snap.json.md`, and preferring a single `write_file` overwrite over 3+ separate `edit_file` calls when updating multiple blocks of a short LookML file already read into context). Validate offline with `lkr parse lookml-to-api --validate --base-path "."` (comparing against repo `HEAD` just like CI) and batch `lkr schema validate` once per distinct target explore (passing `[Q0, Q1, ...]` for that explore), then push once (`lookml push --no-reset --only-changed` automatically deletes any renamed/removed remote orphan files):
+- Follow [agentic-lookml](../agentic-lookml/SKILL.md) and [measures-and-sql-functions.md](../agentic-lookml/references/measures-and-sql-functions.md) to author Bronze refinements, Bronze/Silver/Gold explores, and views **together before the first push** (explicitly `include:` referenced files in standalone `.explore.lkml` / `.test.lkml` files, sync `$MODEL_NAME.model.lkml` globs via `LOOKML_DIR="./data/$RUN_ID/lookml" ... setup_repo.sh --skip-preflight` without reading `.model.lkml` or `connections.snap.json.md`, skip reading `bronze/:table.view.lkml` when `compare_initial.json` + `tests/*/*.test.lkml` already show column types and `<group>_date` slice fields, and prefer one `write_file` overwrite over 3+ `edit_file` calls on a short LookML file). Chain offline `--validate`, `schema validate`, `lookml push`, and [scripts/pre_gate.py](scripts/pre_gate.py) (including `test_queries_json` across all target explores) in **one shell call**, printing the compact `jq` summary so `data.json` need not be re-read:
   ```bash
+  BASE_URL="${BASE_URL:-$LOOKERSDK_BASE_URL}"
   lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" --base-path "." -m "$MODEL_NAME" -e "$EXPLORE_NAME" --validate -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json"
   lkr schema generate -m "$MODEL_NAME" -e "$EXPLORE_NAME" --explore-file "./data/$RUN_ID/explore_${EXPLORE_NAME}.json" -o "./data/$RUN_ID/schema_${EXPLORE_NAME}.json"
   lkr schema validate --schema-file "./data/$RUN_ID/schema_${EXPLORE_NAME}.json" --query "$INLINE_QUERIES_ARRAY_JSON"
   lkr --base-url="$BASE_URL" --dev tools lookml push "./data/$RUN_ID/lookml" --project-id="$PROJECT_ID" --no-reset --only-changed
-  ```
-- Execute the unified validation, parity, and test-baseline gate **once** across all target explores using [scripts/pre_gate.py](scripts/pre_gate.py) (each query in `inline_queries_json` and `test_queries_json` specifies its own `"view": "<explore_name>"`, returning `.test_query_results` in the same sandbox call without a second round-trip):
-  ```bash
-  BASE_URL="${BASE_URL:-$LOOKERSDK_BASE_URL}"
   RAW_OUT=$(lkr --base-url="$BASE_URL" --dev code-mode sandbox \
     --file=.agents/skills/agentic-lookml-workflow/scripts/pre_gate.py \
     --var raw_sql="$(cat "./data/$RUN_ID/input.sql")" \
@@ -115,6 +112,7 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
     --var test_queries_json="${TEST_QUERIES_JSON:-{}}")
   JSON_OUT=$(echo "$RAW_OUT" | sed -n '/^{/,$p')
   echo "$JSON_OUT" | jq -e . >/dev/null && echo "$JSON_OUT" > "./data/$RUN_ID/data.json"
+  echo "$JSON_OUT" | jq '{passed, all_queries_matched, validation_errors, queries: [.queries[] | del(.sql, .inline_query)], test_query_results}'
   ```
 - Once validation and parity pass, author LookML data tests in `./data/$RUN_ID/lookml` following [agentic-lookml](../agentic-lookml/SKILL.md) (`tests/bronze/:table.test.lkml` for single-table measures, `tests/silver/:explore.test.lkml` strictly for joins/`*_fields`/NDTs, one new `test: <table>_<slice>_metrics` block per PR slice on a bounded historical slice using `round(${view.measure}, 2|3|4) = ...`). Sync `$MODEL_NAME.model.lkml` includes if needed, run `sql-lookml-compare --offline --compact` for `compare_post_refactor.json`, update LookML snapshots, and push:
   ```bash
