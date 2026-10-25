@@ -33,7 +33,7 @@ codemode-start:
 	@echo "  \"mcpServers\": {"
 	@echo "    \"lkr_codemode\": {"
 	@echo "      \"command\": \"uvx\","
-	@echo "      \"args\": [\"-q\", \"--from\", \"lkr-dev-cli[codemode]\", \"lkr\", \"code-mode\", \"run\"]"
+	@echo "      \"args\": [\"-q\", \"--from\", \"lkr-dev-cli[code-mode]\", \"lkr\", \"code-mode\", \"run\"]"
 	@echo "    }"
 	@echo "  }"
 	@echo "}"

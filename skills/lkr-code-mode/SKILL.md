@@ -32,15 +32,15 @@ Inspect CLI options, authentication subcommands, or sandbox parameters:
 
 ```bash
 # General CLI help
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli --help
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli --help
 uv run lkr --help
 
 # Authentication commands (login, logout, whoami, list)
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli auth --help
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli auth --help
 uv run lkr auth --help
 
 # Code-mode subcommands (sandbox, help, search, type, run)
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode --help
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode --help
 uv run lkr code-mode --help
 
 # Offline SDK discovery via CLI (no Looker auth required)
@@ -50,7 +50,7 @@ uv run lkr code-mode search board_item
 uv run lkr code-mode type WriteQuery
 
 # Sandbox specific options (--code, --file, --var, --dev-mode)
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --help
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --help
 uv run lkr code-mode sandbox --help
 ```
 
@@ -63,7 +63,7 @@ uv run lkr code-mode sandbox --help
 uv run lkr code-mode sandbox --code="return me()"
 
 # Using uvx:
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --code="return me()"
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --code="return me()"
 ```
 
 ### Script File Execution (`--file` / `-f`)
@@ -77,7 +77,7 @@ uv run lkr code-mode sandbox --file=./skills/lkr-code-mode/scripts/order_items_q
 uv run lkr code-mode sandbox --file=./skills/lkr-code-mode/scripts/traverse_folders.py
 
 # Using uvx:
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --file=./path/to/script.py
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --file=./path/to/script.py
 ```
 
 ### Injected Variables (`--var` / `-v`)
@@ -86,7 +86,7 @@ Inject string variables into the sandbox as top-level Python identifiers:
 
 ```bash
 uv run lkr code-mode sandbox --file=./script.py --var project=my_project --var folder_id=123
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --file=./script.py -v project=my_project -v folder_id=123
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --file=./script.py -v project=my_project -v folder_id=123
 ```
 
 Inside `script.py`, `project` and `folder_id` are directly accessible as global strings:
@@ -104,7 +104,7 @@ Run operations in Looker Development Mode:
 
 ```bash
 uv run lkr code-mode sandbox --dev-mode --code="return all_projects()"
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode --code="return all_projects()"
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --dev-mode --code="return all_projects()"
 ```
 
 ## Authentication Workflow and Pre-Flight Checks
@@ -123,11 +123,11 @@ Check existing credentials and verify connectivity:
 
 ```bash
 # List configured OAuth accounts
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli auth list
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli auth list
 uv run lkr auth list
 
 # Verify current authentication and active user
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli auth whoami
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli auth whoami
 uv run lkr auth whoami
 ```
 
@@ -143,7 +143,7 @@ If OAuth is selected and no active account is configured, perform this setup onc
 3. If the response HTML contains "The OAuth client was not found", inform the user that `lkr-cli` is not registered on their Looker instance and link them to the configuration guide at [https://www.lkr.dev/docs/tools/cli/#oauth2-prerequisites](https://www.lkr.dev/docs/tools/cli/#oauth2-prerequisites).
 4. If the client is detected (the response returns "redirect_uri mismatch"), run the interactive login command:
    ```bash
-   uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli auth login
+   uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli auth login
    ```
 
 ### Step 4: Authentication Execution Options
@@ -156,13 +156,13 @@ Execute codemode directly via CLI (`lkr-dev-cli code-mode sandbox --code="..."`)
 uv run lkr --oauth-account=abc code-mode sandbox --code="return me()"
 
 # Using uvx:
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli --oauth-account=abc code-mode sandbox --code="return me()"
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli --oauth-account=abc code-mode sandbox --code="return me()"
 ```
 
 #### Custom Environment File (`--env-file`)
 ```bash
 # Passed to uvx directly:
-uvx --env-file .env --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --code="return me()"
+uvx --env-file .env --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --code="return me()"
 
 # Passed to lkr CLI:
 uv run lkr --env-file=.env code-mode sandbox --code="return me()"
@@ -171,7 +171,7 @@ uv run lkr --env-file=.env code-mode sandbox --code="return me()"
 #### Force OAuth Flow (`--force-oauth`)
 ```bash
 uv run lkr --force-oauth code-mode sandbox --code="return me()"
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli --force-oauth code-mode sandbox --code="return me()"
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli --force-oauth code-mode sandbox --code="return me()"
 ```
 
 #### Standard Environment Variables
@@ -209,8 +209,6 @@ Pre-packaged scripts are located in `scripts/`:
 - [scripts/personal_folder_dashboards.py](./scripts/personal_folder_dashboards.py): Inspects `me()`, extracts `personal_folder_id`, and returns personal folder dashboards.
 - [scripts/order_items_query.py](./scripts/order_items_query.py): Runs an inline query on `thelook` / `order_items` with `created_year` and `users.count` filtered by `status: Returned`.
 - [scripts/traverse_folders.py](./scripts/traverse_folders.py): Recursively collects dashboards and looks across all subfolders.
-- [scripts/readme.py](./scripts/readme.py): Reference documentation generator.
-- [scripts/examples.py](./scripts/examples.py): Built-in code examples collection.
 
 ## Common Looker SDK Recipes
 

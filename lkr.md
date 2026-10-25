@@ -671,6 +671,7 @@ $ lkr parse [OPTIONS] COMMAND [ARGS]...
 * `sql`: Parse semicolon-delimited SQL queries from...
 * `sql-lookml-compare`: Compare and map SQL queries (--sql /...
 * `lookml-to-api`: Generate Looker API all_lookml_models and...
+* `curation-meta`: Extract LookML field curation candidates...
 * `lookml-database-compare`: Compile explore SQL and validate tables...
 * `lookml`: Parse LookML from --path, --file, or...
 
@@ -743,6 +744,30 @@ $ lkr parse lookml-to-api [OPTIONS]
 * `--exclude-hidden`: Exclude hidden explores and hidden fields from output
 * `--validate`: Fail with non-zero exit code on duplicate field logic, alias collisions, unknown value_format_name, &#x27;* 100&#x27; paired with literal &#x27;%&#x27; value_format, or raw percentile/stddev/variance SQL in type: number measures
 * `--base-path <path>`: Baseline LookML directory; --validate ignores pre-existing errors present in --base-path
+* `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
+* `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)
+* `-o, --output <path>`: Optional output .json file path
+* `--help`: Show this message and exit.
+
+### `lkr parse curation-meta`
+
+Extract LookML field curation candidates and Monty sandbox inputs offline.
+
+**Usage**:
+
+```console
+$ lkr parse curation-meta [OPTIONS]
+```
+
+**Options**:
+
+* `-p, --path <path>`: Path to a LookML directory
+* `-f, --file <path>`: Path to a LookML file
+* `-l, --lookml <str>`: Inline LookML string
+* `--api-json <str>`: Path to JSON output from &#x27;lkr parse lookml-to-api&#x27; (or &#x27;-&#x27; for stdin)
+* `-m, --model <str>`: Optional LookML model name filter
+* `-e, --explore <str>`: Optional LookML explore name filter
+* `-v, --view <str>`: Optional LookML view name filter
 * `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
 * `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)
 * `-o, --output <path>`: Optional output .json file path

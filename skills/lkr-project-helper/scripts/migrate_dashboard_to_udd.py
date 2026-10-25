@@ -2,7 +2,7 @@
 """Migrate a LookML dashboard to a User-Defined Dashboard (UDD).
 
 Usage:
-  uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox \
+  uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox \
     --file=skills/lkr-project-helper/scripts/migrate_dashboard_to_udd.py \
     --var dashboard_id="model_name::dashboard_name" \
     [--var space_id="1"]

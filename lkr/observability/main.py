@@ -8,7 +8,6 @@ import typer
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from pydash import get
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
@@ -23,6 +22,7 @@ from lkr.observability.classes import (
     IframeRequestEvent,
     ObservabilityCtxObj,
 )
+from lkr.utils import deep_get as get
 
 app = FastAPI(title="observability")
 

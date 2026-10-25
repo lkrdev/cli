@@ -2,7 +2,7 @@
 """Upload non-standard assets (e.g. custom visualization JS/CSS) to a Looker project.
 
 Usage:
-  uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
+  uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --dev-mode \
     --file=skills/lkr-project-helper/scripts/upload_assets.py \
     --var project_name=<project> \
     --var file_path="custom_viz.js" \

@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -6,6 +7,10 @@ import typer
 
 from lkr.auth_service import get_auth
 from lkr.logger import logger
+from lkr.parse.curation import (
+    build_api_result_from_lookml,
+    extract_curation_metadata,
+)
 from lkr.parse.lookml import LookmlProject, parse_lookml
 from lkr.parse.lookml_database_compare import (
     format_compare_result,
@@ -36,6 +41,7 @@ from lkr.parse.user_attributes import (
 )
 
 __all__ = [
+    "curation_meta_command",
     "group",
     "lookml_command",
     "lookml_database_compare_command",
@@ -723,6 +729,79 @@ def lookml_to_api_command(
             for msg in new_msgs:
                 logger.error(msg)
             raise typer.Exit(1)
+    return result
+
+
+@group.command(name="curation-meta")
+def curation_meta_command(
+    path: Annotated[
+        Path | None,
+        typer.Option("--path", "-p", help="Path to a LookML directory"),
+    ] = None,
+    file: Annotated[
+        Path | None,
+        typer.Option("--file", "-f", help="Path to a LookML file"),
+    ] = None,
+    lookml: Annotated[
+        str | None,
+        typer.Option("--lookml", "-l", help="Inline LookML string"),
+    ] = None,
+    api_json: Annotated[
+        str | None,
+        typer.Option(
+            "--api-json",
+            help="Path to JSON output from 'lkr parse lookml-to-api' (or '-' for stdin)",
+        ),
+    ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option("--model", "-m", help="Optional LookML model name filter"),
+    ] = None,
+    explore: Annotated[
+        str | None,
+        typer.Option("--explore", "-e", help="Optional LookML explore name filter"),
+    ] = None,
+    view: Annotated[
+        str | None,
+        typer.Option("--view", "-v", help="Optional LookML view name filter"),
+    ] = None,
+    manifest: ManifestOpt = None,
+    constant: ConstantOpt = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Optional output .json file path"),
+    ] = None,
+) -> dict[str, Any]:
+    """Extract LookML field curation candidates and Monty sandbox inputs offline."""
+    if api_json is not None:
+        if any(x is not None for x in (path, file, lookml)):
+            logger.error("Specify either --api-json or one of --path, --file, --lookml")
+            raise typer.Exit(1)
+        if api_json != "-" and not Path(api_json).exists():
+            logger.error(f"API JSON file not found: {api_json}")
+            raise typer.Exit(1)
+        try:
+            payload: dict[str, Any] | LookmlToApiResult = json.loads(
+                sys.stdin.read()
+                if api_json == "-"
+                else Path(api_json).read_text(encoding="utf-8")
+            )
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse API JSON: {e}")
+            raise typer.Exit(1) from None
+    else:
+        _validate_lookml_args(path, file, lookml, manifest=manifest)
+        payload = build_api_result_from_lookml(
+            path=path,
+            file=file,
+            lookml=lookml,
+            model=model,
+            explore=explore,
+            manifest=manifest,
+            constants=_parse_constant_overrides(constant, manifest),
+        )
+    result = extract_curation_metadata(payload, view_filter=view)
+    _write_or_echo(json.dumps(result, indent=2), output)
     return result
 
 

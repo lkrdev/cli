@@ -33,7 +33,7 @@ uvx lkr-dev-cli code-mode sandbox --file=./path/to/script.py --var project=my_pr
 ### 2. Starting the Server
 To immediately trigger the MCP stdio listener, use:
 ```bash
-uvx -q lkr-dev-cli[codemode] code-mode run
+uvx -q lkr-dev-cli[code-mode] code-mode run
 ```
 
 ### 2. Client Configuration
@@ -44,7 +44,7 @@ To hook this server into Cursor or Claude Desktop natively over stdio, append th
   "mcpServers": {
     "lkr_codemode": {
       "command": "uvx",
-      "args": ["-q", "lkr-dev-cli[codemode]", "code-mode", "run"],
+      "args": ["-q", "lkr-dev-cli[code-mode]", "code-mode", "run"],
       "env": {
         "LOOKERSDK_BASE_URL": "https://your.looker.instance",
         "LOOKERSDK_CLIENT_ID": "your-client-id",
@@ -58,7 +58,7 @@ To hook this server into Cursor or Claude Desktop natively over stdio, append th
 ### 3. Visual Inspector
 To check things out on a web panel:
 ```bash
-npx @modelcontextprotocol/inspector uvx -q lkr-dev-cli[codemode] code-mode run
+npx @modelcontextprotocol/inspector uvx -q lkr-dev-cli[code-mode] code-mode run
 ```
 
 ## Architectural & Troubleshooting Notes
