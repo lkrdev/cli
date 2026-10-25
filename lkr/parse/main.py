@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -18,6 +19,7 @@ from lkr.parse.lookml_to_api import LookmlToApiResult, parse_lookml_to_api
 from lkr.parse.sql import SqlParseResult, parse_sql
 from lkr.parse.sql_to_lookml import (
     SqlToLookmlResult,
+    compact_sql_to_lookml,
     parse_sql_to_lookml,
 )
 from lkr.parse.translations import (
@@ -571,6 +573,13 @@ def sql_lookml_compare_command(
             help="Skip live Looker connection and column metadata lookups",
         ),
     ] = False,
+    compact: Annotated[
+        bool,
+        typer.Option(
+            "--compact",
+            help="Omit duplicate per-field cross-references, 0-indexed positions, and empty defaults",
+        ),
+    ] = False,
     manifest: ManifestOpt = None,
     constant: ConstantOpt = None,
 ) -> SqlToLookmlResult:
@@ -598,9 +607,12 @@ def sql_lookml_compare_command(
     except ValueError as e:
         logger.error(str(e))
         raise typer.Exit(1)
-    _write_or_echo(
-        result.model_dump_json(indent=2, by_alias=True, exclude_none=True), output
+    payload = (
+        json.dumps(compact_sql_to_lookml(result), indent=2)
+        if compact
+        else result.model_dump_json(indent=2, by_alias=True, exclude_none=True)
     )
+    _write_or_echo(payload, output)
     return result
 
 

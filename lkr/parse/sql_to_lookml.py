@@ -3069,3 +3069,37 @@ def parse_sql_to_lookml(
         queries=mappings,
         dialect=dialect,
     )
+
+
+def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
+    """Serialize SqlToLookmlResult without duplicate per-field cross-refs, 0-indexed positions, or empty defaults."""
+    data = result.model_dump(by_alias=True, exclude_none=True, exclude_defaults=True)
+
+    def _prune(val: Any) -> Any:
+        if isinstance(val, dict):
+            return {
+                k: pv
+                for k, v in val.items()
+                if k != "position"
+                and ((pv := _prune(v)) not in (None, [], {}) or k in ("queries", "unmodeled_db_columns"))
+            }
+        if isinstance(val, list):
+            return [px for x in val if (px := _prune(x)) not in (None, [], {})]
+        return val
+
+    for q in data.get("queries") or []:
+        if isinstance(q.get("parsed_query"), dict):
+            q["parsed_query"].pop("raw_sql", None)
+        q.pop("usages", None)
+        for vm in q.get("views") or []:
+            vm.setdefault("unmodeled_db_columns", [])
+            for fm in vm.get("fields") or []:
+                for dup_key in (
+                    "explores",
+                    "tests",
+                    "aggregate_tables",
+                    "explore_queries",
+                    "usages",
+                ):
+                    fm.pop(dup_key, None)
+    return _prune(data)

@@ -48,12 +48,13 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
         if: steps.check.outputs.has_lookml == 'true'
+        with: { enable-cache: false }
 
       - name: Install lkr-dev-cli
         if: steps.check.outputs.has_lookml == 'true'
         run: |
           uv tool install "lkr-dev-cli[parse]"
-          if ! lkr parse lookml snapshot --help 2>&1 | grep -q -- "--allow-additions" || ! lkr parse lookml-to-api --help 2>&1 | grep -q -- "--base-path"; then
+          if ! lkr parse lookml snapshot --help 2>&1 | grep -q -- "--allow-additions" || ! lkr parse lookml-to-api --help 2>&1 | grep -q -- "--base-path" || ! lkr parse sql-lookml-compare --help 2>&1 | grep -q -- "--compact"; then
             uv tool install --force "lkr-dev-cli[parse] @ git+https://github.com/lkrdev/cli.git"
           fi
 
@@ -149,6 +150,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
         if: steps.check.outputs.has_lookml == 'true'
+        with: { enable-cache: false }
 
       - name: Install lkr-dev-cli
         if: steps.check.outputs.has_lookml == 'true'
@@ -187,7 +189,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
       - uses: astral-sh/setup-uv@v7
+        with: { enable-cache: false }
       - name: Install lkr-dev-cli
         run: uv tool install "lkr-dev-cli[tools,code-mode]"
 
@@ -205,11 +209,21 @@ jobs:
         run: |
           SCRIPT_DIR=".agents/skills/agentic-lookml-workflow/scripts"
           [[ ! -d "$SCRIPT_DIR" ]] && SCRIPT_DIR="skills/agentic-lookml-workflow/scripts"
+          TEST_ARGS=()
+          if [[ -n "$BASE_REF" ]] && git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1; then
+            CHANGED_TESTS=$(git diff --name-only --diff-filter=ACMR "origin/$BASE_REF...HEAD" -- '*.test.lkml' | sed -E 's#^(\./)?data/[^/]+/lookml/##' | paste -sd, - || true)
+            if [[ -z "$CHANGED_TESTS" ]]; then
+              echo "No added or modified .test.lkml files in PR; skipping warehouse data tests."
+              exit 0
+            fi
+            TEST_ARGS=(--var file_ids="$CHANGED_TESTS")
+          fi
           OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox \
             --file="$SCRIPT_DIR/validate_and_commit_branch.py" \
             --var project_id="$PROJECT_ID" \
             --var branch_name="$BRANCH_NAME" \
             --var head_sha="$HEAD_SHA" \
+            "${TEST_ARGS[@]}" \
             --var skip_validate="true")
           echo "$OUT"
           echo "$OUT" | sed -n '/^{/,$p' | jq -e '.passed == true' >/dev/null
@@ -254,6 +268,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
         if: steps.payload.outputs.has_payload == 'true'
+        with: { enable-cache: false }
 
       - name: Install lkr-dev-cli
         if: steps.payload.outputs.has_payload == 'true'

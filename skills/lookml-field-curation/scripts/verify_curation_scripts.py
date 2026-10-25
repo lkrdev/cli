@@ -69,6 +69,13 @@ class _CurationMockSDK(ExtendedLooker40SDK):
             return json.dumps([{f: f"SKU-{i:05d}"} for i in range(1, 150)])
         if f.endswith(".customer_notes"):
             return json.dumps([{f: "Customer requested delivery to back porch " + ("x" * 100)}])
+        if f.endswith(".customer_email"):
+            return json.dumps([
+                {f: "alice@example.com"},
+                {f: "bob@example.com"},
+            ])
+        if f.endswith(".customer_phone"):
+            return json.dumps([{f: f"+1-555-010-{i:04d}"} for i in range(1, 150)])
         if f.endswith(".metadata_json"):
             return json.dumps([
                 {f: '{"utm_source": "search", "medium": "cpc"}'},
@@ -183,6 +190,17 @@ view: orders {
     sql: ${TABLE}.customer_notes ;;
   }
 
+  dimension: customer_email {
+    type: string
+    sql: ${TABLE}.customer_email ;;
+  }
+
+  dimension: customer_phone {
+    type: string
+    tags: ["contact"]
+    sql: ${TABLE}.customer_phone ;;
+  }
+
   dimension: metadata_json {
     type: string
     sql: ${TABLE}.metadata_json ;;
@@ -258,6 +276,7 @@ def test_local_lookml_to_api_and_sandbox_pipeline() -> None:
     assert "orders.metadata_json" in orders_view["string_fields"]
     reasons = {c["field_name"]: c["reason"] for c in orders_view["static_curation_candidates"]}
     assert reasons["orders.order_id"] == "primary_key_visible"
+    assert reasons["orders.user_id"] == "foreign_key_visible"
     assert reasons["orders._raw_amount"] == "intermediate_helper_dimension"
     assert reasons["orders.metadata_json"] == "raw_json_or_payload_column"
     assert reasons["orders._fivetran_synced"] == "system_or_etl_audit_column"
@@ -285,14 +304,20 @@ def test_local_lookml_to_api_and_sandbox_pipeline() -> None:
         assert recs_by_name["order_id"]["label_short"] == "Order ID"
         assert recs_by_name["order_id"]["recommended_hidden"] is True
         assert recs_by_name["order_id"]["recommended_suggestable"] is False
+        assert recs_by_name["order_id"]["recommended_tags"] == []
         assert (
             recs_by_name["order_id"]["recommended_description"]
             == "Internal key or system metadata column not intended for end-user grouping."
         )
 
+        assert recs_by_name["user_id"]["classification"] == "surrogate_or_system_key"
+        assert recs_by_name["user_id"]["recommended_tags"] == ["foreign_key"]
+        assert 'tags: ["foreign_key"]' in recs_by_name["user_id"]["lookml_snippet"]
+
         assert recs_by_name["status"]["classification"] == "low_cardinality_enum"
         assert recs_by_name["status"]["recommended_hidden"] is False
         assert recs_by_name["status"]["recommended_suggestable"] is True
+        assert recs_by_name["status"]["recommended_tags"] == ["low_cardinality_enum"]
         assert (
             "Order fulfillment status. Values: 'Pending', 'Processing', 'Shipped', 'Cancelled'."
             == recs_by_name["status"]["recommended_description"]
@@ -301,6 +326,7 @@ def test_local_lookml_to_api_and_sandbox_pipeline() -> None:
         assert recs_by_name["category"]["classification"] == "medium_cardinality_categorical"
         assert recs_by_name["category"]["recommended_hidden"] is False
         assert recs_by_name["category"]["recommended_suggestable"] is True
+        assert recs_by_name["category"]["recommended_tags"] == ["medium_cardinality_categorical"]
         assert recs_by_name["category"]["recommended_description"].startswith("Top values include:")
         assert "(25 distinct values)" in recs_by_name["category"]["recommended_description"]
 
@@ -308,6 +334,7 @@ def test_local_lookml_to_api_and_sandbox_pipeline() -> None:
             assert recs_by_name[label_col]["classification"] == "searchable_entity_label"
             assert recs_by_name[label_col]["recommended_hidden"] is False
             assert recs_by_name[label_col]["recommended_suggestable"] is True
+            assert recs_by_name[label_col]["recommended_tags"] == ["searchable_entity_label"]
             assert recs_by_name[label_col]["recommended_description"].startswith(
                 "Searchable entity label"
             )
@@ -316,9 +343,22 @@ def test_local_lookml_to_api_and_sandbox_pipeline() -> None:
             assert recs_by_name[opaque_col]["classification"] == "opaque_code_or_free_text"
             assert recs_by_name[opaque_col]["recommended_hidden"] is False
             assert recs_by_name[opaque_col]["recommended_suggestable"] is False
+            assert recs_by_name[opaque_col]["recommended_tags"] == ["opaque_code_or_free_text"]
             assert recs_by_name[opaque_col]["recommended_description"].startswith(
                 "Opaque identifier or free-text string"
             )
+
+        assert recs_by_name["customer_email"]["recommended_tags"] == [
+            "opaque_code_or_free_text",
+            "pii",
+            "email",
+        ]
+        assert recs_by_name["customer_phone"]["recommended_tags"] == [
+            "contact",
+            "opaque_code_or_free_text",
+            "pii",
+            "phone",
+        ]
 
         assert recs_by_name["metadata_json"]["classification"] == "json_payload"
         assert recs_by_name["metadata_json"]["recommended_hidden"] is True
@@ -377,8 +417,12 @@ def test_local_lookml_to_api_and_sandbox_pipeline() -> None:
             part_col["recommended_description"]
             == "Physical partition column (required). Min date available: 2023-01-15. Do not use 'is any value'."
         )
+        assert part_col["recommended_tags"] == ["partition_key"]
+        assert 'tags: ["partition_key"]' in part_col["lookml_snippet"]
         clust_cols = enrich_res["clustering_columns"]
         assert [c["lookml_field_name"] for c in clust_cols] == ["user_id", "country"]
+        assert clust_cols[0]["recommended_tags"] == ["cluster_key"]
+        assert 'tags: ["cluster_key"]' in clust_cols[0]["lookml_snippet"]
         assert (
             "Filtering alongside Created Date enables block pruning."
             in clust_cols[0]["recommended_description"]

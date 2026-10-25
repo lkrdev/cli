@@ -760,3 +760,52 @@ def test_snapshot_measures_indexed_by_explore_with_join_aliases_and_field_scopin
         },
     }
 
+
+def test_access_snapshot_tracks_pii_tags_and_refinements(tmp_path: Path):
+    proj_dir = tmp_path / "pii_proj"
+    (proj_dir / "bronze").mkdir(parents=True)
+    (proj_dir / "bronze" / "users.view.lkml").write_text(
+        "view: users {\n  dimension: email { type: string sql: ${TABLE}.email ;; }\n}\n",
+        encoding="utf-8",
+    )
+    (proj_dir / "bronze" / "users.refinement.lkml").write_text(
+        'include: "users.view.lkml"\n'
+        "view: +users {\n"
+        "  dimension: email {\n"
+        "    hidden: yes\n"
+        '    tags: ["pii", "email"]\n'
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (proj_dir / "shop.model.lkml").write_text(
+        'connection: "bq"\ninclude: "/bronze/*.lkml"\nexplore: users {}\n',
+        encoding="utf-8",
+    )
+
+    res1, _ = run_lookml_snapshot(path=proj_dir)
+    assert res1.success is True
+    access_snap = json.loads(
+        (proj_dir / "__snapshots__" / "access.snap.json.md").read_text(encoding="utf-8")
+    )
+    email_entry = access_snap["fields"]["shop.users.email"]
+    assert email_entry["pii"] is True
+    assert email_entry["hidden"] is True
+    assert email_entry["file"].endswith("users.refinement.lkml")
+
+    # Unhiding a hidden pii field is a material access change requiring review
+    (proj_dir / "bronze" / "users.refinement.lkml").write_text(
+        'include: "users.view.lkml"\n'
+        "view: +users {\n"
+        "  dimension: email {\n"
+        "    hidden: no\n"
+        '    tags: ["pii", "email"]\n'
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    res2, _ = run_lookml_snapshot(path=proj_dir, allow_additions=True)
+    assert res2.requires_review is True
+    assert any("shop.users.email.hidden" in c for c in res2.material_changes)
+
+

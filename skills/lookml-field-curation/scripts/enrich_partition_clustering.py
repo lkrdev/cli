@@ -42,6 +42,21 @@ def _humanize_label(name: str) -> str:
     return " ".join("ID" if w.lower() == "id" else w.capitalize() for w in words)
 
 
+def _dedupe_tags(tags: list[str]) -> list[str]:
+    out: list[str] = []
+    for t in tags:
+        s = str(t).strip()
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def _fmt_snippet(construct: str, lname: str, tags: list[str], desc: str) -> str:
+    escaped = desc.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    tags_str = ", ".join(json.dumps(t) for t in tags)
+    return f'  {construct}: {lname} {{\n    tags: [{tags_str}]\n    description: "{escaped}"\n  }}'
+
+
 def resolve_lookml_field_for_column(
     col_name: str, fields_meta: list[dict], is_time_partition: bool = False
 ) -> dict:
@@ -61,6 +76,7 @@ def resolve_lookml_field_for_column(
                 "filter_field": filter_field,
                 "filter_label": raw_lbl or _humanize_label(filter_field),
                 "existing_description": str(f.get("description") or "").strip(),
+                "existing_tags": _dedupe_tags(list(f.get("tags") or [])),
             }
 
     name = (
@@ -75,6 +91,7 @@ def resolve_lookml_field_for_column(
         "filter_field": filter_field,
         "filter_label": _humanize_label(filter_field),
         "existing_description": "",
+        "existing_tags": [],
     }
 
 
@@ -202,8 +219,8 @@ def main():
         prefix = (existing_desc.rstrip(".") + ". ") if existing_desc else ""
         min_date_str = f" Min date available: {min_partition_date}." if min_partition_date else ""
         rec_desc = f"{prefix}Physical partition column (required).{min_date_str} Do not use 'is any value'."
-        escaped_desc = rec_desc.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-        snippet = f'  {construct}: {lname} {{\n    description: "{escaped_desc}"\n  }}'
+        rec_tags = _dedupe_tags([*mapped["existing_tags"], "partition_key"])
+        snippet = _fmt_snippet(construct, lname, rec_tags, rec_desc)
         refinement_snippets.append(snippet)
         partition_recommendation = {
             "column_name": partition_col,
@@ -216,6 +233,7 @@ def main():
             "filter_timeframe_field": f"{target_view}.{filter_timeframe_ref}",
             "filter_timeframe_label": filter_timeframe_label,
             "recommended_description": rec_desc,
+            "recommended_tags": rec_tags,
             "lookml_snippet": snippet,
         }
 
@@ -230,8 +248,8 @@ def main():
         rec_desc = (
             f"{prefix}Clustering column (order {pos}). Filtering {target} enables block pruning."
         )
-        escaped_desc = rec_desc.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-        snippet = f'  {construct}: {lname} {{\n    description: "{escaped_desc}"\n  }}'
+        rec_tags = _dedupe_tags([*mapped["existing_tags"], "cluster_key"])
+        snippet = _fmt_snippet(construct, lname, rec_tags, rec_desc)
         refinement_snippets.append(snippet)
         clustering_recommendations.append({
             "column_name": cname,
@@ -241,6 +259,7 @@ def main():
             "lookml_field_name": lname,
             "lookml_label": mapped["filter_label"],
             "recommended_description": rec_desc,
+            "recommended_tags": rec_tags,
             "lookml_snippet": snippet,
         })
 
