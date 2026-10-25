@@ -57,7 +57,7 @@ Silver NDTs remain ephemeral (inlined CTE or subquery at query runtime) by defau
 
 Inside `silver/user_order_facts.view.lkml`, `lifetime_orders` and `lifetime_spend` become dimensions (`primary_key: yes` on `user_id`). Define `customer_frequency_tier` (`type: tier`) and Stage-2 measures (`avg_customer_ltv { type: average sql: ${lifetime_spend} ;; }`) on `silver/user_order_facts.view.lkml`.
 
-Join `user_order_facts` into the fact-anchored `silver/explores/orders.explore.lkml` (`${orders.user_id} = ${user_order_facts.user_id}`, `relationship: many_to_one`, or `${users.id} = ${user_order_facts.user_id}`, `relationship: one_to_one` against the joined `users` view inside `orders.explore.lkml`). Never create a standalone `silver/explores/users.explore.lkml` for a lookup table.
+Join `user_order_facts` into the fact-anchored `silver/explores/orders.explore.lkml` (`${orders.user_id} = ${user_order_facts.user_id}`, `relationship: many_to_one`, or `${users.id} = ${user_order_facts.user_id}`, `relationship: one_to_one` against the joined `users` view inside `orders.explore.lkml`). Never create a standalone `silver/explores/users.explore.lkml` for a lookup table. When an NDT aggregates at a non-table-PK cohort/session grain with a `HAVING` filter (e.g., `GROUP BY session_id HAVING COUNTIF(event_type = 'purchase') > 0`), filter the measure directly inside `explore_source: { filters: [events.purchase_count: ">0"] }` (which Looker compiles to `HAVING`), declare `primary_key: yes` on `session_id` (plus `measure: count { type: count }` for qualifying session counts), join onto `silver/explores/events.explore.lkml` (`many_to_one`), and filter outer queries on `event_session_facts.session_id: "-NULL"` (for `type: string`) or `"NOT NULL"` (for `type: number`) whenever SQL restricts to qualifying sessions.
 
 ### Distinguish static entity grain from dynamic dashboard-filtered grain
 
@@ -73,7 +73,7 @@ view: user_order_facts {
   derived_table: {
     explore_source: orders {
       column: user_id {}
-      column: lifetime_orders { field: orders.order_count }
+      column: lifetime_orders { field: orders.count }
       column: lifetime_spend { field: orders.total_revenue }
       column: first_order_date { field: orders.min_created_date }
     }
@@ -83,6 +83,10 @@ view: user_order_facts {
     primary_key: yes
     hidden: yes
     type: number
+  }
+
+  measure: count {
+    type: count
   }
 
   dimension: lifetime_orders {
