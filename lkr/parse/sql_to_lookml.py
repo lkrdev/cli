@@ -2887,6 +2887,17 @@ def _analyze_query_joins(
     }
     results: list[ExploreJoinComparison] = []
 
+    def _find_join_node(tn: str, ta: str, meta: list[Any]) -> LookmlExploreJoinNode | None:
+        if ta:
+            for jn, al, _, _ in meta:
+                if ta in al:
+                    return jn
+        if tn:
+            hits = [jn for jn, _, jns, _ in meta if tn in jns]
+            if len(hits) == 1:
+                return hits[0]
+        return None
+
     for target_graph in candidate_graphs:
         m_views = views_by_model.get(target_graph.model_name or "", {})
         bv_tail = _view_table_tail(m_views.get(target_graph.base_view))
@@ -2994,11 +3005,8 @@ def _analyze_query_joins(
                 and sql_join.equi_joins
                 and inferred_rel in ("one_to_one", "many_to_one", "one_to_many")
             ):
-                left_j, right_j = (
-                    next((jn for jn, al, _, _ in j_meta if ta and ta in al), None)
-                    or (hits[0] if len(hits := [jn for jn, _, jns, _ in j_meta if tn and tn in jns]) == 1 else None)
-                    for tn, ta in ((left_name, left_alias), (right_name, right_alias))
-                )
+                left_j = _find_join_node(left_name, left_alias, j_meta)
+                right_j = _find_join_node(right_name, right_alias, j_meta)
                 if left_j is not None and right_j is not None and left_j.name != right_j.name:
                     sql_pairs = {
                         p
