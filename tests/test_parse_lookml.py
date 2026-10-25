@@ -3468,6 +3468,101 @@ def test_sql_lookml_compare_refinement_file_attribution_and_compact(tmp_path: Pa
     assert "explores" not in rev_fld
 
 
+def test_iter3_value_format_validation_compact_explores_and_diff_tests(tmp_path: Path):
+    import importlib.util
+    import json
 
+    from typer.testing import CliRunner
 
+    from lkr.main import app
+
+    runner = CliRunner()
+    (tmp_path / "orders.view.lkml").write_text(
+        "view: orders {\n"
+        "  sql_table_name: `proj.ds.orders` ;;\n"
+        "  dimension: status { type: string sql: ${TABLE}.status ;; }\n"
+        "  dimension: sale_price { type: number sql: ${TABLE}.sale_price ;; }\n"
+        "  measure: count { type: count }\n"
+        "  measure: ratio_ok { type: number sql: ${sale_price} ;; value_format_name: decimal_3 }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "shop.model.lkml").write_text(
+        'connection: "bq"\n'
+        'include: "*.view.lkml"\n'
+        "explore: orders {\n"
+        "  query: q_exact { dimensions: [status] measures: [count, ratio_ok] }\n"
+        "  query: q_sibling { measures: [count] }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    assert (
+        runner.invoke(
+            app, ["parse", "lookml-to-api", "--path", str(tmp_path), "--validate"]
+        ).exit_code
+        == 0
+    )
+
+    comp = json.loads(
+        runner.invoke(
+            app,
+            [
+                "parse",
+                "sql-lookml-compare",
+                "--sql",
+                "SELECT status, COUNT(*) AS c, SUM(sale_price) AS s FROM `proj.ds.orders` GROUP BY 1",
+                "--path",
+                str(tmp_path),
+                "--offline",
+                "--compact",
+            ],
+        ).output
+    )["queries"][0]
+    assert len(comp["explores"]) == 1
+    assert set(comp["explores"][0]["fields"]) >= {"orders.status", "orders.count"}
+    assert [eq["query_name"] for eq in comp["explore_queries"]] == ["q_exact"]
+
+    bad_dir = tmp_path / "bad"
+    bad_dir.mkdir()
+    (bad_dir / "orders.view.lkml").write_text(
+        "view: orders {\n"
+        "  measure: bad_fmt { type: number sql: 1 ;; value_format_name: decimal_9 }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (bad_dir / "shop.model.lkml").write_text(
+        'connection: "bq"\ninclude: "*.view.lkml"\nexplore: orders {}\n',
+        encoding="utf-8",
+    )
+    bad_res = runner.invoke(
+        app, ["parse", "lookml-to-api", "--path", str(bad_dir), "--validate"]
+    )
+    assert bad_res.exit_code == 1
+
+    spec = importlib.util.spec_from_file_location(
+        "diff_lookml_tests",
+        Path(__file__).resolve().parents[1]
+        / "skills/agentic-lookml-workflow/scripts/diff_lookml_tests.py",
+    )
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    base_lkml = (
+        "# comment with { brace }\n"
+        "test: legacy_test {\n"
+        '  explore_source: events { filters: { field: events.status value: "a{b}" } }\n'
+        "  assert: ok { expression: ${events.status} != 'x}y' ;; }\n"
+        "}\n"
+    )
+    head_lkml = (
+        base_lkml
+        + "\ntest: new_pr_test {\n"
+        "  explore_source: events {}\n"
+        "  assert: ok { expression: ${events.count} > 0 ;; }\n"
+        "}\n"
+    )
+    base_blocks = mod.extract_test_blocks(base_lkml)
+    head_blocks = mod.extract_test_blocks(head_lkml)
+    changed = [n for n, b in head_blocks.items() if base_blocks.get(n) != b]
+    assert changed == ["new_pr_test"]
 

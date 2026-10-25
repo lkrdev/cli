@@ -211,12 +211,12 @@ jobs:
           [[ ! -d "$SCRIPT_DIR" ]] && SCRIPT_DIR="skills/agentic-lookml-workflow/scripts"
           TEST_ARGS=()
           if [[ -n "$BASE_REF" ]] && git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1; then
-            CHANGED_TESTS=$(git diff --name-only --diff-filter=ACMR "origin/$BASE_REF...HEAD" -- '*.test.lkml' | sed -E 's#^(\./)?data/[^/]+/lookml/##' | paste -sd, - || true)
-            if [[ -z "$CHANGED_TESTS" ]]; then
-              echo "No added or modified .test.lkml files in PR; skipping warehouse data tests."
+            readarray -t DIFF_PAIR < <(python3 "$SCRIPT_DIR/diff_lookml_tests.py" "origin/$BASE_REF")
+            if [[ -z "${DIFF_PAIR[0]:-}" ]]; then
+              echo "No added or modified LookML test blocks in PR; skipping warehouse data tests."
               exit 0
             fi
-            TEST_ARGS=(--var file_ids="$CHANGED_TESTS")
+            TEST_ARGS=(--var file_ids="${DIFF_PAIR[0]}" --var test_names="${DIFF_PAIR[1]}")
           fi
           OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox \
             --file="$SCRIPT_DIR/validate_and_commit_branch.py" \

@@ -41,10 +41,28 @@ def main():
     }
 
     try:
+        files = all_project_files(project_id=project_id) or []  # ty: ignore[unresolved-reference]
+    except Exception:
+        files = []
+    paths = [str(f.get("path") or f.get("id") or "").lstrip("/") for f in files if isinstance(f, dict)]
+    model_files = [p for p in paths if p.endswith(".model.lkml") and "/" not in p]
+    conn_name = ""
+    if model_files:
+        out["model_name"] = model_files[0][:-11]
+        try:
+            mc = get_file_content(project_id=project_id, file_path=model_files[0]) or ""  # ty: ignore[unresolved-reference]
+        except Exception:
+            mc = ""
+        cm = re.search(r'^\s*connection:\s*["\']?([^"\'\s;#]+)["\']?', mc, re.MULTILINE)
+        if cm:
+            conn_name = cm.group(1).strip()
+            out["connection_name"] = conn_name
+
+    try:
         raw_parsed = parsed_sql_json  # ty: ignore[unresolved-reference]
     except NameError:
         raw_parsed = None
-    if not raw_parsed:
+    if not raw_parsed or not conn_name:
         return out
 
     try:
@@ -61,25 +79,11 @@ def main():
                 sch = f"{cat}.{db}" if (cat and db) else db
                 if tbl and sch and "*" not in tbl and tbl.lower() not in ctes:
                     wanted[(sch, tbl)] = None
-    if not wanted:
-        return out
-
-    files = all_project_files(project_id=project_id) or []  # ty: ignore[unresolved-reference]
-    paths = [str(f.get("path") or f.get("id") or "").lstrip("/") for f in files if isinstance(f, dict)]
     existing_bronze = {
         p.rsplit("/", 1)[-1][:-10].lower() for p in paths if p.startswith("bronze/") and p.endswith(".view.lkml")
     }
     missing = [{"schema": s, "table_name": t, "base_view": True} for s, t in wanted if t.lower() not in existing_bronze]
-    model_files = [p for p in paths if p.endswith(".model.lkml") and "/" not in p]
-    if not missing or not model_files:
-        return out
-
-    try:
-        mc = get_file_content(project_id=project_id, file_path=model_files[0]) or ""  # ty: ignore[unresolved-reference]
-    except Exception:
-        mc = ""
-    cm = re.search(r'^\s*connection:\s*["\']?([^"\'\s;#]+)["\']?', mc, re.MULTILINE)
-    if cm:
+    if missing:
         if not any(p.startswith("bronze/") for p in paths):
             try:
                 create_project_directory(project_id=project_id, directory_path="bronze")  # ty: ignore[unresolved-reference]
@@ -89,8 +93,8 @@ def main():
             generate_lookml_with_new_files(  # ty: ignore[unresolved-reference]
                 project_id=project_id,  # ty: ignore[unresolved-reference]
                 body={"tables": missing},
-                connection=cm.group(1).strip(),
-                model_name=model_files[0][:-11],
+                connection=conn_name,
+                model_name=out["model_name"],
                 folder_name="bronze",
                 file_type_for_explores="none",
                 generate_descriptions=True,

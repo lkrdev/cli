@@ -1420,6 +1420,34 @@ def _find_raw_sql_aggregate_errors(
     return errors
 
 
+def _find_invalid_value_format_errors(
+    all_dims: list[ApiLookmlModelExploreField],
+    all_meas: list[ApiLookmlModelExploreField],
+    model_obj: LookmlModel,
+) -> list[dict[str, Any]]:
+    valid = set(VALUE_FORMAT_MAP) | set(model_obj.named_value_format or {})
+    seen: set[str] = set()
+    errors: list[dict[str, Any]] = []
+    for f in (*all_dims, *all_meas):
+        target = f.dimension_group or f.name
+        if not f.value_format_name or f.value_format_name in valid or target in seen:
+            continue
+        seen.add(target)
+        errors.append(
+            {
+                "type": "invalid_value_format_name",
+                "view": f.view,
+                "field": target,
+                "value_format_name": f.value_format_name,
+                "message": (
+                    f"Field '{target}' uses unknown value_format_name={f.value_format_name!r}; "
+                    f"use a model named_value_format or built-in {sorted(VALUE_FORMAT_MAP)}."
+                ),
+            }
+        )
+    return errors
+
+
 def _build_explore_from_assembled(
     model_name: str,
     model_obj: LookmlModel,
@@ -1694,6 +1722,7 @@ def _build_explore_from_assembled(
         *_find_duplicate_explore_fields(all_dims, all_meas, views_by_alias),
         *_find_raw_sql_aggregate_errors(all_meas),
         *_find_percent_scaling_errors(all_dims, all_meas, views_by_alias),
+        *_find_invalid_value_format_errors(all_dims, all_meas, model_obj),
     ]
     active_names = {f.name for f in (*all_dims, *all_meas, *all_filts, *all_params)}
     by_q_alias: dict[str, set[str]] = {}

@@ -3091,6 +3091,34 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
         if isinstance(q.get("parsed_query"), dict):
             q["parsed_query"].pop("raw_sql", None)
         q.pop("usages", None)
+        grouped_explores: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for em in q.get("explores") or []:
+            ekey = (em.get("model_name"), em.get("explore_name"), em.get("view_alias"), em.get("join_name"))
+            entry = grouped_explores.setdefault(
+                ekey, {**{k: v for k, v in em.items() if k != "field"}, "fields": []}
+            )
+            if (fld := em.get("field")) and fld not in entry["fields"]:
+                entry["fields"].append(fld)
+        if grouped_explores:
+            q["explores"] = list(grouped_explores.values())
+        for tm in q.get("tests") or []:
+            if tm.get("fields"):
+                tm.pop("field", None)
+        eqs = q.get("explore_queries") or []
+        exact_exps = {
+            (eq.get("model_name"), eq.get("explore_name"))
+            for eq in eqs
+            if eq.get("coverage") == "exact"
+        }
+        if exact_exps:
+            q["explore_queries"] = [
+                eq
+                for eq in eqs
+                if not (
+                    eq.get("coverage") == "partial_overlap"
+                    and (eq.get("model_name"), eq.get("explore_name")) in exact_exps
+                )
+            ]
         for vm in q.get("views") or []:
             vm.setdefault("unmodeled_db_columns", [])
             for fm in vm.get("fields") or []:
