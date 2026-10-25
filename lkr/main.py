@@ -30,16 +30,13 @@ app.add_typer(schema_group, name="schema")
 IMPORT_ERROR = None
 
 
-def add_optional_typer_group(
-    app, import_path, group_name, extra_message=None, extra_name=None
-):
+def add_optional_typer_group(app, import_path, group_name, extra_message=None):
     try:
         module_path, attr = import_path.rsplit(".", 1)
         mod = __import__(module_path, fromlist=[attr])
         group = getattr(mod, attr)
         app.add_typer(group, name=group_name)
     except ModuleNotFoundError as import_error:
-        extra = extra_name or group_name
         err = import_error
 
         @app.command(
@@ -51,7 +48,7 @@ def add_optional_typer_group(
             },
         )
         def fallback():
-            msg = f"{group_name} tools (dependencies not available, try installing optional dependencies: lkr-dev-cli\\[{extra}])"
+            msg = f"{group_name} tools (dependencies not available, try installing optional dependencies: lkr-dev-cli\\[{group_name}])"
             if extra_message:
                 msg += f" {extra_message}"
             logger.error(msg)
@@ -62,9 +59,7 @@ def add_optional_typer_group(
 add_optional_typer_group(app, "lkr.mcp.main.group", "mcp")
 add_optional_typer_group(app, "lkr.observability.main.group", "observability")
 add_optional_typer_group(app, "lkr.tools.main.group", "tools")
-add_optional_typer_group(
-    app, "lkr.codemode.main.group", "code-mode", extra_name="codemode"
-)
+add_optional_typer_group(app, "lkr.codemode.main.group", "code-mode")
 add_optional_typer_group(app, "lkr.parse.main.group", "parse")
 
 

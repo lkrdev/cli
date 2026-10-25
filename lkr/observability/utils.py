@@ -2,8 +2,6 @@ import random
 import re
 from datetime import UTC, datetime
 
-from pydash import set_
-
 from lkr.logger import logger
 
 MAX_SESSION_LENGTH = 2592000
@@ -57,9 +55,8 @@ def format_attributes(
                 val = split_attr[1]
                 # regex to check if for string random.randint(0,1000000)
                 is_valid, val = check_random_int_format(val)
-                if is_valid:
-                    set_(split_attr, 1, val)
-                    set_(formatted_attributes, [split_attr[0]], split_attr[1])
+                if is_valid and val is not None:
+                    split_attr[1] = val
                 else:
                     valid = False
             else:

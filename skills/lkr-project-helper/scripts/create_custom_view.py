@@ -2,7 +2,7 @@
 """Create a custom SQL derived table LookML view.
 
 Usage:
-  uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
+  uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --dev-mode \
     --file=skills/lkr-project-helper/scripts/create_custom_view.py \
     --var project_name=<project> \
     --var view_name=<view_name> \

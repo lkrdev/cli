@@ -7,7 +7,6 @@ from typing import Annotated, Any
 import requests
 import typer
 from looker_sdk.sdk.api40 import models as models40
-from pydash import get
 
 from lkr.auth_service import get_auth
 from lkr.extended_sdk_methods import (
@@ -15,6 +14,7 @@ from lkr.extended_sdk_methods import (
     GeminiEnterpriseAgentRequest,
 )
 from lkr.logger import logger
+from lkr.utils import deep_get as get
 
 __all__ = [
     "ARTIFACT_NAMESPACE",

@@ -13,7 +13,6 @@ from looker_sdk.sdk.api40.models import (
 )
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
-from pydash import get
 
 from lkr.auth_service import get_auth
 from lkr.classes import LkrCtxObj
@@ -34,6 +33,7 @@ from lkr.mcp.utils import (
     ok,
     sql_posix_path,
 )
+from lkr.utils import deep_get as get
 
 __all__ = ["group"]
 

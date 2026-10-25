@@ -17,13 +17,13 @@ from looker_sdk.rtl.auth_token import AccessToken, AuthToken
 from looker_sdk.rtl.requests_transport import RequestsTransport
 from looker_sdk.rtl.transport import LOOKER_API_ID, HttpMethod
 from pydantic import BaseModel, Field, computed_field
-from pydash import get
 
 from lkr.classes import LkrCtxObj, LookerApiKey
 from lkr.constants import LOOKER_API_VERSION, OAUTH_CLIENT_ID, OAUTH_REDIRECT_URI
 from lkr.custom_types import NewTokenCallback
 from lkr.extended_sdk_methods import ExtendedLooker40SDK as Looker40SDK
 from lkr.logger import logger
+from lkr.utils import deep_get as get
 
 __all__ = [
     "ApiKeyAuthSession",

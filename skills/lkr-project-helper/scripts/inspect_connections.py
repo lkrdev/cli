@@ -2,7 +2,7 @@
 """Inspect database connections, schemas, and tables on the Looker instance.
 
 Usage:
-  uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox \
+  uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox \
     --file=skills/lkr-project-helper/scripts/inspect_connections.py \
     [--var connection_name=<name>] [--var schema_name=<schema>]
 """

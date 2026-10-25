@@ -2,7 +2,7 @@
 """Generate LookML views and model files using generate_lookml_with_new_files.
 
 Usage:
-  uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
+  uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --dev-mode \
     --file=skills/lkr-project-helper/scripts/generate_lookml.py \
     --var project_name=<project> \
     --var model_name=<model> \

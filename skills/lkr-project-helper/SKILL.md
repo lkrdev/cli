@@ -24,7 +24,7 @@ Install into your agent workspace using `npx skills`:
 npx skills add lkrdev/cli --skill lkr-project-helper
 ```
 
-This skill works hand-in-hand with the [`lkr-code-mode`](../lkr-code-mode/SKILL.md) skill (`npx skills add lkrdev/cli --skill lkr-code-mode`), executing Python Looker SDK scripts inside the Monty sandbox via `uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox`.
+This skill works hand-in-hand with the [`lkr-code-mode`](../lkr-code-mode/SKILL.md) skill (`npx skills add lkrdev/cli --skill lkr-code-mode`), executing Python Looker SDK scripts inside the Monty sandbox via `uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox`.
 
 ---
 
@@ -71,7 +71,7 @@ When a user asks to create or set up a new LookML project, follow this structure
 
 ## Step-by-Step Instructions & CLI Commands
 
-All sandbox commands use `uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli` (or `uv run lkr` inside the `lkrdev/cli` repository). Use `--dev-mode` for all development workspace scripts.
+All sandbox commands use `uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli` (or `uv run lkr` inside the `lkrdev/cli` repository). Use `--dev-mode` for all development workspace scripts.
 
 ### Step 1: Discover & Verify Database Connections
 
@@ -79,11 +79,11 @@ Inspect available connections, verify connectivity, and list schemas/tables:
 
 ```bash
 # List all connections on the instance
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox \
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox \
   --file=.agents/skills/lkr-project-helper/scripts/inspect_connections.py
 
 # Test a specific connection and list its schemas and tables
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox \
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox \
   --file=.agents/skills/lkr-project-helper/scripts/inspect_connections.py \
   --var connection_name="looker-private-demo" \
   --var schema_name="thelook"
@@ -98,14 +98,12 @@ uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox \
 Before pushing local LookML or running LookML generators on a new project, run `ensure_project_and_model.py` with `--dev-mode`:
 
 ```bash
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --dev-mode \
   --file=.agents/skills/lkr-project-helper/scripts/ensure_project_and_model.py \
   --var project_name="my_new_project" \
   --var model_name="my_model" \
   --var connection_name="looker-private-demo"
 ```
-
-*(You can also run [`init_project.py`](./scripts/init_project.py) and [`configure_model.py`](./scripts/configure_model.py) individually with `--dev-mode` if desired).*
 
 ---
 
@@ -118,7 +116,7 @@ Depending on the user's answer to *"What schema, tables, or SQL should this be i
 Use `scripts/generate_lookml.py` with `--dev-mode` to invoke `generate_lookml_with_new_files`. This extended SDK method snapshots existing files before generation, runs Looker's LookML generator, and returns `new_files` containing every newly created `.view.lkml` and `.model.lkml` file:
 
 ```bash
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --dev-mode \
   --file=.agents/skills/lkr-project-helper/scripts/generate_lookml.py \
   --var project_name="my_new_project" \
   --var model_name="my_model" \
@@ -156,7 +154,7 @@ When the user provides a raw SQL query (including complex joins, CTEs, or BigQue
    - Returns direct URLs to the generated LookML files.
 
 ```bash
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --dev-mode \
   --file=.agents/skills/lkr-project-helper/scripts/bq_view_lookml_generator.py \
   --var project="my_new_project" \
   --var connection="looker-private-demo" \
@@ -169,7 +167,7 @@ uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
    If the connection does not have a `tmp_db_name` configured or the user prefers a pure LookML derived table (`derived_table: { sql: ... ;; }`), use `create_custom_view.py`:
 
 ```bash
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --dev-mode \
   --file=.agents/skills/lkr-project-helper/scripts/create_custom_view.py \
   --var project_name="my_new_project" \
   --var view_name="order_summary_view" \
@@ -184,7 +182,7 @@ uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
 If the user describes what they want to analyze without naming specific tables:
 
 ```bash
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --dev-mode \
   --file=.agents/skills/lkr-project-helper/scripts/generate_lookml.py \
   --var project_name="my_new_project" \
   --var model_name="my_model" \
@@ -222,7 +220,7 @@ uvx lkr-dev-cli tools lookml push ./my_new_project --project-id="my_new_project"
 To validate LookML syntax (blocking on errors), commit, deploy to production, and reset the developer workspace cleanly in `--dev-mode`:
 
 ```bash
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --dev-mode \
+uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --dev-mode \
   --file=.agents/skills/lkr-project-helper/scripts/deploy_and_reset_workspace.py \
   --var project_name="my_new_project" \
   --var commit_message="Initial LookML project setup and deployment" \
@@ -237,15 +235,12 @@ All automation scripts are located in `skills/lkr-project-helper/scripts/` and r
 
 | Script | Mode Flag | Purpose | Key `--var` Parameters |
 | :--- | :--- | :--- | :--- |
-| [`ensure_project_and_model.py`](./scripts/ensure_project_and_model.py) | `--dev-mode` | **Pre-Push Complete Setup**: Ensure project, bare Git, developer copy (`create_developer_copy`), and LookML model config exist | `project_name`, `model_name`, `connection_name` |
-| [`deploy_and_reset_workspace.py`](./scripts/deploy_and_reset_workspace.py) | `--dev-mode` | **Dev Deploy & Reset**: Validate LookML, commit, deploy to production, and reset dev workspace (`reset_project_to_production`) | `project_name`, `commit_message`, `strict` |
+| [`ensure_project_and_model.py`](./scripts/ensure_project_and_model.py) | `--dev-mode` | **Pre-Push Complete Setup**: Ensure project, bare Git, developer copy (`create_developer_copy`), and LookML model config exist | `project_name`, `model_name`, `connection_name`, `skip_model` |
+| [`deploy_and_reset_workspace.py`](./scripts/deploy_and_reset_workspace.py) | `--dev-mode` | **Dev Deploy & Reset**: Validate LookML, commit, optionally deploy to production (`deploy`, default `"true"`), and reset dev workspace (`reset_project_to_production`) | `project_name`, `commit_message`, `strict`, `deploy` |
 | [`inspect_connections.py`](./scripts/inspect_connections.py) | `--dev-mode` | List connections, test health, inspect schemas/tables | `connection_name`, `schema_name` |
-| [`init_project.py`](./scripts/init_project.py) | `--dev-mode` | Create project in dev mode, configure bare Git repo & dev copy | `project_name` |
-| [`configure_model.py`](./scripts/configure_model.py) | `--dev-mode` | Create/update LookML model & bind DB connection | `project_name`, `model_name`, `connection_name` |
 | [`generate_lookml.py`](./scripts/generate_lookml.py) | `--dev-mode` | Run `generate_lookml_with_new_files` for tables/intent | `project_name`, `model_name`, `connection_name`, `schema_name`, `table_names` |
 | [`bq_view_lookml_generator.py`](./scripts/bq_view_lookml_generator.py) | `--dev-mode` | Create temp BQ view from raw SQL, generate LookML, drop view | `project`, `connection`, `model`, `view_name`, `sql_content` |
 | [`create_custom_view.py`](./scripts/create_custom_view.py) | `--dev-mode` | Create a direct LookML `derived_table` view from SQL | `project_name`, `view_name`, `sql_query`, `folder_name` |
-| [`validate_and_commit.py`](./scripts/validate_and_commit.py) | `--dev-mode` | Validate LookML project, commit to Git, deploy, and reset dev workspace | `project_name`, `commit_message`, `deploy` |
 | [`upload_assets.py`](./scripts/upload_assets.py) | `--dev-mode` | Upload non-LookML assets (`.js`, `.css`, `.json`) | `project_name`, `file_path`, `file_content` |
 | [`migrate_dashboard_to_udd.py`](./scripts/migrate_dashboard_to_udd.py) | `--dev-mode` | Convert LookML dashboard (`model::dash`) to UDD | `dashboard_id`, `space_id` |
 
