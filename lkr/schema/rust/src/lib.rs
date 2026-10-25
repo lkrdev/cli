@@ -932,7 +932,7 @@ impl RustExploreValidator {
         py: Python<'_>,
         queries_json: Vec<String>,
     ) -> PyResult<Vec<ValidationOutcome>> {
-        let results = py.allow_threads(|| {
+        let results = py.detach(|| {
             queries_json
                 .par_iter()
                 .map(|q_str| match serde_json::from_str::<Value>(q_str) {
