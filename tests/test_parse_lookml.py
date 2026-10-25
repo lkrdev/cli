@@ -3395,5 +3395,79 @@ def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
         ).exit_code == 0
 
 
+def test_sql_lookml_compare_refinement_file_attribution_and_compact(tmp_path: Path):
+    import json
+
+    from typer.testing import CliRunner
+
+    from lkr.main import app
+
+    runner = CliRunner()
+    bronze = tmp_path / "bronze"
+    bronze.mkdir()
+    (bronze / "orders.view.lkml").write_text(
+        "view: orders {\n"
+        "  sql_table_name: `proj.ds.orders` ;;\n"
+        "  dimension: sale_price { type: number sql: ${TABLE}.sale_price ;; }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (bronze / "orders.refinement.lkml").write_text(
+        'include: "orders.view.lkml"\n'
+        "view: +orders {\n"
+        "  measure: total_revenue {\n"
+        "    type: sum\n"
+        "    sql: ${sale_price} ;;\n"
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "shop.model.lkml").write_text(
+        'connection: "bq"\ninclude: "/bronze/*.lkml"\nexplore: orders {}\n',
+        encoding="utf-8",
+    )
+
+    full_res = runner.invoke(
+        app,
+        [
+            "parse",
+            "sql-lookml-compare",
+            "--sql",
+            "SELECT SUM(sale_price) AS rev FROM `proj.ds.orders`",
+            "--path",
+            str(tmp_path),
+            "--offline",
+        ],
+    )
+    assert full_res.exit_code == 0, full_res.output
+    compact_res = runner.invoke(
+        app,
+        [
+            "parse",
+            "sql-lookml-compare",
+            "--sql",
+            "SELECT SUM(sale_price) AS rev FROM `proj.ds.orders`",
+            "--path",
+            str(tmp_path),
+            "--offline",
+            "--compact",
+        ],
+    )
+    assert compact_res.exit_code == 0, compact_res.output
+    assert len(compact_res.output) < len(full_res.output)
+
+    compact_data = json.loads(compact_res.output)
+    q0 = compact_data["queries"][0]
+    assert "raw_sql" not in q0.get("parsed_query", {})
+    assert "usages" not in q0
+    flds = {f["field_name"]: f for f in q0["views"][0]["fields"]}
+    rev_fld = flds["total_revenue"]
+    assert rev_fld["file"].endswith("bronze/orders.refinement.lkml")
+    assert rev_fld["line"] == 3
+    assert "position" not in rev_fld
+    assert "explores" not in rev_fld
+
+
+
 
 

@@ -38,6 +38,15 @@ def _is_uuid_or_hex_hash(val: str) -> bool:
     )
 
 
+def _dedupe_tags(tags: list[str]) -> list[str]:
+    out: list[str] = []
+    for t in tags:
+        s = str(t).strip()
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
 def classify_string_field(
     field_meta: dict,
     sample_values: list[str],
@@ -57,6 +66,7 @@ def classify_string_field(
     low_name = short_name.lower()
     sql_expr = str(field_meta.get("sql") or "")
     existing_desc = str(field_meta.get("description") or "").strip()
+    existing_tags = _dedupe_tags(list(field_meta.get("tags") or []))
     is_pk = bool(field_meta.get("primary_key"))
     is_helper = bool(field_meta.get("is_helper")) or low_name.startswith(("_", "helper_", "tmp_"))
     base_prefix = (_ensure_period(existing_desc) + " ") if existing_desc else ""
@@ -166,11 +176,34 @@ def classify_string_field(
             else f"{base_prefix}Opaque identifier or free-text string ({distinct_count}+ distinct values, max length {max_length}); filter suggestions disabled.{preview_suffix}"
         )
 
+    auto_tags: list[str] = []
+    if not (is_pk or is_system_col or is_helper or is_uuid_col) and low_name.endswith(("_id", "_fk")):
+        auto_tags.append("foreign_key")
+    if not rec_hidden:
+        auto_tags.append(classification)
+    email_hits = sum(1 for v in non_empty if re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", v))
+    if re.search(r"(^|_)(email|email_address|e_mail)($|_)", low_name) or (
+        bool(non_empty) and email_hits * 2 >= len(non_empty)
+    ):
+        auto_tags.extend(["pii", "email"])
+    if re.search(r"(^|_)(phone|phone_number|mobile|cell_phone|telephone)($|_)", low_name):
+        auto_tags.extend(["pii", "phone"])
+    if re.search(
+        r"(^|_)(ssn|tax_id|national_id|passport|driver_license|first_name|last_name|full_name|street_address|home_address|ip_address|date_of_birth|dob)($|_)",
+        low_name,
+    ):
+        auto_tags.append("pii")
+
+    rec_tags = _dedupe_tags([*existing_tags, *auto_tags])
+    tags_line = (
+        f"    tags: [{', '.join(json.dumps(t) for t in rec_tags)}]\n" if rec_tags else ""
+    )
     escaped_desc = rec_desc.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
     snippet = (
         f"  dimension: {short_name} {{\n"
         f"    hidden: {'yes' if rec_hidden else 'no'}\n"
         f"    suggestable: {'yes' if rec_suggestable else 'no'}\n"
+        f"{tags_line}"
         f'    description: "{escaped_desc}"\n'
         "  }"
     )
@@ -190,9 +223,11 @@ def classify_string_field(
         "current_hidden": bool(field_meta.get("hidden", False)),
         "current_suggestable": bool(field_meta.get("suggestable", True)),
         "current_description": existing_desc,
+        "current_tags": existing_tags,
         "recommended_hidden": rec_hidden,
         "recommended_suggestable": rec_suggestable,
         "recommended_description": rec_desc,
+        "recommended_tags": rec_tags,
         "lookml_snippet": snippet,
     }
 
@@ -238,6 +273,7 @@ def main():
                     "short_name": fn.strip().split(".")[-1],
                     "sql_column": fn.strip().split(".")[-1],
                     "primary_key": False,
+                    "tags": [],
                 }
                 for fn in raw_names.split(",")
                 if fn.strip()
@@ -263,6 +299,7 @@ def main():
                     "hidden": bool(d.get("hidden")),
                     "suggestable": bool(d.get("suggestable", True)),
                     "description": str(d.get("description") or ""),
+                    "tags": list(d.get("tags") or []),
                     "sql": str(d.get("sql") or ""),
                 })
 

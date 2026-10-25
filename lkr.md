@@ -718,6 +718,7 @@ $ lkr parse sql-lookml-compare [OPTIONS]
 * `--lkml-db <str>`: Database/project override for LookML views  [env var: LKR_LKML_DB]
 * `--lkml-schema <str>`: Schema/dataset override for LookML views  [env var: LKR_LKML_SCHEMA]
 * `--offline`: Skip live Looker connection and column metadata lookups
+* `--compact`: Omit duplicate per-field cross-references, 0-indexed positions, and empty defaults
 * `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
 * `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)
 * `--help`: Show this message and exit.

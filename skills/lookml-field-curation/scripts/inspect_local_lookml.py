@@ -194,11 +194,13 @@ def extract_curation_metadata(
                         "sql_column": sql_col,
                         "description": desc,
                         "synonyms": list(d.get("synonyms") or []),
+                        "tags": list(d.get("tags") or []),
                     }
                     v_entry["dimension_groups"].append(dg_entry)
                     v_entry["all_columns_for_enrichment"].append(dg_entry)
                 continue
 
+            f_tags = list(d.get("tags") or [])
             v_entry["dimensions"].append({
                 "name": full_name,
                 "short_name": short_name,
@@ -207,6 +209,7 @@ def extract_curation_metadata(
                 "type": dtype,
                 "description": desc,
                 "synonyms": list(d.get("synonyms") or []),
+                "tags": f_tags,
                 "hidden": hidden,
                 "suggestable": suggestable,
                 "primary_key": pk,
@@ -230,6 +233,7 @@ def extract_curation_metadata(
                 "dimension_group": None,
                 "sql_column": sql_col or short_name,
                 "description": desc,
+                "tags": f_tags,
             })
 
             if dtype == "string" and not d.get("sql_case") and not d.get("enumerations"):
@@ -244,11 +248,13 @@ def extract_curation_metadata(
                     "hidden": hidden,
                     "suggestable": suggestable,
                     "description": desc,
+                    "tags": f_tags,
                     "sql": sql_str or "",
                     "is_helper": is_helper,
                 })
 
             low_s = short_name.lower()
+            is_fk_cand = not pk and low_s.endswith(("_id", "_fk"))
             reason = (
                 "primary_key_visible"
                 if pk and not hidden
@@ -260,16 +266,21 @@ def extract_curation_metadata(
                 else "system_or_etl_audit_column"
                 if re.search(r"^(_fivetran_|_airbyte_|_sdc_|_baton_|etl_|ingest_)", low_s)
                 and not hidden
+                else "foreign_key_visible"
+                if is_fk_cand and (not hidden or "foreign_key" not in f_tags)
                 else None
             )
             if reason:
-                v_entry["static_curation_candidates"].append({
+                cand_entry: dict[str, Any] = {
                     "field_name": full_name,
                     "label_short": label_short,
                     "reason": reason,
                     "recommended_hidden": True,
                     "recommended_suggestable": False,
-                })
+                }
+                if reason == "foreign_key_visible":
+                    cand_entry["recommended_tags"] = list(dict.fromkeys([*f_tags, "foreign_key"]))
+                v_entry["static_curation_candidates"].append(cand_entry)
 
         for m in all_meas:
             if not isinstance(m, dict):
@@ -296,6 +307,7 @@ def extract_curation_metadata(
                 "type": str(m.get("type") or "string"),
                 "description": desc,
                 "synonyms": list(m.get("synonyms") or []),
+                "tags": list(m.get("tags") or []),
                 "hidden": hidden,
                 "sql": sql_str,
                 "referenced_fields": [

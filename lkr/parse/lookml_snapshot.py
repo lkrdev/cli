@@ -95,9 +95,11 @@ def _find_position(
     matched_file = f"{file_key}.lkml" if file_key and not file_key.endswith(".lkml") else (file_key or "unknown.lkml")
     matched_line = 1
 
-    # Look up in pos_files
+    # Look up in pos_files (refinements override base declarations)
     target_files = (
-        [matched_file] if matched_file in pos_files else list(pos_files.keys())
+        [matched_file]
+        if matched_file in pos_files
+        else sorted(pos_files.keys(), key=lambda fn: (fn.endswith(".refinement"), fn))
     )
     for f_name in target_files:
         curr = pos_files.get(f_name)
@@ -105,7 +107,11 @@ def _find_position(
             continue
         found = True
         for k in keys:
-            if isinstance(curr, dict) and str(k) in curr:
+            if isinstance(curr, dict) and f"+{k}" in curr:
+                curr = curr[f"+{k}"]
+                if isinstance(curr, list) and curr:
+                    curr = curr[-1]
+            elif isinstance(curr, dict) and str(k) in curr:
                 curr = curr[str(k)]
             else:
                 found = False
@@ -115,7 +121,6 @@ def _find_position(
             if isinstance(raw_p, (list, tuple)) and len(raw_p) >= 2:
                 matched_line = int(raw_p[0]) + 1
                 matched_file = f_name if f_name.endswith(".lkml") else f"{f_name}.lkml"
-                return (matched_file, matched_line)
 
     return (matched_file, matched_line)
 
@@ -388,6 +393,7 @@ def extract_access_snapshot(
                             if not isinstance(fld_obj, LookmlFieldProperties):
                                 continue
                             fld_req_grants = sorted(fld_obj.required_access_grants or [])
+                            has_pii_tag = "pii" in (fld_obj.tags or [])
                             fld_allowed_vals = []
                             if hasattr(fld_obj, "allowed_value") and fld_obj.allowed_value:
                                 raw_av = fld_obj.allowed_value
@@ -400,13 +406,13 @@ def extract_access_snapshot(
                                     fld_allowed_vals = [str(k) for k in raw_av]
                                 fld_allowed_vals.sort()
 
-                            if fld_req_grants or fld_allowed_vals:
+                            if fld_req_grants or fld_allowed_vals or has_pii_tag:
                                 f_path, line_no = _find_position(
                                     positions,
                                     view_file_hint,
                                     ["view", v_name, field_type, fld_name],
                                 )
-                                fields_out[f"{model_name}.{v_name}.{fld_name}"] = {
+                                fld_entry: dict[str, Any] = {
                                     "model": model_name,
                                     "view": v_name,
                                     "field": fld_name,
@@ -418,6 +424,10 @@ def extract_access_snapshot(
                                     "file": f_path,
                                     "line": line_no,
                                 }
+                                if has_pii_tag:
+                                    fld_entry["pii"] = True
+                                    fld_entry["hidden"] = bool(fld_obj.hidden)
+                                fields_out[f"{model_name}.{v_name}.{fld_name}"] = fld_entry
 
     return {
         "access_grants": grants_out,
