@@ -45,7 +45,7 @@ On clickstream, telemetry, and large fact tables, proactively set `suggestable: 
 
 ### Enforce `always_filter` in Bronze Explores whenever a table has a datetime partition
 
-Datetime partitioning is physical storage management. Enforce `always_filter:` (with a safe default window like `7 days` or `30 days`) directly on `bronze/explores/:table.explore.lkml` (`hidden: no`, `view_name: :table`) while unjoined. When cross-table joins, `*_fields`, or NDTs are needed, detach into `bronze/explores/:table_base.explore.lkml` (`hidden: yes`) and extend in `silver/explores/:table.explore.lkml` (`extends: [:table_base]`, `view_name: :table`)—never create joinless pass-through Silver explores.
+Datetime partitioning is physical storage management: enforce `always_filter:` (with a safe default window like `7 days` or `30 days`) **only** when the underlying warehouse table is physically partitioned (never add `always_filter:` to unpartitioned tables just because a query filtered on `DATE(created_at)`). Place `always_filter:` directly on `bronze/explores/:table.explore.lkml` (`hidden: no`, `view_name: :table`) while unjoined. When cross-table joins, `*_fields`, or NDTs are needed, detach into `bronze/explores/:table_base.explore.lkml` (`hidden: yes`) and extend in `silver/explores/:table.explore.lkml` (`extends: [:table_base]`, `view_name: :table`)—never create joinless pass-through Silver explores.
 
 ### Use Gold aggregate awareness (`aggregate_table`) for executive rollups
 

@@ -54,7 +54,7 @@ append_details_block() {
   local lang="$3"
   if [[ -f "$file_path" ]]; then
     local body
-    body=$(if [[ "$label" == "snapshot_check.json" ]]; then jq 'del(.snapshots)' "$file_path" 2>/dev/null || cat "$file_path"; elif [[ "$label" == "data.json" ]]; then jq -c 'del(.test_query_results)' "$file_path" 2>/dev/null || cat "$file_path"; else cat "$file_path"; fi | head -c 12000)
+    body=$(if [[ "$label" == "snapshot_check.json" ]]; then jq 'del(.snapshots)' "$file_path" 2>/dev/null || cat "$file_path"; elif [[ "$label" == "data.json" ]]; then jq -c 'del(.test_query_results)' "$file_path" 2>/dev/null || cat "$file_path"; elif [[ "$lang" == "json" ]]; then jq -c . "$file_path" 2>/dev/null || cat "$file_path"; else cat "$file_path"; fi | head -c 12000)
     printf '\n\n<details>\n<summary><code>%s</code></summary>\n\n```%s\n%s\n```\n</details>' \
       "$label" "$lang" "$body"
   fi

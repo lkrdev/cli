@@ -948,6 +948,20 @@ def test_pre_gate_order_by_round_ties_and_pr_data_json_compaction():
 
     pr_sh = (SCRIPTS_DIR / "create_github_pr.sh").read_text()
     assert "jq -c 'del(.test_query_results)'" in pr_sh
+    assert 'elif [[ "$lang" == "json" ]]; then jq -c .' in pr_sh
+
+    seen_fids: list[str | None] = []
+    res_fid = _run_monty(
+        SCRIPTS_DIR / "validate_and_commit_branch.py",
+        {
+            "project_id": "p",
+            "file_ids": "./data/run_1/lookml/tests/bronze/events.test.lkml",
+            "test_names": "t1",
+            "skip_validate": "true",
+        },
+        {"run_lookml_test": lambda **kw: seen_fids.append(kw.get("file_id")) or [{"success": True}]},
+    )
+    assert res_fid["passed"] is True and seen_fids == ["tests/bronze/events.test.lkml"]
 
 
 
