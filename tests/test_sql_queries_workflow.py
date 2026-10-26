@@ -951,7 +951,7 @@ def test_pre_gate_order_by_round_ties_and_pr_data_json_compaction():
     pr_sh = (SCRIPTS_DIR / "create_github_pr.sh").read_text()
     assert "jq -c 'del(.test_query_results, .queries[]?.sql_rows)'" in pr_sh
     assert 'elif [[ "$lang" == "json" ]]; then jq -c .' in pr_sh
-    assert 'echo 40000 || echo 12000' in pr_sh
+    assert "limit=40000" in pr_sh
 
     seen_fids: list[str | None] = []
     res_fid = _run_monty(
