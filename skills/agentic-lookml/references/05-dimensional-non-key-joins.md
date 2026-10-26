@@ -62,10 +62,9 @@ FULL OUTER JOIN daily_targets AS t
 
 ### Implementation rules
 
-1. When joining unrelated fact tables across shared dimensions, use the OJOF pattern in `gold/explores/:name.explore.lkml` (`tags: ["gold"]`) as detailed in [lookml-ojof](../../lookml/sub-skills/lookml-ojof/SKILL.md):
-   - For a multi-fact peer Explore (`from: none` with a 0-row `SELECT 0 FROM UNNEST([])` base view), join every peer fact table (and aliased lifecycle milestone facts) via `type: full_outer`, `relationship: one_to_one`, and `sql_on: FALSE ;;`, bind shared entity dimensions (`customer`, `product`) via `type: left_outer` with `sql_on: ${dim.id} = COALESCE({% if fact._in_query %} ${fact.fk}, {% endif %} NULL) ;;`, and cross-join co-dimension views (`gold/codim_date.view.lkml`) via `type: cross`, `relationship: one_to_one`, and `sql_table_name: UNNEST([${codim_date.SQL_TABLE_NAME}]) ;;`.
-   - Alternatively, when extending an existing two-table Silver Explore (`extends: [orders]`, `view_name: orders`) to stitch one peer target table (`sales_targets`) without a 0-row base view, join the peer table with `type: full_outer`, `relationship: many_to_many`, and `sql_on: FALSE ;;` paired with a field-only `COALESCE` view (`gold/:shared_dims.view.lkml`) bare-joined via `sql: ;;`.
-   This eliminates Cartesian multiplication between unrelated tables while providing unified dimensions for dashboard filtering.
+1. When joining unrelated fact tables across shared dimensions, use the OJOF pattern in `gold/explores/:name.explore.lkml` (`tags: ["gold"]`):
+   - **2-table OJOF (self-contained template below — do not open `lookml-ojof`):** Extend an existing Silver Explore (`extends: [orders]`, `view_name: orders`), join the peer table with `type: full_outer`, `relationship: many_to_many`, and `sql_on: FALSE ;;`, and bare-join (`sql: ;;`, `relationship: one_to_one`) a field-only `COALESCE` view (`gold/:shared_dims.view.lkml`).
+   - **3+-fact `from: none` star-schema Explore (only open [lookml-ojof](../../lookml/sub-skills/lookml-ojof/SKILL.md) for this case):** Use a 0-row `SELECT 0 FROM UNNEST([])` base view, join every peer fact via `type: full_outer`, `relationship: one_to_one`, and `sql_on: FALSE ;;`, bind shared entity dimensions via `COALESCE({% if fact._in_query %} ${fact.fk}, {% endif %} NULL)`, and cross-join co-dimension views via `UNNEST([${codim_date.SQL_TABLE_NAME}])`.
 2. When `UNION ALL` is selected for overlapping schemas, always generate a compound primary key so the unioned table can safely participate in secondary foreign key joins without missing PK errors:
    ```lookml
    dimension: compound_pk {
