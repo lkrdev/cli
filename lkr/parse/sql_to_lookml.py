@@ -1308,7 +1308,19 @@ def _preprocess_dt_sql(
     s = _LOOKML_REF_RE.sub(
         lambda m: _expand_tok(m.group(1) or m.group(2), vname, vname), s
     )
-    s = re.sub(r"\{%\s*parameter\s+[^%]+%\}", "1", s, flags=re.IGNORECASE)
+    s = re.sub(
+        r"\{%-?\s*date_(?:start|end)\b.*?-?%\}",
+        "CURRENT_TIMESTAMP()",
+        s,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    s = re.sub(r"\{%-?\s*parameter\b.*?-?%\}", "1", s, flags=re.IGNORECASE | re.DOTALL)
+    s = re.sub(
+        r"\{%-?\s*condition\b.*?-?%\}(.*?)\{%-?\s*endcondition\s*-?%\}",
+        r"(\1 IS NOT NULL)",
+        s,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
     s = re.sub(r"\{%.*?%\}", " ", s, flags=re.DOTALL)
     return re.sub(r"\{\{.*?\}\}", "1", s, flags=re.DOTALL)
 
