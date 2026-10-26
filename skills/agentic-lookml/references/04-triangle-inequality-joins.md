@@ -52,7 +52,7 @@ FROM matched WHERE rn = 1 GROUP BY 1;
 
 ### Isolate triangle and inequality joins in Gold
 
-Keep `silver/explores/orders.explore.lkml` strictly limited to `PK = FK` equality joins. Create `gold/explores/:name.explore.lkml` with `extends: [orders]`, `view_name: orders`, and `tags: ["gold"]`.
+Keep `silver/explores/orders.explore.lkml` strictly limited to `PK = FK` equality joins. Create `gold/explores/:name.explore.lkml` with `extends: [orders]`, `view_name: orders`, and `tags: ["gold"]` (when the extended Silver Explore already joins `orders` via `PK = FK`, add the time-windowed inequality join under a role-playing alias `join: rolling_7d_orders { from: orders ... }` so inherited `orders` fields and tests remain untouched).
 
 ### Verify disjoint versus overlapping intervals
 

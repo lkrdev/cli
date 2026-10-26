@@ -1424,3 +1424,40 @@ def test_case_filter_unescaped_comma_and_zero_hint_and_test_target_guard():
     )
     assert vc["passed"] is False and "align 1:1" in vc["errors"][0]["message"]
 
+    lkml_ref = """
+    model: m {
+      connection: "bq"
+      explore: p_bad {
+        view_name: p
+        join: ii { sql_on: ${p.id} = ${ii.p_id} ;; relationship: one_to_many }
+      }
+      explore: p_ok {
+        view_name: p
+        join: ii { sql_on: ${p.id} = ${ii.p_id} ;; relationship: one_to_many }
+        join: ch { sql: ;; relationship: one_to_one }
+      }
+      view: ch {
+        dimension: now_raw { sql: CURRENT_TIMESTAMP() ;; }
+      }
+      view: p {
+        dimension: id { primary_key: yes sql: ${TABLE}.id ;; }
+        dimension: subq { sql: (SELECT COUNT(*) FROM ${unjoined_tbl.SQL_TABLE_NAME}) ;; }
+      }
+      view: ii {
+        dimension: p_id { sql: ${TABLE}.p_id ;; }
+        dimension: created_raw { sql: ${TABLE}.created_at ;; }
+        dimension_group: shelf_age {
+          type: duration
+          intervals: [day, month]
+          sql_start: ${created_raw} ;;
+          sql_end: ${ch.now_raw} ;;
+        }
+      }
+    }
+    """
+    res_ref = parse_lookml_to_api(lookml=lkml_ref)
+    bad_refs = [e for e in (res_ref.lookml_model_explores["m::p_bad"].errors or []) if e["type"] == "inaccessible_view_ref"]
+    assert len(bad_refs) == 1 and bad_refs[0]["view"] == "ch" and bad_refs[0]["field"] == "ii.shelf_age"
+    assert (res_ref.lookml_model_explores["m::p_ok"].errors or []) == []
+
+

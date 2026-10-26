@@ -46,7 +46,7 @@ Reserve explicit `filter:` and `{% condition %}` blocks for Cohort A versus Over
 
 ### Isolate all Liquid to `gold/` and `gold/explores/`
 
-Define `filter:` or `parameter:` fields in a Gold view or Gold refinement (`gold/:name.view.lkml`). The sole project-wide exception is `_TABLE_SUFFIX` wildcard pruning in `bronze/explores/:prefix_base.explore.lkml` (Category 12). Always use `{% condition filter_name %} ${view.dimension} {% endcondition %}` so Looker handles `NULL`, `IN (...)`, date ranges, and negation automatically. For grand total and conditional join safety, always use `_in_query` rather than `_is_selected`.
+Define `filter:` or `parameter:` fields in a Gold view or Gold refinement (`gold/:name.view.lkml`). The sole project-wide exception is `_TABLE_SUFFIX` wildcard pruning in `bronze/explores/:prefix_base.explore.lkml` (Category 12). Always use `{% condition filter_name %} ${view.dimension} {% endcondition %}` so Looker handles `NULL`, `IN (...)`, date ranges, and negation automatically (add `convert_tz: no` on `filter: <name> { type: date convert_tz: no }` with half-open `"YYYY/MM/DD to YYYY/MM/DD"` when `{% condition %}` wraps a UTC `${view.<group>_raw}` `TIMESTAMP`). For grand total and conditional join safety, always use `_in_query` rather than `_is_selected`.
 
 ### Enforce `always_filter:` on the Gold Explore
 
