@@ -66,13 +66,12 @@ def _fp(s: str) -> str:
 
 def _remap_compiled_rows(rows, q_fields: list[str]):
     alias_map = {re.sub(r"[^a-z0-9_]", "_", f.lower()): f for f in q_fields}
-    explicit = {f.lower() for f in q_fields}
     return [
         {
             alias_map.get(kl, k): v
             for k, v in r.items()
             for kl in [k.lower()]
-            if not (kl.endswith("__sort_") and kl not in explicit)
+            if not (kl.endswith("__sort_") and kl not in alias_map)
         }
         for r in (rows or [])
         if isinstance(r, dict)

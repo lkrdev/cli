@@ -1231,6 +1231,10 @@ def test_pre_gate_volatile_current_timestamp_pins_compiled_sql_and_falls_back_fo
         assert "CAST('2026-10-26 06:33:52+00:00' AS TIMESTAMP)" in s_txt
         assert "DATE(CAST('2026-10-26 06:33:52+00:00' AS TIMESTAMP), 'America/Los_Angeles')" in s_txt
         assert "!= 'CURRENT_TIMESTAMP()'" in s_txt
+    pre_mod = _load_module("pre_gate_remap", SCRIPTS_DIR / "pre_gate.py")
+    assert pre_mod._remap_compiled_rows(
+        [{"ii_aging_tier__sort_": 0, "ii_other__sort_": 1}], ["ii.aging_tier__sort_"]
+    ) == [{"ii.aging_tier__sort_": 0}]
 
     # 2. Post-SQL fallback (e.g., table_calculation present): bypasses compiled-SQL mode and retries uncached live
     tc_sql = "SELECT COUNTIF(TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), created_at, DAY) < 90) AS fresh_units FROM ii"
