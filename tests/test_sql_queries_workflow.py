@@ -1094,6 +1094,56 @@ def test_pre_gate_unordered_limit_fallback_and_grain_key_stripping():
     assert ok_extra is False and "column count mismatch" in diffs_extra[0]
 
 
+def test_pre_gate_timestamp_normalization_and_same_second_sort_ties():
+    sql = "SELECT order_id, created_at FROM `proj.ds.orders` ORDER BY created_at DESC LIMIT 2;"
+    s_rows = [
+        {"order_id": 10, "created_at": "2026-10-25 00:20:01.720336 UTC"},
+        {"order_id": 11, "created_at": "2026-10-25 00:20:01.105 UTC"},
+    ]
+    l_rows = [
+        {"orders.order_id": 11, "orders.created_time": "2026-10-25 00:20:01"},
+        {"orders.order_id": 12, "orders.created_time": "2026-10-25 00:20:01"},
+    ]
+    pool_rows = [
+        *l_rows,
+        {"orders.order_id": 10, "orders.created_time": "2026-10-25 00:20:01"},
+    ]
+    res = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {
+            "data_json": json.dumps({
+                "run_id": "r_ts",
+                "queries": [
+                    {
+                        "query_index": 0,
+                        "sql_query_id": "s_ts",
+                        "sql": sql,
+                        "inline_query": {
+                            "model": "m",
+                            "view": "orders",
+                            "fields": ["orders.order_id", "orders.created_time"],
+                            "sorts": ["orders.created_time desc"],
+                            "limit": "2",
+                        },
+                    }
+                ],
+            }),
+        },
+        {
+            "run_sql_query": lambda **_kw: json.dumps(s_rows),
+            "run_inline_query": lambda body, **_kw: json.dumps(pool_rows if body.get("limit") == "52" else l_rows),
+        },
+    )
+    assert res["passed"] is True
+    # When Looker emits subseconds (<group>_microsecond), subsecond differences still fail
+    ok_sub, _ = compare_row_sets(
+        [{"created_at": "2026-10-25T00:20:01.000000Z"}],
+        [{"orders.created_microsecond": "2026-10-25 00:20:01.500000"}],
+    )
+    assert ok_sub is False
+
+
+
 
 
 

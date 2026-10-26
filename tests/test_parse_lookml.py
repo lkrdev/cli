@@ -4288,6 +4288,21 @@ def test_compact_sql_lookml_compare_prunes_via_measures_on_row_queries():
         "  measure: avg_age { type: average sql: ${age} ;; }\n"
         "}\n"
         "explore: users {}\n"
+        "view: orders {\n"
+        "  sql_table_name: `proj.ds.orders` ;;\n"
+        "  dimension: user_id { type: number sql: ${TABLE}.user_id ;; }\n"
+        "  measure: count { type: count }\n"
+        "}\n"
+        "explore: orders {\n"
+        "  join: users { type: left_outer relationship: many_to_one sql_on: ${orders.user_id} = ${users.id} ;; }\n"
+        "}\n"
+        "test: orders_join_test {\n"
+        "  explore_source: orders {\n"
+        "    column: count { field: orders.count }\n"
+        "    filters: [users.id: \"NOT NULL\"]\n"
+        "  }\n"
+        "  assert: ok { expression: ${orders.count} >= 0 ;; }\n"
+        "}\n"
     )
     sql = (
         "SELECT id, age FROM `proj.ds.users` WHERE age < 25 LIMIT 25; "
@@ -4302,6 +4317,7 @@ def test_compact_sql_lookml_compare_prunes_via_measures_on_row_queries():
     row_fields = {(f["field_type"], f["field_name"]) for f in q_row["views"][0]["fields"]}
     assert ("dimension", "is_young_customer") in row_fields
     assert ("measure", "avg_age") not in row_fields
+    assert "tests" not in q_row
     cte_fields = {(f["field_type"], f["field_name"]) for f in q_cte_agg["views"][0]["fields"]}
     assert ("measure", "avg_age") in cte_fields
 

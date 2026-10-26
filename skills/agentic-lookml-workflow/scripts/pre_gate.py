@@ -130,7 +130,23 @@ def _sql_meta(sql: str):
     return scales, pct_cols, pct_idxs, sel_exprs, bool(om), order_specs, (int(lm.group(1)) if lm else None)
 
 
-def _cell_key(v, digits: int, mult: float = 1.0):
+def _parse_ts(v):
+    if not isinstance(v, str):
+        return None
+    m = re.match(
+        r"(?i)^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.(\d+))?(?:\s*UTC|Z|[+-]00(?::?00)?)?$",
+        v.strip(),
+    )
+    return (f"{m.group(1)} {m.group(2)}", (m.group(3) or "")[:6].rstrip("0")) if m else None
+
+
+def _norm_ts(v, ts_mode: str | None):
+    tp = _parse_ts(v) if ts_mode else None
+    return (tp[0] if ts_mode == "sec" or not tp[1] else f"{tp[0]}.{tp[1]}") if tp else v
+
+
+def _cell_key(v, digits: int, mult: float = 1.0, ts_mode: str | None = None):
+    v = _norm_ts(v, ts_mode)
     f = _to_float(v)
     nv = round(f * mult, digits) if f is not None else normalize_val(v, digits)
     if nv is None or isinstance(nv, bool):
@@ -138,7 +154,8 @@ def _cell_key(v, digits: int, mult: float = 1.0):
     return (2, float(nv), "") if isinstance(nv, (int, float)) else (3, 0.0, str(nv))
 
 
-def _cmp_pair(rs, rl, digits: int, mult: float):
+def _cmp_pair(rs, rl, digits: int, mult: float, ts_mode: str | None = None):
+    rs, rl = _norm_ts(rs, ts_mode), _norm_ts(rl, ts_mode)
     if (
         isinstance(rs, str)
         and isinstance(rl, str)
@@ -213,14 +230,18 @@ def compare_row_sets(
             l_abs = sum(abs(f) for r in lr_leaves for f in [_to_float(r.get(lk))] if f is not None)
             if l_abs > 0 and abs(s_abs - l_abs * 100.0) < abs(s_abs - l_abs):
                 mult = 100.0
+        s_ts = [_parse_ts(r.get(sk)) for r in sr_leaves if r.get(sk) is not None]
+        l_ts = [_parse_ts(r.get(lk)) for r in lr_leaves if r.get(lk) is not None]
+        is_ts = bool(s_ts and l_ts) and all(x is not None for x in s_ts + l_ts)
+        ts_mode = ("sec" if not any(x[1] for x in l_ts if x) else "sub") if is_ts else None
         same_leaf = lk == sk or (lk.split(".")[-1] == sk and len(l_by_leaf.get(sk, ())) == 1)
-        cols.append((sk if same_leaf else f"{sk}->{lk}", sk, lk, digits, mult))
+        cols.append((sk if same_leaf else f"{sk}->{lk}", sk, lk, digits, mult, ts_mode))
     order_idxs: list[int] = []
     s_ob = None
     tied_ob = False
     if len(sr_leaves) > 1 and not has_order_by:
-        sr_leaves.sort(key=lambda r: tuple(_cell_key(r[sk], d, 1.0) for _, sk, _, d, _ in cols))
-        lr_leaves.sort(key=lambda r: tuple(_cell_key(r[lk], d, m) for _, _, lk, d, m in cols))
+        sr_leaves.sort(key=lambda r: tuple(_cell_key(r[sk], d, 1.0, tm) for _, sk, _, d, _, tm in cols))
+        lr_leaves.sort(key=lambda r: tuple(_cell_key(r[lk], d, m, tm) for _, _, lk, d, m, tm in cols))
     elif order_specs:
         for spec in order_specs:
             ident, norm_ob = spec.strip('`"').lower(), re.sub(r"\s+", "", spec).lower()
@@ -239,8 +260,8 @@ def compare_row_sets(
             if idx >= 0:
                 order_idxs.append(idx)
         if len(order_idxs) == len(order_specs):
-            s_ob = [tuple(_cell_key(r[cols[i][1]], cols[i][3], 1.0) for i in order_idxs) for r in sr_leaves]
-            l_ob = [tuple(_cell_key(r[cols[i][2]], cols[i][3], cols[i][4]) for i in order_idxs) for r in lr_leaves]
+            s_ob = [tuple(_cell_key(r[cols[i][1]], cols[i][3], 1.0, cols[i][5]) for i in order_idxs) for r in sr_leaves]
+            l_ob = [tuple(_cell_key(r[cols[i][2]], cols[i][3], cols[i][4], cols[i][5]) for i in order_idxs) for r in lr_leaves]
             if s_ob == l_ob:
                 tied_ob = True
                 if len(sr_leaves) > 1:
@@ -252,13 +273,13 @@ def compare_row_sets(
                         sr_tied.extend(
                             sorted(
                                 sr_leaves[start:end],
-                                key=lambda r: tuple(_cell_key(r[sk], d, 1.0) for _, sk, _, d, _ in cols),
+                                key=lambda r: tuple(_cell_key(r[sk], d, 1.0, tm) for _, sk, _, d, _, tm in cols),
                             )
                         )
                         lr_tied.extend(
                             sorted(
                                 lr_leaves[start:end],
-                                key=lambda r: tuple(_cell_key(r[lk], d, m) for _, _, lk, d, m in cols),
+                                key=lambda r: tuple(_cell_key(r[lk], d, m, tm) for _, _, lk, d, m, tm in cols),
                             )
                         )
                         start = end
@@ -267,8 +288,8 @@ def compare_row_sets(
     bad_idxs = []
     for idx, (sr_leaf, lr_leaf) in enumerate(zip(sr_leaves, lr_leaves)):
         row_bad = False
-        for label, sk, lk, digits, mult in cols:
-            sv, lv_cmp = _cmp_pair(sr_leaf[sk], lr_leaf[lk], digits, mult)
+        for label, sk, lk, digits, mult, tm in cols:
+            sv, lv_cmp = _cmp_pair(sr_leaf[sk], lr_leaf[lk], digits, mult, tm)
             if sv != lv_cmp:
                 mismatches.append(f"Row {idx} ({label}): SQL={sv}, Looker={lv_cmp}")
                 row_bad = True
@@ -289,8 +310,8 @@ def compare_row_sets(
                 for lr in extra_rows
                 for norm_lr in [_norm_lr(lr)]
                 if len(norm_lr) == len(sr_leaves[0])
-                and all(lk in norm_lr for _, _, lk, _, _ in cols)
-                and tuple(_cell_key(norm_lr[cols[i][2]], cols[i][3], cols[i][4]) for i in order_idxs) == last_key
+                and all(lk in norm_lr for _, _, lk, _, _, _ in cols)
+                and tuple(_cell_key(norm_lr[cols[i][2]], cols[i][3], cols[i][4], cols[i][5]) for i in order_idxs) == last_key
             ]
             all_found = True
             for sr_leaf in sr_leaves[last_start:]:
@@ -298,8 +319,8 @@ def compare_row_sets(
                 for p_i, cand_lr in enumerate(pool):
                     if all(
                         pair[0] == pair[1]
-                        for _, sk, lk, d, m in cols
-                        for pair in [_cmp_pair(sr_leaf[sk], cand_lr[lk], d, m)]
+                        for _, sk, lk, d, m, tm in cols
+                        for pair in [_cmp_pair(sr_leaf[sk], cand_lr[lk], d, m, tm)]
                     ):
                         hit_i = p_i
                         break
