@@ -1368,10 +1368,59 @@ def test_pre_gate_ordered_limit_massive_tie_secondary_order_fallback():
     assert _check([]) is False
 
 
+def test_case_filter_unescaped_comma_and_zero_hint_and_test_target_guard():
+    from lkr.parse.lookml_to_api import parse_lookml_to_api
 
+    lkml = """
+    model: m {
+      connection: "bq"
+      explore: s {
+        query: q_bad {
+          dimensions: [s.archetype]
+          filters: [s.archetype: "UnknownLabel"]
+        }
+      }
+      view: s {
+        sql_table_name: `p.d.s` ;;
+        dimension: archetype {
+          case: {
+            when: { sql: ${TABLE}.x = 1 ;; label: "Completed" }
+            when: { sql: ${TABLE}.x = 2 ;; label: "Abandoner (Added to Cart, Left Quietly)" }
+            else: "Browsed"
+          }
+        }
+        measure: bad_comma {
+          type: count
+          filters: [archetype: "Abandoner (Added to Cart, Left Quietly)"]
+        }
+        measure: ok_escaped {
+          type: count
+          filters: [archetype: "Abandoner (Added to Cart^, Left Quietly)"]
+        }
+        measure: ok_neg_list {
+          type: count
+          filters: [archetype: "-Completed, -Browsed"]
+        }
+      }
+    }
+    """
+    res = parse_lookml_to_api(lookml=lkml)
+    errs = res.lookml_model_explores["m::s"].errors or []
+    bad_fields = {e["field"] for e in errs if e["type"] == "invalid_case_filter"}
+    assert bad_fields == {"s.bad_comma", "s.query.q_bad"}
 
+    ok, diffs = compare_row_sets(
+        [{"k": "a", "cnt": 25}],
+        [{"s.k": "a", "s.cnt": 0}],
+        sql="SELECT k, cnt FROM s",
+        looker_fields=["s.k", "s.cnt"],
+    )
+    assert ok is False and any("Hint (cnt): all Looker values are 0/NULL" in d for d in diffs)
 
-
-
-
+    vc = _run_monty(
+        SCRIPTS_DIR / "validate_and_commit_branch.py",
+        {"project_id": "p", "file_ids": "tests/a.test.lkml,tests/b.test.lkml", "test_names": "t1,t2,t3"},
+        {"validate_project": lambda **_kw: {"errors": []}},
+    )
+    assert vc["passed"] is False and "align 1:1" in vc["errors"][0]["message"]
 
