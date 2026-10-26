@@ -273,6 +273,14 @@ def compare_row_sets(
     cols = []
     for c_idx, sk in enumerate(s_keys):
         lk = s_to_l[sk]
+        s_strs = [r[sk].strip() for r in sr_leaves if isinstance(r.get(sk), str) and r[sk].strip()]
+        l_strs = [r[lk].strip() for r in lr_leaves if isinstance(r.get(lk), str) and r[lk].strip()]
+        if s_strs and l_strs and all(re.match(r"^\d{1,2}\.\s+\S", s) for s in s_strs) and not any(
+            re.match(r"^\d{1,2}\.\s+\S", s) for s in l_strs
+        ):
+            for r in sr_leaves:
+                if isinstance(r.get(sk), str):
+                    r[sk] = re.sub(r"^\d{1,2}\.\s+", "", r[sk].strip())
         digits = scales.get(sk, 4)
         mult = 1.0
         if sk in pct_cols or c_idx in pct_idxs:

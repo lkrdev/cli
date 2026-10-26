@@ -47,7 +47,7 @@ The easiest way to author a Custom Measure in the Query or Dashboard Layer is us
 | Cross-view dimension or measure (`gross_margin`, `total_gross_margin`) | Dimension or measure whose dependency DAG references multiple joined views (`${order_items.sale_price} - ${inventory_items.cost}` or filtered metric across views) | Move all fields in that cross-view DAG into an alphabetically named Silver `_fields` view (`silver/inventory_items_order_items_fields.view.lkml`) and bare-join (`sql: ;;`, `relationship: one_to_one`) into the Explore | `silver/:view_a_:view_b_fields.view.lkml` + `silver/explores/` |
 | One-off bucketing | Ad-hoc campaign/report `CASE WHEN` | Keep as Custom Dimension (`custom_fields`, [looker-expressions](../../looker-expressions/SKILL.md)) | Query / Dashboard Layer |
 | Lifecycle date `NULL` / `NOT NULL` state (`sold_at IS NULL`, `returned_at IS NOT NULL`) | SQL `WHERE` or `CASE WHEN` checks nullability on a date/timestamp column | Define a positive-form `type: yesno` dimension on `${<group>_raw} IS NOT NULL` (`is_sold`, `is_returned`) and filter measures/queries on `is_sold: "no"` or `"yes"` | `bronze/:table.refinement.lkml` |
-| Reusable simple dimension or Business Term | Named domain terms (`metrics.md`), standard tiers, flags, date-parts, or buckets (`is_young_customer`, `age_tier`, `shopping_regime`, `full_name`) | Match shape to term semantics (never blanket-apply `is_`; zero speculative `<term>_count` measures): **if relative/rolling calendar period** (*"New Customer: current calendar year"*) $\rightarrow$ reuse `<group>_year` / `<group>_date` (`"this year"`, enriching `description:`/`synonyms:` rather than baking `CURRENT_TIMESTAMP()` into `is_<term>`); **if boolean-like** $\rightarrow$ `type: yesno` (`is_<term>`/`has_<term>` + noun `label: "<Term>"`); **if categorical** $\rightarrow$ noun `<term>` via `case:` (`__sort_` order unless `alpha_sort: yes`), `sql: CASE WHEN ... END ;;` (alphabetical `ORDER BY` parity), or `type: tier`; **if scalar/duration** $\rightarrow$ noun `<term>` via `string`/`number`/`duration` | `bronze/:table.refinement.lkml` (1 table) or `silver/:view_a_:view_b_fields.view.lkml` (2+ views) |
+| Reusable simple dimension or Business Term | Named domain terms (`metrics.md`), standard tiers, flags, date-parts, or buckets (`is_young_customer`, `age_tier`, `shopping_regime`, `full_name`) | Match shape to term semantics (never blanket-apply `is_`; zero speculative `<term>_count` measures; group `3+` sibling dimensions around one attribute under a shared noun `group_label:` like `"Age"` or `"Location"`, and gate country-specific `case:`/`SUBSTR` dimensions on `${country} = '...'` with no catch-all `else:` so out-of-scope rows return `NULL`): **if relative/rolling calendar period** (*"New Customer: current calendar year"*) $\rightarrow$ reuse `<group>_year` / `<group>_date` (`"this year"`, enriching `description:`/`synonyms:` rather than baking `CURRENT_TIMESTAMP()` into `is_<term>`); **if boolean-like** $\rightarrow$ `type: yesno` (`is_<term>`/`has_<term>` + noun `label: "<Term>"`); **if categorical** $\rightarrow$ noun `<term>` via native `case:` (strip SQL `'1. '`–`'9. '` sort prefixes from `label:`/`else:`, order `when:` branches `1..N` since `__sort_` sorts `else:` last unless `alpha_sort: yes`; use raw `sql: CASE ... END ;;` only for dynamic labels) or `type: tier`; **if scalar/duration** $\rightarrow$ noun `<term>` via `string`/`number`, or `type: duration` `dimension_group` (`sql_end: COALESCE(${sold_raw}, ${common_helpers.current_timestamp_raw}) ;;`) | `bronze/:table.refinement.lkml` (1 table, incl. `common_helpers`) or `silver/:view_a_:view_b_fields.view.lkml` (2+ views) |
 | One-off display ratio | Visual math between two columns on one chart (`us_orders / uk_orders`) | Keep as Table Calculation (`if(${uk_orders} = 0, null, ${us_orders} / ${uk_orders})` — never `nullif()`, which does not exist in [looker-expressions](../../looker-expressions/SKILL.md)) | Query / Dashboard Layer |
 | Single-table ratio | Canonical ratio within 1 table (`aov = total_rev / order_cnt`) | LookML `measure` (`type: number`, `sql: 1.0 * ${num} / NULLIF(${den}, 0) ;;`) | `bronze/:table.refinement.lkml` |
 | Cross-table ratio | Canonical ratio across joined tables (`rev_per_user = order_items.total_revenue / users.count`) | LookML `measure` in an alphabetically named Silver `_fields` view (`silver/order_items_users_fields.view.lkml`), bare-joined (`sql: ;;`) into the Explore | `silver/:view_a_:view_b_fields.view.lkml` + `silver/explores/` |
@@ -66,10 +66,31 @@ Use judgment rather than wrapping every filter condition in a boolean field, and
 ### Single-table dimensions and measures in Bronze refinement
 
 ```lookml
-# File: bronze/orders.refinement.lkml (Single-table dimensions & measures - entire DAG stays within orders)
+# File: bronze/orders.refinement.lkml (Single-table dimensions & measures - entire DAG stays within orders + common_helpers)
 include: "orders.view.lkml"
 
 view: +orders {
+  dimension_group: fulfillment_age {
+    type: duration
+    intervals: [day, month, year]
+    sql_start: ${created_raw} ;;
+    sql_end: COALESCE(${delivered_raw}, ${common_helpers.current_timestamp_raw}) ;;
+  }
+
+  dimension: fulfillment_aging_tier {
+    case: {
+      when: {
+        sql: ${days_fulfillment_age} < 7 ;;
+        label: "Fast (<7 Days)"
+      }
+      when: {
+        sql: ${days_fulfillment_age} < 30 ;;
+        label: "Standard (7-29 Days)"
+      }
+      else: "Backlogged (30+ Days)"
+    }
+  }
+
   dimension: age_tier {
     type: tier
     tiers: [25, 41]
