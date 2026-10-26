@@ -1150,40 +1150,132 @@ def test_pre_gate_timestamp_normalization_and_same_second_sort_ties():
     assert ok_sub is False
 
 
-def test_pre_gate_volatile_current_timestamp_bypasses_slug_cache():
-    sql = "SELECT COUNTIF(TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), created_at, DAY) < 90) AS fresh_units FROM ii"
-    created_bodies: list[dict[str, Any]] = []
-    cache_flags: list[Any] = []
+def test_pre_gate_volatile_current_timestamp_pins_compiled_sql_and_falls_back_for_post_sql():
+    # 1. Primary path: compiles Looker SQL via result_format="sql", pins CURRENT_TIMESTAMP / CURRENT_DATE / NOW()
+    #    to run_id's fixed UTC timestamp in both raw SQL and compiled Looker SQL, remaps aliases, strips __sort_,
+    #    ignores literals/comments/aliases, and preserves original sql_query_id + sql.
+    raw_sql = (
+        "-- keep CURRENT_TIMESTAMP() in comment\n"
+        "SELECT CASE WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), created_at, DAY) < 90 "
+        "THEN '1. Fresh (<90d)' ELSE '2. Aged' END AS aging_tier, "
+        "COUNTIF(note != 'CURRENT_TIMESTAMP()' AND DATE(created_at) <= CURRENT_DATE('America/Los_Angeles') "
+        "AND updated_at <= NOW()) AS unsold_units "
+        "FROM ii GROUP BY 1 ORDER BY 2 DESC"
+    )
+    compiled_looker_sql = (
+        "-- raw sql results do not include filled-in values\n"
+        "SELECT\n"
+        "  CASE WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ii.created_at, DAY) < 90 "
+        "THEN '1. Fresh (<90d)' ELSE '2. Aged' END AS ii_aging_tier,\n"
+        "  CASE WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ii.created_at, DAY) < 90 THEN 0 ELSE 1 END AS ii_aging_tier__sort_,\n"
+        "  COUNTIF(ii.note != 'CURRENT_TIMESTAMP()' AND DATE(ii.created_at) <= CURRENT_DATE('America/Los_Angeles') "
+        "AND ii.updated_at <= CURRENT_TIMESTAMP()) AS ii_unsold_units\n"
+        "FROM ii GROUP BY 1, 2 ORDER BY 3 DESC"
+    )
+    pinned_sql_seen: dict[str, str] = {}
+
+    def fake_create_sql(body):
+        slug = f"pin_{len(pinned_sql_seen)}"
+        pinned_sql_seen[slug] = body["sql"]
+        return {"slug": slug}
+
+    def fake_run_sql(slug, **_kw):
+        assert slug.startswith("pin_"), "Pinned mode should execute pinned SQL slugs rather than stale cached slug"
+        sql_txt = pinned_sql_seen[slug]
+        if "AS ii_aging_tier" in sql_txt:
+            return json.dumps([
+                {
+                    "ii_aging_tier": "1. Fresh (<90d)",
+                    "ii_aging_tier__sort_": 0,
+                    "ii_unsold_units": 11221,
+                }
+            ])
+        return json.dumps([{"aging_tier": "1. Fresh (<90d)", "unsold_units": 11221}])
+
+    inline_formats: list[str] = []
+
+    def fake_inline(result_format, body, **_kw):
+        inline_formats.append(result_format)
+        assert result_format == "sql"
+        return compiled_looker_sql
+
     base_q = {
         "query_index": 0,
-        "sql_query_id": "s_cached",
-        "sql": sql,
-        "sql_rows": [{"fresh_units": 99999}],
-        "inline_query": {"model": "m", "view": "ii", "fields": ["ii.fresh_units"]},
+        "sql_query_id": "s_saved",
+        "sql": raw_sql,
+        "sql_rows": [{"stale": 1}],
+        "inline_query": {"model": "m", "view": "ii", "fields": ["ii.aging_tier", "ii.unsold_units"]},
     }
     res = _run_monty(
         SCRIPTS_DIR / "pre_gate.py",
-        {"data_json": json.dumps({"run_id": "r_vol", "connection_name": "bq_conn", "queries": [base_q]})},
         {
-            "create_sql_query": lambda body: created_bodies.append(body) or {"slug": "s_live"},
+            "data_json": json.dumps({
+                "run_id": "20261026_063352_055_1",
+                "connection_name": "bq_conn",
+                "queries": [base_q],
+            })
+        },
+        {
+            "create_sql_query": fake_create_sql,
+            "run_sql_query": fake_run_sql,
+            "run_inline_query": fake_inline,
+        },
+    )
+    assert res["passed"] is True
+    assert inline_formats == ["sql"]
+    assert res["queries"][0]["sql_query_id"] == "s_saved"
+    assert res["queries"][0]["sql"] == raw_sql
+    assert "sql_rows" not in res["queries"][0]
+    assert len(pinned_sql_seen) == 2
+    for s_txt in pinned_sql_seen.values():
+        assert "CAST('2026-10-26 06:33:52+00:00' AS TIMESTAMP)" in s_txt
+        assert "DATE(CAST('2026-10-26 06:33:52+00:00' AS TIMESTAMP), 'America/Los_Angeles')" in s_txt
+        assert "!= 'CURRENT_TIMESTAMP()'" in s_txt
+    pre_mod = _load_module("pre_gate_remap", SCRIPTS_DIR / "pre_gate.py")
+    assert pre_mod._remap_compiled_rows(
+        [{"ii_aging_tier__sort_": 0, "ii_other__sort_": 1}], ["ii.aging_tier__sort_"]
+    ) == [{"ii.aging_tier__sort_": 0}]
+
+    # 2. Post-SQL fallback (e.g., table_calculation present): bypasses compiled-SQL mode and retries uncached live
+    tc_sql = "SELECT COUNTIF(TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), created_at, DAY) < 90) AS fresh_units FROM ii"
+    cache_flags: list[Any] = []
+    tc_q = {
+        "query_index": 0,
+        "sql_query_id": "s_cached",
+        "sql": tc_sql,
+        "inline_query": {
+            "model": "m",
+            "view": "ii",
+            "fields": ["ii.fresh_units"],
+            "dynamic_fields": json.dumps([{"table_calculation": "tc_units", "expression": "${ii.fresh_units}"}]),
+        },
+    }
+    res_tc = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {"data_json": json.dumps({"run_id": "r_vol", "connection_name": "bq_conn", "queries": [tc_q]})},
+        {
+            "create_sql_query": lambda body: {"slug": "s_live"},
             "run_sql_query": lambda slug, **_kw: json.dumps(
                 [{"fresh_units": 11221 if slug == "s_live" else 11222}]
             ),
             "run_inline_query": lambda body, **kw: cache_flags.append(kw.get("cache"))
-            or json.dumps([{"ii.fresh_units": 11221}]),
+            or json.dumps([{"tc_units": 11221}]),
         },
     )
-    assert res["passed"] is True and "sql_rows" not in res["queries"][0]
-    assert cache_flags == [False, False] and res["queries"][0]["sql_query_id"] == "s_cached"
-    assert len(created_bodies) == 1 and "-- parity-live-" in created_bodies[0]["sql"]
+    assert res_tc["passed"] is True and cache_flags == [False, False]
 
+    # 3. Genuine LookML logic mismatch under pinned timestamp still fails immediately
     res_bad = _run_monty(
         SCRIPTS_DIR / "pre_gate.py",
-        {"data_json": json.dumps({"run_id": "r_vol_bad", "connection_name": "bq_conn", "queries": [base_q]})},
+        {"data_json": json.dumps({"run_id": "20261026_063352_055_1", "connection_name": "bq_conn", "queries": [base_q]})},
         {
-            "create_sql_query": lambda body: {"slug": "s_live"},
-            "run_sql_query": lambda **_kw: json.dumps([{"fresh_units": 11221}]),
-            "run_inline_query": lambda **_kw: json.dumps([{"ii.fresh_units": 0}]),
+            "create_sql_query": fake_create_sql,
+            "run_sql_query": lambda slug, **_kw: json.dumps(
+                [{"ii_aging_tier": "1. Fresh (<90d)", "ii_unsold_units": 0}]
+                if "AS ii_aging_tier" in pinned_sql_seen[slug]
+                else [{"aging_tier": "1. Fresh (<90d)", "unsold_units": 11221}]
+            ),
+            "run_inline_query": fake_inline,
         },
     )
     assert res_bad["passed"] is False
