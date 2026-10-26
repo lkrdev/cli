@@ -42,9 +42,10 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
   bash .agents/skills/agentic-lookml-workflow/scripts/preflight.sh
   lkr --client-id="$LOOKERSDK_CLIENT_ID" --client-secret="$LOOKERSDK_CLIENT_SECRET" --base-url="$BASE_URL" --dev auth add-access-token
   ```
-- Parse `$SQL_FILE` offline (`lkr parse sql --file "$SQL_FILE"`), reset the developer workspace to production, create branch `YYYYMMDD_HHMMSS_mmm_<looker_user_id>`, resolve existing `model_name` + `connection_name`, and pre-generate any missing `bronze/:table.view.lkml` files via [scripts/init_branch.py](scripts/init_branch.py); then initialize `./data/$RUN_ID/`, pull LookML once, and—whenever `init_branch.py` returned an existing `model_name`—sync includes, baseline snapshots (`-u`), and print `compare_initial.json` in the **same shell call** (inspect pulled LookML files directly under `./data/$RUN_ID/lookml/` after pull rather than reading repo-root LookML before pull):
+- Parse one or more SQL input files (`SQL_FILES=(...)`, `METRICS_FILES=(...)`) offline in memory via `lkr parse sql --sql "$SQL_TEXT"` (never write temporary files into `.git/`, which is a file in git worktrees, or the repo root before `$RUN_ID` exists), reset the developer workspace to production, create branch `YYYYMMDD_HHMMSS_mmm_<looker_user_id>`, resolve existing `model_name` + `connection_name`, and pre-generate any missing `bronze/:table.view.lkml` files via [scripts/init_branch.py](scripts/init_branch.py); then initialize `./data/$RUN_ID/`, pull LookML once, and—whenever `init_branch.py` returned an existing `model_name`—sync includes, baseline snapshots (`-u`), and print `compare_initial.json` (deduplicated across multi-query bundles) in the **same shell call** (inspect pulled LookML files directly under `./data/$RUN_ID/lookml/` after pull rather than reading repo-root LookML before pull):
   ```bash
-  PARSED_SQL_JSON=$(lkr parse sql --file "$SQL_FILE")
+  SQL_TEXT=$(awk 'FNR==1 && NR>1{print ";"} {print}' "${SQL_FILES[@]}")
+  PARSED_SQL_JSON=$(lkr parse sql --sql "$SQL_TEXT")
   RAW_BRANCH=$(lkr --base-url="$BASE_URL" --dev code-mode sandbox \
     --file=.agents/skills/agentic-lookml-workflow/scripts/init_branch.py \
     --var project_id="$PROJECT_ID" \
@@ -56,15 +57,27 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
   CONNECTION_NAME=$(echo "$BRANCH_JSON" | jq -r '.connection_name // empty')
   mkdir -p "./data/$RUN_ID/lookml"
   echo "$BRANCH_JSON" > "./data/$RUN_ID/data.json"
-  cp "$SQL_FILE" "./data/$RUN_ID/input.sql"
-  cp "$METRICS_FILE" "./data/$RUN_ID/metrics.md"
+  printf '%s\n' "$SQL_TEXT" > "./data/$RUN_ID/input.sql"
+  awk 'FNR==1 && NR>1{print "\n---"} {print}' "${METRICS_FILES[@]}" > "./data/$RUN_ID/metrics.md"
   lkr --quiet --base-url="$BASE_URL" --dev tools lookml pull "./data/$RUN_ID/lookml" --project-id="$PROJECT_ID"
   if [[ -n "$MODEL_NAME" ]]; then
     LOOKML_DIR="./data/$RUN_ID/lookml" MODEL_NAME="$MODEL_NAME" CONNECTION_NAME="$CONNECTION_NAME" \
       bash .agents/skills/agentic-lookml-workflow/scripts/setup_repo.sh --skip-preflight
     lkr parse lookml snapshot --path "./data/$RUN_ID/lookml" -u
     lkr parse sql-lookml-compare --compact --sql-file "./data/$RUN_ID/input.sql" --path "./data/$RUN_ID/lookml" --output "./data/$RUN_ID/compare_initial.json"
-    jq -c . "./data/$RUN_ID/compare_initial.json" | head -c 8000 || true
+    jq -c '
+      if (.queries | length) == 1 then .
+      else {
+        views: ([.queries[].views[]?] | group_by(.view_name) | map({
+          view_name: .[0].view_name, file: .[0].file,
+          unmodeled_db_columns: ([.[].unmodeled_db_columns[]?] | unique),
+          fields: ([.[].fields[]? | "\(.field_name):\(.lookml_type // .field_type)\(if .timeframes then "[\(.timeframes | join(","))]" else "" end)\(if .primary_key then ":pk" else "" end)"] | unique)
+        })),
+        explores: ([.queries[].explores[]? | {explore_name, view_name, join_name, file}] | unique),
+        join_analysis: ([.queries[].join_analysis[]?] | unique),
+        tests: ([.queries[].tests[]?.file] | unique)
+      } end
+    ' "./data/$RUN_ID/compare_initial.json" | head -c 8000 || true
   fi
   ```
 - If the project has **no** existing `.model.lkml` (`MODEL_NAME` empty above) or you are creating a new model, set `MODEL_NAME="${MODEL_NAME:-${PROJECT_ID//-/_}}"`, ask the user for `CONNECTION_NAME` if not provided, register the model via [scripts/configure_model.py](scripts/configure_model.py), and run `setup_repo.sh --skip-preflight` + `snapshot -u` + `sql-lookml-compare --compact` (creating `./data/$RUN_ID/lookml/$MODEL_NAME.model.lkml` *after* any `generate_bronze_view.py` + `lookml pull` so `lookml pull` never deletes a local-only `.model.lkml` file):
@@ -98,13 +111,14 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
 - Follow [agentic-lookml](../agentic-lookml/SKILL.md) to author Bronze refinements, Bronze/Silver/Gold explores, and views **together before the first push**:
   - Wait for `compare_initial.json` before opening `references/` playbooks or [measures-and-sql-functions.md](../agentic-lookml/references/measures-and-sql-functions.md), and skip both when inline single-table/simple-aggregate rules already cover the query.
   - Read only `.refinement.lkml` and active `hidden: no` `.explore.lkml` files in `compare_initial.json`—never read `hidden: yes` `*_base.explore.lkml` when a Silver explore is active, unrelated tables' files, `bronze/:table.view.lkml` when `compare_initial.json` already lists columns/timeframes, `.model.lkml`, `*.snap.json.md`, or generated `*.json` artifacts, or existing `.test.lkml` listed in `compare_initial.json` `tests[]` unless detaching its explore (append new `test:` blocks via `write_file` with `Append=True` and a leading newline after `pre_gate.py`).
-  - Explicitly `include:` referenced files in standalone `.explore.lkml` / `.test.lkml` files, sync `$MODEL_NAME.model.lkml` globs via `LOOKML_DIR="./data/$RUN_ID/lookml" ... setup_repo.sh --skip-preflight` if needed, and prefer one `write_file` overwrite over 3+ `edit_file` calls on a short LookML file.
-  - Chain offline `--validate`, `schema validate`, `lookml push`, and [scripts/pre_gate.py](scripts/pre_gate.py) (including `test_queries_json` across all target explores) in **one shell call**, printing the compact `jq` summary so `data.json` need not be re-read:
+  - Explicitly `include:` referenced files in standalone `.explore.lkml` / `.test.lkml` files, sync `$MODEL_NAME.model.lkml` globs via `LOOKML_DIR="./data/$RUN_ID/lookml" ... setup_repo.sh --skip-preflight` if needed, and prefer one `write_file` overwrite over 3+ `edit_file` calls on a short LookML file (use one contiguous `edit_file` for EOF additions on >120-line files).
+  - Chain per-explore offline `--validate` + `schema validate --explore-file`, `lookml push`, and [scripts/pre_gate.py](scripts/pre_gate.py) (including `test_queries_json` across all target explores) in **one shell call**, printing the compact `jq` summary so `data.json` need not be re-read:
   ```bash
   BASE_URL="${BASE_URL:-$LOOKERSDK_BASE_URL}"
-  lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" --base-path "." -m "$MODEL_NAME" -e "$EXPLORE_NAME" --validate -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json"
-  lkr schema generate -m "$MODEL_NAME" -e "$EXPLORE_NAME" --explore-file "./data/$RUN_ID/explore_${EXPLORE_NAME}.json" -o "./data/$RUN_ID/schema_${EXPLORE_NAME}.json"
-  lkr schema validate --schema-file "./data/$RUN_ID/schema_${EXPLORE_NAME}.json" --query "$(jq -c '[.[]]' <<<"$INLINE_QUERIES_JSON")"
+  for EXPLORE_NAME in $(jq -r '[.[].view] | unique[]' <<<"$INLINE_QUERIES_JSON"); do
+    lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" --base-path "." -m "$MODEL_NAME" -e "$EXPLORE_NAME" --validate -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json"
+    VAL_OUT=$(lkr schema validate -m "$MODEL_NAME" -e "$EXPLORE_NAME" --explore-file "./data/$RUN_ID/explore_${EXPLORE_NAME}.json" --query "$(jq -c --arg e "$EXPLORE_NAME" '[.[] | select(.view == $e)]' <<<"$INLINE_QUERIES_JSON")") || { echo "$VAL_OUT"; exit 1; }
+  done
   lkr --base-url="$BASE_URL" --dev tools lookml push "./data/$RUN_ID/lookml" --project-id="$PROJECT_ID" --no-reset --only-changed
   RAW_OUT=$(lkr --base-url="$BASE_URL" --dev code-mode sandbox \
     --file=.agents/skills/agentic-lookml-workflow/scripts/pre_gate.py \
@@ -117,7 +131,7 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
     --var test_queries_json="${TEST_QUERIES_JSON:-{}}")
   JSON_OUT=$(echo "$RAW_OUT" | sed -n '/^{/,$p')
   echo "$JSON_OUT" | jq -e . >/dev/null && echo "$JSON_OUT" > "./data/$RUN_ID/data.json"
-  echo "$JSON_OUT" | jq '{passed, all_queries_matched, validation_errors, queries: [.queries[] | del(.sql, .inline_query, .sql_rows)], test_query_results}'
+  echo "$JSON_OUT" | jq '{passed, all_queries_matched, validation_errors, queries: [.queries[] | del(.sql, .inline_query)], test_query_results: (.test_query_results // {} | map_values(if type == "array" then .[:5] else . end))}'
   ```
 - Once validation and parity pass, author LookML data tests in `./data/$RUN_ID/lookml` following [agentic-lookml](../agentic-lookml/SKILL.md) (`tests/bronze/:table.test.lkml` for single-table measures and dimensions/terms, `tests/silver/:explore.test.lkml` strictly for joins/`*_fields`/NDTs, one new `test:` block per PR slice on a bounded historical slice) and write `./data/$RUN_ID/summary.md` alongside them (covering base views, canonical deconstruction & modeling decisions, matched pattern categories, LookML files authored, any `Validation failed:` / `Updating LookML:` self-heals plus final `/sql/:id` and `/x/:id` parity, and targeted LookML tests). Sync `$MODEL_NAME.model.lkml` includes if needed, run `sql-lookml-compare --offline --compact` for `compare_post_refactor.json`, update LookML snapshots, push, run [scripts/validate_and_commit_branch.py](scripts/validate_and_commit_branch.py) (re-running `pre_gate.py` and updating `summary.md` only if LookML view/explore logic had to change while self-healing a test), and open the GitHub PR via [scripts/create_github_pr.sh](scripts/create_github_pr.sh) in one chained call:
   ```bash
