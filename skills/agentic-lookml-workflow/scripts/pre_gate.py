@@ -405,7 +405,10 @@ def _exec_sql(sql_str: str, conn_name: str):
     if not slug:
         return None
     raw = run_sql_query(slug=slug, result_format="json")  # ty: ignore[unresolved-reference]
-    return json.loads(raw) if isinstance(raw, str) else (raw or [])
+    try:
+        return json.loads(raw) if isinstance(raw, str) else (raw or [])
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
 def main():
@@ -608,13 +611,13 @@ def main():
                     try:
                         ds_rows = _exec_sql(det_sql, c_name)
                         dl_rows = (
-                            (_run_pinned_q(aq=det_q) if pinned_mode else _run_looker_live(_aq=det_q)[1]) or []
+                            (_run_pinned_q(aq=det_q) if pinned_mode else _run_looker_live(_aq=det_q)[1])
                             if isinstance(ds_rows, list) and len(ds_rows) == len(s_rows)
                             else None
                         )
                     except Exception:
                         ds_rows, dl_rows = None, None
-                    if dl_rows is not None:
+                    if isinstance(ds_rows, list) and isinstance(dl_rows, list):
                         matched, mismatches = compare_row_sets(
                             ds_rows,
                             dl_rows,
