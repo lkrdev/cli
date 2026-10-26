@@ -391,16 +391,30 @@ def compare_row_sets(
     return not mismatches, mismatches[:5]
 
 
+def _as_dict(raw):
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _exec_sql(sql_str: str, conn_name: str):
+    body = {"sql": sql_str, **({"connection_name": conn_name} if conn_name else {})}
+    slug = (create_sql_query(body=body) or {}).get("slug")  # ty: ignore[unresolved-reference]
+    if not slug:
+        return None
+    raw = run_sql_query(slug=slug, result_format="json")  # ty: ignore[unresolved-reference]
+    try:
+        return json.loads(raw) if isinstance(raw, str) else (raw or [])
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 def main():
     try:
-        raw_data = data_json  # ty: ignore[unresolved-reference]
+        data = _as_dict(data_json)  # ty: ignore[unresolved-reference]
     except NameError:
-        raw_data = {}
-    try:
-        data = json.loads(raw_data) if isinstance(raw_data, str) else (raw_data or {})
-    except (json.JSONDecodeError, TypeError):
-        data = {}
-    if not isinstance(data, dict):
         data = {}
 
     try:
@@ -463,16 +477,8 @@ def main():
 
     # 3. Register inline queries and check parity
     try:
-        raw_payloads = inline_queries_json  # ty: ignore[unresolved-reference]
+        payloads = _as_dict(inline_queries_json)  # ty: ignore[unresolved-reference]
     except NameError:
-        raw_payloads = {}
-    try:
-        payloads = (
-            json.loads(raw_payloads)
-            if isinstance(raw_payloads, str)
-            else (raw_payloads or {})
-        )
-    except (json.JSONDecodeError, TypeError):
         payloads = {}
 
     all_matched = True
@@ -517,14 +523,6 @@ def main():
                 or any(isinstance(d, dict) and d.get("table_calculation") for d in dfs)
             )
 
-            def _exec_sql(sql_str: str, _cn=c_name):
-                body = {"sql": sql_str, **({"connection_name": _cn} if _cn else {})}
-                slug = (create_sql_query(body=body) or {}).get("slug")  # ty: ignore[unresolved-reference]
-                if not slug:
-                    return None
-                raw = run_sql_query(slug=slug, result_format="json")  # ty: ignore[unresolved-reference]
-                return json.loads(raw) if isinstance(raw, str) else (raw or [])
-
             def _q_call(fmt: str, aq=active_q, qid=q_id, **kw):
                 return (
                     run_inline_query(result_format=fmt, body=aq, **kw)  # ty: ignore[unresolved-reference]
@@ -537,9 +535,9 @@ def main():
                 ok = isinstance(l_sql, str) and re.match(r"(?is)^(?:\s|--[^\n]*|/\*[\s\S]*?\*/)*(?:SELECT|WITH)\b", l_sql)
                 return _pin_temporal_sql(l_sql, _rid)[0] if ok else None
 
-            def _run_pinned_q(aq=active_q, _ps=pinned_stmt, _qf=q_fields):
+            def _run_pinned_q(aq=active_q, _ps=pinned_stmt, _qf=q_fields, _cn=c_name):
                 pl = _compile_pinned_sql(aq=aq)
-                raw_r = _exec_sql(f"-- parity-pin-{_fp(_ps + chr(0) + pl)}\n{pl}") if pl else None
+                raw_r = _exec_sql(f"-- parity-pin-{_fp(_ps + chr(0) + pl)}\n{pl}", _cn) if pl else None
                 return _remap_compiled_rows(raw_r, _qf) if isinstance(raw_r, list) else None
 
             def _run_looker_live(bypass_cache: bool = False, _aq=active_q):
@@ -553,7 +551,7 @@ def main():
                     pinned_l_sql = _compile_pinned_sql()
                     if pinned_l_sql is not None:
                         tag = f"-- parity-pin-{_fp(pinned_stmt + chr(0) + pinned_l_sql)}\n"
-                        ps_rows, pl_rows = _exec_sql(f"{tag}{pinned_stmt}"), _exec_sql(f"{tag}{pinned_l_sql}")
+                        ps_rows, pl_rows = _exec_sql(f"{tag}{pinned_stmt}", c_name), _exec_sql(f"{tag}{pinned_l_sql}", c_name)
                         if ps_rows is not None and pl_rows is not None:
                             s_rows, l_rows, pinned_mode = ps_rows, _remap_compiled_rows(pl_rows, q_fields), True
                 except Exception:
@@ -579,7 +577,7 @@ def main():
             if not matched and stmt_pinned and not pinned_mode:
                 l_raw, l_rows = _run_looker_live(bypass_cache=True)
                 try:
-                    ps_retry = _exec_sql(f"-- parity-live-{_fp(str(l_raw))}\n{stmt_sql}")
+                    ps_retry = _exec_sql(f"-- parity-live-{_fp(str(l_raw))}\n{stmt_sql}", c_name)
                 except Exception:
                     ps_retry = None
                 if ps_retry is not None:
@@ -591,25 +589,39 @@ def main():
                     looker_fields=q_fields,
                     fetch_extra=_fetch_tie_pool if isinstance(active_q, dict) else None,
                 )
-            if not matched and isinstance(active_q, dict) and s_rows and len(s_rows) == len(l_rows):
+            if not matched and isinstance(active_q, dict) and s_rows and len(s_rows) == len(l_rows) and not has_post_sql:
                 _, _, _, _, has_ob, _, _ = _sql_meta(stmt_sql)
                 base_stmt = pinned_stmt if pinned_mode else stmt_sql
                 clean_sql = re.sub(r"(?:\s|--[^\n]*|/\*[\s\S]*?\*/|;)+$", "", base_stmt)
                 lim_match = re.search(r"(?i)\bLIMIT\s+(\d+)(?:\s+OFFSET\s+\d+)?\s*$", clean_sql)
-                if not has_ob and lim_match:
-                    lim_n = int(lim_match.group(1))
+                ex_sorts = [str(s) for s in (active_q.get("sorts") or []) if str(s).strip()] if has_ob else []
+                if lim_match and (not has_ob or ex_sorts):
+                    lim_clause = clean_sql[lim_match.start() :].lstrip()
                     no_lim = clean_sql[: lim_match.start()].rstrip()
                     ord_cols = ", ".join(str(i) for i in range(1, len(s_rows[0]) + 1))
-                    ds_rows = _exec_sql(f"SELECT * FROM (\n{no_lim}\n) AS _lkr_det ORDER BY {ord_cols} LIMIT {lim_n}")
-                    if ds_rows is not None:
-                        drop_k = _drop_grain_keys(s_rows, l_rows, [f.lower() for f in q_fields])
-                        sort_f = [f for f in q_fields if f.lower() not in drop_k][: len(s_rows[0])]
-                        det_q = {**active_q, "sorts": [f"{f} asc" for f in sort_f]}
-                        dl_rows = (_run_pinned_q(aq=det_q) if pinned_mode else _run_looker_live(_aq=det_q)[1]) or []
+                    drop_k = _drop_grain_keys(s_rows, l_rows, [f.lower() for f in q_fields])
+                    sort_f = [f for f in q_fields if f.lower() not in drop_k][: len(s_rows[0])]
+                    seen_sf = {s.split()[0].lower() for s in ex_sorts}
+                    det_sql = (
+                        f"{no_lim}, {ord_cols} {lim_clause}"
+                        if has_ob
+                        else f"SELECT * FROM (\n{no_lim}\n) AS _lkr_det ORDER BY {ord_cols} {lim_clause}"
+                    )
+                    det_q = {**active_q, "sorts": ex_sorts + [f"{f} asc" for f in sort_f if f.lower() not in seen_sf]}
+                    try:
+                        ds_rows = _exec_sql(det_sql, c_name)
+                        dl_rows = (
+                            (_run_pinned_q(aq=det_q) if pinned_mode else _run_looker_live(_aq=det_q)[1])
+                            if isinstance(ds_rows, list) and len(ds_rows) == len(s_rows)
+                            else None
+                        )
+                    except Exception:
+                        ds_rows, dl_rows = None, None
+                    if isinstance(ds_rows, list) and isinstance(dl_rows, list):
                         matched, mismatches = compare_row_sets(
                             ds_rows,
                             dl_rows,
-                            sql=f"{no_lim} ORDER BY {ord_cols} LIMIT {lim_n}",
+                            sql=stmt_sql if has_ob else f"{no_lim} ORDER BY {ord_cols} {lim_clause}",
                             looker_fields=q_fields,
                             fetch_extra=lambda new_lim, _dq=det_q: _fetch_tie_pool(new_lim, _dq),
                         )
@@ -636,19 +648,10 @@ def main():
 
     # 4. Run optional test-slice baseline queries (raw unformatted JSON for .test.lkml assertions)
     try:
-        raw_tq = test_queries_json  # ty: ignore[unresolved-reference]
+        parsed_tq = _as_dict(test_queries_json)  # ty: ignore[unresolved-reference]
     except NameError:
-        raw_tq = {}
-    try:
-        parsed_tq = json.loads(raw_tq) if isinstance(raw_tq, str) else (raw_tq or {})
-    except (json.JSONDecodeError, TypeError):
         parsed_tq = {}
-
-    test_queries = (
-        {str(k): v for k, v in parsed_tq.items() if isinstance(v, dict)}
-        if isinstance(parsed_tq, dict)
-        else {}
-    )
+    test_queries = {str(k): v for k, v in parsed_tq.items() if isinstance(v, dict)}
 
     if test_queries and not val_errors:
         test_results = {}

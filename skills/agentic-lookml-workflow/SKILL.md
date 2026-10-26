@@ -29,7 +29,7 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
 | :--- | :--- | :--- |
 | `init_branch.py` | `project_id`, `ts_utc`, `parsed_sql_json` (optional `lkr parse sql` JSON) | `{run_id, user_id, project_id, branch_name, production_branch, production_ref, git_remote_url, model_name?, connection_name?, generated_bronze_files?}` |
 | `configure_model.py` | `project_id`, `model_name` (defaults to `${project_id//-/_}`), `connection_name` | `{model_name, project_name, connection_name, action: "created"\|"updated"}` |
-| `pre_gate.py` | `raw_sql`, `connection_name`, `data_json`, `base_url`, `validate` (`"true"`/`"false"`), `inline_queries_json` (`{"0": {"model": ..., "view": ..., "fields": [...], "filters"?: {...}, "sorts"?: [...], "limit"?: "500", "dynamic_fields"?: "[...]"}}` — each entry sets its own `"view": "<explore_name>"`; list `fields` + `dynamic_fields` in exact SQL `SELECT` projection order; `pre_gate.py` automatically pins `CURRENT_TIMESTAMP` / `CURRENT_DATE` / `CURRENT_DATETIME` / `CURRENT_TIME` / `NOW()` to the run's fixed UTC timestamp across raw SQL and compiled Looker SQL during parity checks while preserving live `CURRENT_TIMESTAMP` in LookML and saved queries, and normalizes stripped SQL `'1. '` ordinal prefixes on native `case:` fields, `ORDER BY` ties, and `LIMIT N` boundary tie-pools; for unordered `LIMIT N` queries (`no ORDER BY`), omit `"sorts"`, and if an ungrouped non-`DISTINCT` row query omits the base PK, append `<base_view>.<pk>` or `common_helpers.no_group` to `fields`—`pre_gate.py` strips trailing grain keys and verifies deterministic `ORDER BY 1..k LIMIT N` fallback automatically when raw scan blocks differ), `test_queries_json` (optional `{"slice_key": <WriteQuery dict>}`, also supporting multiple explores) | Updated `data.json`: `{..., passed, all_queries_matched, validation_errors, queries: [{query_index, sql_query_id, sql_runner_url, query_id, query_slug, explore_url, inline_query, parity_status, mismatches, sql}], test_query_results?: {"slice_key": [<raw unformatted row dicts>]}}` |
+| `pre_gate.py` | `raw_sql`, `connection_name`, `data_json`, `base_url`, `validate` (`"true"`/`"false"`), `inline_queries_json` (`{"0": {"model": ..., "view": ..., "fields": [...], "filters"?: {...}, "sorts"?: [...], "limit"?: "500", "dynamic_fields"?: "[...]"}}` — each entry sets its own `"view": "<explore_name>"`; list `fields` + `dynamic_fields` in exact SQL `SELECT` projection order; automatically pins `CURRENT_TIMESTAMP`/`CURRENT_DATE`/`CURRENT_DATETIME`/`CURRENT_TIME`/`NOW()`, normalizes stripped `'1. '` `case:` prefixes, `ROUND`, `* 100` `percent_*`, `ORDER BY` ties, and deterministic `LIMIT N` tie-breaking across both unordered and `>500`-way tied `ORDER BY` queries, and strips trailing `<base_view>.<pk>` / `common_helpers.no_group` grain keys), `test_queries_json` (optional `{"slice_key": <WriteQuery dict>}`) | Updated `data.json`: `{..., passed, all_queries_matched, validation_errors, queries: [{query_index, sql_query_id, sql_runner_url, query_id, query_slug, explore_url, inline_query, parity_status, mismatches, sql}], test_query_results?: {"slice_key": [<raw unformatted row dicts>]}}` |
 | `validate_and_commit_branch.py` | `project_id`, `file_ids` (comma-separated LookML-relative `.test.lkml` paths, e.g. `"tests/bronze/orders.test.lkml"`), `test_names` (comma-separated; zipped 1:1 positionally with `file_ids` — repeat `file_id` when multiple tests live in one file, matching `diff_lookml_tests.py`), `commit_message` (optional; commits + pushes branch when non-empty), `branch_name` / `head_sha` / `skip_validate` / `skip_tests` (CI flags) | `{passed, committed, branch_name?, commit_sha?, errors, failed_tests}` |
 
 ## Workflow steps
@@ -74,11 +74,11 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
           unmodeled_db_columns: ([.[].unmodeled_db_columns[]?] | unique),
           fields: ([.[].fields[]? | "\(.field_name):\(.lookml_type // .field_type)\(if .timeframes then "[\(.timeframes | join(","))]" else "" end)\(if .primary_key then ":pk" else "" end)"] | unique)
         })),
-        explores: ([.queries[].explores[]? | {explore_name, view_name, join_name, file}] | unique),
+        explores: ([.queries[].explores[]? | {explore_name, view_name, join_name, extends, file}] | unique),
         join_analysis: ([.queries[].join_analysis[]?] | unique),
-        tests: ([.queries[].tests[]?.file] | unique)
+        tests: ([.queries[].tests[]? | {file, explore_name}] | unique)
       } end
-    ' "./data/$RUN_ID/compare_initial.json" | head -c 16000 || true
+    ' "./data/$RUN_ID/compare_initial.json" | head -c 9000 || true
   fi
   ```
 - If the project has **no** existing `.model.lkml` (`MODEL_NAME` empty above) or you are creating a new model, set `MODEL_NAME="${MODEL_NAME:-${PROJECT_ID//-/_}}"`, ask the user for `CONNECTION_NAME` if not provided, register the model via [scripts/configure_model.py](scripts/configure_model.py), and run `setup_repo.sh --skip-preflight` + `snapshot -u` + `sql-lookml-compare --compact` (creating `./data/$RUN_ID/lookml/$MODEL_NAME.model.lkml` *after* any `generate_bronze_view.py` + `lookml pull` so `lookml pull` never deletes a local-only `.model.lkml` file):
@@ -112,15 +112,15 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
 - Follow [agentic-lookml](../agentic-lookml/SKILL.md) to author Bronze refinements, Bronze/Silver/Gold explores, and views **together before the first push**:
   - Wait for `compare_initial.json` before opening `references/` playbooks or [measures-and-sql-functions.md](../agentic-lookml/references/measures-and-sql-functions.md), and skip both when inline single-table/simple-aggregate rules already cover the query.
   - Read only `.refinement.lkml` and active `hidden: no` `.explore.lkml` files in `compare_initial.json`—never read `hidden: yes` `*_base.explore.lkml` when a Silver explore is active (unless promoting a physical join/`UNNEST` into both `*_base.explore.lkml` and the Silver explore), unrelated tables' files, `bronze/:table.view.lkml` when `compare_initial.json` already lists columns/timeframes, `.model.lkml`, `*.snap.json.md`, or generated `*.json` artifacts, or existing `.test.lkml` listed in `compare_initial.json` `tests[]` unless detaching its explore (append new `test:` blocks via `write_file` with `Append=True` and a leading newline after `pre_gate.py`).
-  - Explicitly `include:` referenced files in standalone `.explore.lkml` / `.test.lkml` files, sync `$MODEL_NAME.model.lkml` globs via `LOOKML_DIR="./data/$RUN_ID/lookml" ... setup_repo.sh --skip-preflight` if needed, and prefer one `write_file` overwrite over 3+ `edit_file` calls on a short LookML file (use one contiguous `edit_file` for EOF additions on >120-line files).
+  - Explicitly `include:` referenced files in standalone `.explore.lkml` / `.test.lkml` files, `rm -f` any obsolete `bronze/explores/:table.explore.lkml` when detaching to `:table_base.explore.lkml` (`lookml push --only-changed` removes deleted files on the remote branch), sync `$MODEL_NAME.model.lkml` globs via `LOOKML_DIR="./data/$RUN_ID/lookml" ... setup_repo.sh --skip-preflight` if needed, and prefer one `write_file` overwrite over 3+ `edit_file` calls on a short LookML file (on >120-line Explores, place new `query:` blocks right below `join:` blocks so `include:` + `join:` + `query:` fit in a single contiguous `edit_file`).
   - Chain per-explore offline `--validate` + `schema validate --explore-file`, `lookml push`, and [scripts/pre_gate.py](scripts/pre_gate.py) (including `test_queries_json` across all target explores) in **one shell call**, printing the compact `jq` summary so `data.json` need not be re-read:
   ```bash
   BASE_URL="${BASE_URL:-$LOOKERSDK_BASE_URL}"
   for EXPLORE_NAME in $(jq -r '[.[].view] | unique[]' <<<"$INLINE_QUERIES_JSON"); do
-    lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" --base-path "." -m "$MODEL_NAME" -e "$EXPLORE_NAME" --validate -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json"
+    lkr parse lookml-to-api --path "./data/$RUN_ID/lookml" --base-path "." -m "$MODEL_NAME" -e "$EXPLORE_NAME" --validate -o "./data/$RUN_ID/explore_${EXPLORE_NAME}.json" >/dev/null
     VAL_OUT=$(lkr schema validate -m "$MODEL_NAME" -e "$EXPLORE_NAME" --explore-file "./data/$RUN_ID/explore_${EXPLORE_NAME}.json" --query "$(jq -c --arg e "$EXPLORE_NAME" '[.[] | select(.view == $e)]' <<<"$INLINE_QUERIES_JSON")") || { echo "$VAL_OUT"; exit 1; }
   done
-  lkr --base-url="$BASE_URL" --dev tools lookml push "./data/$RUN_ID/lookml" --project-id="$PROJECT_ID" --no-reset --only-changed
+  lkr --quiet --base-url="$BASE_URL" --dev tools lookml push "./data/$RUN_ID/lookml" --project-id="$PROJECT_ID" --no-reset --only-changed
   RAW_OUT=$(lkr --base-url="$BASE_URL" --dev code-mode sandbox \
     --file=.agents/skills/agentic-lookml-workflow/scripts/pre_gate.py \
     --var raw_sql="$(cat "./data/$RUN_ID/input.sql")" \
@@ -136,12 +136,12 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
   ```
 - Once validation and parity pass, author LookML data tests in `./data/$RUN_ID/lookml` following [agentic-lookml](../agentic-lookml/SKILL.md) (`tests/bronze/:table.test.lkml` for single-table measures and dimensions/terms, `tests/silver/:explore.test.lkml` strictly for joins/`*_fields`/NDTs, one new `test:` block per PR slice on a bounded historical slice) and write `./data/$RUN_ID/summary.md` alongside them (covering base views, canonical deconstruction & modeling decisions, matched pattern categories, LookML files authored, any `Validation failed:` / `Updating LookML:` self-heals plus final `/sql/:id` and `/x/:id` parity, and targeted LookML tests). Sync `$MODEL_NAME.model.lkml` includes if needed, run `sql-lookml-compare --offline --compact` for `compare_post_refactor.json`, update LookML snapshots, push, run [scripts/validate_and_commit_branch.py](scripts/validate_and_commit_branch.py) (re-running `pre_gate.py` and updating `summary.md` only if LookML view/explore logic had to change while self-healing a test), and open the GitHub PR via [scripts/create_github_pr.sh](scripts/create_github_pr.sh) in one chained call:
   ```bash
-  lkr parse sql-lookml-compare --offline --compact --sql-file "./data/$RUN_ID/input.sql" --path "./data/$RUN_ID/lookml" --output "./data/$RUN_ID/compare_post_refactor.json"
+  lkr parse sql-lookml-compare --offline --compact --sql-file "./data/$RUN_ID/input.sql" --path "./data/$RUN_ID/lookml" --output "./data/$RUN_ID/compare_post_refactor.json" >/dev/null
   jq -c '[.queries[]?.explore_queries[0]? // empty]' "./data/$RUN_ID/compare_post_refactor.json"
   lkr parse lookml snapshot --path "./data/$RUN_ID/lookml" --allow-additions --format json --output "./data/$RUN_ID/snapshot_check.json" || true
   jq -c 'del(.snapshots)' "./data/$RUN_ID/snapshot_check.json"
-  lkr parse lookml snapshot --path "./data/$RUN_ID/lookml" -u
-  lkr --base-url="$BASE_URL" --dev tools lookml push "./data/$RUN_ID/lookml" --project-id="$PROJECT_ID" --no-reset --only-changed
+  lkr parse lookml snapshot --path "./data/$RUN_ID/lookml" -u >/dev/null
+  lkr --quiet --base-url="$BASE_URL" --dev tools lookml push "./data/$RUN_ID/lookml" --project-id="$PROJECT_ID" --no-reset --only-changed
   RAW_COMMIT=$(lkr --base-url="$BASE_URL" --dev code-mode sandbox \
     --file=.agents/skills/agentic-lookml-workflow/scripts/validate_and_commit_branch.py \
     --var project_id="$PROJECT_ID" \
