@@ -1487,21 +1487,20 @@ def _find_case_filter_errors(
         labels = case_labels.get(target)
         if not labels or not cond or "{{" in cond or "{%" in cond:
             continue
-        bad = [
-            part
-            for part in re.split(r"(?<!\^),", cond)
-            if (cands := {x for c in (part, part.strip()) if (x := c.removeprefix("-"))})
-            and not ({c.upper() for c in cands} & {"NULL", "EMPTY", "BLANK"})
-            and not any(
-                re.fullmatch(
+        bad: list[str] = []
+        for part in re.split(r"(?<!\^),", cond):
+            cands = {x for c in (part, part.strip()) if (x := c.removeprefix("-"))}
+            if not cands or ({c.upper() for c in cands} & {"NULL", "EMPTY", "BLANK"}):
+                continue
+            rxs = [
+                re.compile(
                     "".join(".*" if m == "%" else "." if m == "_" else re.escape(m[-1]) for m in re.findall(r"\^.|.", cand)),
-                    lbl,
                     re.DOTALL | re.IGNORECASE,
                 )
                 for cand in cands
-                for lbl in labels
-            )
-        ]
+            ]
+            if not any(rx.fullmatch(lbl) for rx in rxs for lbl in labels):
+                bad.append(part)
         if bad:
             errors.append(
                 {
