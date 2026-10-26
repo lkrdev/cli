@@ -63,22 +63,22 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
   if [[ -n "$MODEL_NAME" ]]; then
     LOOKML_DIR="./data/$RUN_ID/lookml" MODEL_NAME="$MODEL_NAME" CONNECTION_NAME="$CONNECTION_NAME" \
       bash .agents/skills/agentic-lookml-workflow/scripts/setup_repo.sh --skip-preflight
-    lkr parse lookml snapshot --path "./data/$RUN_ID/lookml" -u
-    lkr parse sql-lookml-compare --compact --sql-file "./data/$RUN_ID/input.sql" --path "./data/$RUN_ID/lookml" --output "./data/$RUN_ID/compare_initial.json"
+    lkr parse lookml snapshot --path "./data/$RUN_ID/lookml" -u >/dev/null
+    lkr parse sql-lookml-compare --compact --sql-file "./data/$RUN_ID/input.sql" --path "./data/$RUN_ID/lookml" --output "./data/$RUN_ID/compare_initial.json" >/dev/null
     jq -c '
       if (.queries | length) == 1 then .
-      else {
+      else ([.queries[].explores[]? | select((.file // "") | startswith("gold/")).explore_name] | unique) as $gold | {
         queries: [.queries[] | {tables: [.parsed_query.tables[]?.name], ctes: .parsed_query.ctes, joins: [.parsed_query.joins[]?.table]}],
         views: ([.queries[].views[]?] | group_by(.view_name) | map({
           view_name: .[0].view_name, file: .[0].file,
           unmodeled_db_columns: ([.[].unmodeled_db_columns[]?] | unique),
-          fields: ([.[].fields[]? | "\(.field_name):\(.lookml_type // .field_type)\(if .timeframes then "[\(.timeframes | join(","))]" else "" end)\(if .primary_key then ":pk" else "" end)\(if .filters then "{\(.filters | tojson)}" else "" end)"] | unique)
+          fields: ([.[].fields[]? | "\(.field_name)\(if .primary_key then ":pk" elif .field_type == "measure" then ":m" else "" end)"] | unique | join(","))
         })),
-        explores: ([.queries[].explores[]?] | group_by([.explore_name, .file]) | map({explore_name: .[0].explore_name, file: .[0].file, extends: .[0].extends, joins: ([.[].join_name // empty] | unique)})),
-        join_analysis: ([.queries[].join_analysis[]? | {explore_name, sql_join: (.sql_join.table? // .sql_join), status, relationship, inferred_relationship, warnings: ([.safety_warnings[]?.rule] | unique)}] | unique),
+        explores: ([.queries[].explores[]? | select((.file // "") | startswith("gold/") | not)] | group_by([.explore_name, .file]) | map({explore_name: .[0].explore_name, file: .[0].file, extends: .[0].extends, joins: ([.[].join_name // empty] | unique)})),
+        join_analysis: ([.queries[].join_analysis[]? | select(.explore_name as $e | ($gold | index($e)) == null) | "\(.explore_name):\((.sql_join.table? // .sql_join // "") | gsub("[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_]+\\."; "")):\(.status):\(.relationship // "")"] | unique),
         tests: ([.queries[].tests[]? | {file, explore_name}] | unique)
       } end
-    ' "./data/$RUN_ID/compare_initial.json" | head -c 14000 || true
+    ' "./data/$RUN_ID/compare_initial.json" | head -c 9000 || true
   fi
   ```
 - If the project has **no** existing `.model.lkml` (`MODEL_NAME` empty above) or you are creating a new model, set `MODEL_NAME="${MODEL_NAME:-${PROJECT_ID//-/_}}"`, ask the user for `CONNECTION_NAME` if not provided, register the model via [scripts/configure_model.py](scripts/configure_model.py), and run `setup_repo.sh --skip-preflight` + `snapshot -u` + `sql-lookml-compare --compact` (creating `./data/$RUN_ID/lookml/$MODEL_NAME.model.lkml` *after* any `generate_bronze_view.py` + `lookml pull` so `lookml pull` never deletes a local-only `.model.lkml` file):
@@ -132,7 +132,7 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
     --var test_queries_json="${TEST_QUERIES_JSON:-{}}")
   JSON_OUT=$(echo "$RAW_OUT" | sed -n '/^{/,$p')
   echo "$JSON_OUT" | jq -e . >/dev/null && echo "$JSON_OUT" > "./data/$RUN_ID/data.json"
-  echo "$JSON_OUT" | jq -c '{passed, all_queries_matched, validation_errors, queries: [.queries[]? | {query_index, parity_status, sql_runner_url, explore_url, mismatches}], test_query_results: (.test_query_results // {} | map_values(if type == "array" then .[:3] else . end))}'
+  echo "$JSON_OUT" | jq -c '{passed, all_queries_matched, validation_errors, queries: [.queries[]? | {query_index, parity_status, sql_runner_url, explore_url, mismatches}], test_query_results: (.test_query_results // {} | map_values(if type == "array" then .[:10] else . end))}'
   ```
 - Once validation and parity pass, author LookML data tests in `./data/$RUN_ID/lookml` following [agentic-lookml](../agentic-lookml/SKILL.md) (`tests/bronze/:table.test.lkml` for single-table measures and dimensions/terms, `tests/silver/:explore.test.lkml` strictly for joins/`*_fields`/NDTs, one new `test:` block per PR slice on a bounded historical slice) and write `./data/$RUN_ID/summary.md` alongside them (covering base views, canonical deconstruction & modeling decisions, matched pattern categories, LookML files authored, any `Validation failed:` / `Updating LookML:` self-heals plus final `/sql/:id` and `/x/:id` parity, and targeted LookML tests). Sync `$MODEL_NAME.model.lkml` includes if needed, run `sql-lookml-compare --offline --compact` for `compare_post_refactor.json`, update LookML snapshots, push, run [scripts/validate_and_commit_branch.py](scripts/validate_and_commit_branch.py) (re-running `pre_gate.py` and updating `summary.md` only if LookML view/explore logic had to change while self-healing a test), and open the GitHub PR via [scripts/create_github_pr.sh](scripts/create_github_pr.sh) in one chained call:
   ```bash
