@@ -4322,4 +4322,32 @@ def test_compact_sql_lookml_compare_prunes_via_measures_on_row_queries():
     assert ("measure", "avg_age") in cte_fields
 
 
+def test_lookml_to_api_validate_handles_liquid_date_and_elsif_sql():
+    lkml = """
+    connection: "bq"
+    view: users {
+      sql_table_name: `proj.ds.users` ;;
+      dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }
+      dimension_group: created { type: time timeframes: [raw, date, year] sql: ${TABLE}.created_at ;; }
+      dimension: in_window {
+        type: yesno
+        sql: EXTRACT(YEAR FROM {% if users.created_date._is_filtered %}TIMESTAMP_SUB(CAST({% date_end users.created_date %} AS TIMESTAMP), INTERVAL 1 MICROSECOND){% elsif users.created_year._is_filtered %}CAST({% date_start users.created_year %} AS TIMESTAMP){% else %}CURRENT_TIMESTAMP(){% endif %}) >= {% parameter min_yr %} ;;
+      }
+      parameter: min_yr { type: number default_value: "2024" }
+      measure: bad_agg {
+        type: number
+        sql: {% if users.created_year._is_filtered %}1.0{% else %}MEDIAN(${id}){% endif %} ;;
+      }
+    }
+    explore: users {}
+    """
+    res = runner.invoke(
+        app,
+        ["parse", "lookml-to-api", "--lookml", lkml, "-m", "inline", "-e", "users", "--validate"],
+    )
+    assert res.exit_code == 1
+    assert "MEDIAN" in res.output
+
+
+
 

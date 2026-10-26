@@ -1299,7 +1299,37 @@ _RAW_NUMBER_AGGS = {
 
 
 def _parse_lookml_sql_expr(sql_str: str) -> exp.Expr | None:
-    s = re.sub(r"\{%-?\s*(?:elif\b.*?|else)\s*-?%\}", ", ", sql_str, flags=re.DOTALL)
+    s = re.sub(
+        r"\{%-?\s*date_(?:start|end)\b.*?-?%\}",
+        "CURRENT_TIMESTAMP()",
+        sql_str,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    s = re.sub(r"\{%-?\s*parameter\b.*?-?%\}", "1", s, flags=re.IGNORECASE | re.DOTALL)
+    s = re.sub(
+        r"\{%-?\s*condition\b.*?-?%\}(.*?)\{%-?\s*endcondition\s*-?%\}",
+        r"(\1 IS NOT NULL)",
+        s,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    while re.search(r"\{%-?\s*if\b", s, flags=re.IGNORECASE):
+        nxt = re.sub(
+            r"\{%-?\s*if\b.*?-?%\}((?:(?!\{%-?\s*if\b).)*?)\{%-?\s*endif\s*-?%\}",
+            lambda m: (
+                f"COALESCE({re.sub(r'\{%-?\s*(?:els?if\b.*?|else)\s*-?%\}', ', ', body, flags=re.IGNORECASE | re.DOTALL)})"
+                if re.search(
+                    r"\{%-?\s*(?:els?if\b|else\b)",
+                    body := m.group(1),
+                    flags=re.IGNORECASE,
+                )
+                else body
+            ),
+            s,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if nxt == s:
+            break
+        s = nxt
     s = re.sub(r"\{%.*?%\}|\{\{.*?\}\}", " ", s, flags=re.DOTALL)
     s = re.sub(r"\$\{\s*TABLE\s*\}\.", "__tbl.", s)
     s = re.sub(r"\$\{\s*([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s*\}", r"\1.\2", s)
@@ -1307,7 +1337,7 @@ def _parse_lookml_sql_expr(sql_str: str) -> exp.Expr | None:
     for d in ("bigquery", None):
         try:
             return sqlglot.parse_one(f"SELECT {s}", read=d)
-        except SqlglotError:
+        except (SqlglotError, AttributeError):
             continue
     return None
 
