@@ -1549,7 +1549,7 @@ def _find_inaccessible_view_ref_errors(
             "fields": [ref],
             "message": (
                 f"Inaccessible view '{v_ref}' referenced via '${{{ref}}}' in '{owner}' "
-                f"on explore '{explore_name}'; join '{v_ref}' or exclude '{owner}' via fields:."
+                f"on explore '{explore_name}'; join '{v_ref}' or exclude '{owner}' via fields."
             ),
         }
         for owner, ref in pairs
