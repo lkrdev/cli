@@ -3426,7 +3426,7 @@ def parse_sql_to_lookml(
 
 
 _ANY_AGG_RE = re.compile(
-    r"(?i)\b(?:COUNT|SUM|AVG|MIN|MAX|COUNTIF|STDDEV\w*|VAR_\w+|VARIANCE|CORR|COVAR_\w+|PERCENTILE_\w+|APPROX_\w+|MEDIAN)\s*\("
+    r"(?i)\b(?:COUNT|SUM|AVG|MIN|MAX|COUNTIF|STDDEV\w*|VAR_\w+|VARIANCE|CORR|COVAR_\w+|PERCENTILE_\w+|APPROX_\w+|MEDIAN|LISTAGG|ANY_VALUE|LOGICAL_(?:AND|OR)|\w+_AGG)\s*\("
 )
 
 

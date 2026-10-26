@@ -454,13 +454,12 @@ def main():
                 fetch_extra=_fetch_tie_pool if isinstance(active_q, dict) else None,
             )
             if not matched and isinstance(active_q, dict) and s_rows and len(s_rows) == len(l_rows):
-                _, _, _, _, has_ob, _, lim_n = _sql_meta(stmt_sql)
-                if not has_ob and lim_n is not None:
-                    no_lim = re.sub(
-                        r"(?i)\s*\bLIMIT\s+\d+(?:\s+OFFSET\s+\d+)?\s*$",
-                        "",
-                        re.sub(r"(?:\s|--[^\n]*|/\*[\s\S]*?\*/|;)+$", "", stmt_sql),
-                    )
+                _, _, _, _, has_ob, _, _ = _sql_meta(stmt_sql)
+                clean_sql = re.sub(r"(?:\s|--[^\n]*|/\*[\s\S]*?\*/|;)+$", "", stmt_sql)
+                lim_match = re.search(r"(?i)\bLIMIT\s+(\d+)(?:\s+OFFSET\s+\d+)?\s*$", clean_sql)
+                if not has_ob and lim_match:
+                    lim_n = int(lim_match.group(1))
+                    no_lim = clean_sql[: lim_match.start()].rstrip()
                     ord_cols = ", ".join(str(i) for i in range(1, len(s_rows[0]) + 1))
                     det_sql = f"SELECT * FROM (\n{no_lim}\n) AS _lkr_det ORDER BY {ord_cols} LIMIT {lim_n}"
                     det_body = {"sql": det_sql, **({"connection_name": c_name} if c_name else {})}
