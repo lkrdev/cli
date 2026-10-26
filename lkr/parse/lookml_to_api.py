@@ -1516,6 +1516,50 @@ def _find_case_filter_errors(
     return errors
 
 
+def _find_inaccessible_view_ref_errors(
+    explore_name: str,
+    accessible_views: set[str],
+    fields: tuple[ApiLookmlModelExploreField, ...],
+    api_joins: list[ApiLookmlModelExploreJoins],
+) -> list[dict[str, Any]]:
+    pairs = dict.fromkeys(
+        (owner, ref)
+        for owner, ref in (
+            *(
+                (f.dimension_group or f.name, r)
+                for f in fields
+                for r in (
+                    *_extract_lookml_refs(f.sql),
+                    *(flt.field for flt in (f.filters or [])),
+                )
+            ),
+            *(
+                (f"{explore_name}.join.{j.name}", r)
+                for j in api_joins
+                for r in (j.dependent_fields or [])
+            ),
+        )
+        if "." in ref
+    )
+    return [
+        {
+            "type": "inaccessible_view_ref",
+            "view": v_ref,
+            "field": owner,
+            "fields": [ref],
+            "message": (
+                f"Inaccessible view '{v_ref}' referenced via '${{{ref}}}' in '{owner}' "
+                f"on explore '{explore_name}'; join '{v_ref}' or exclude '{owner}' via fields."
+            ),
+        }
+        for owner, ref in pairs
+        for v_ref, f_ref in (ref.split(".", 1),)
+        if f_ref != "SQL_TABLE_NAME"
+        and not v_ref.startswith("_")
+        and v_ref not in accessible_views
+    ]
+
+
 def _build_explore_from_assembled(
     model_name: str,
     model_obj: LookmlModel,
@@ -1813,6 +1857,12 @@ def _build_explore_from_assembled(
             all_meas,
             turtle_looks,
             [*always_filters, *cond_filters],
+        ),
+        *_find_inaccessible_view_ref_errors(
+            explore_name,
+            {base_alias, *(exp_obj.join or {})},
+            (*all_dims, *all_meas, *all_filts, *all_params),
+            api_joins,
         ),
     ]
     active_names = {f.name for f in (*all_dims, *all_meas, *all_filts, *all_params)}

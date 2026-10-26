@@ -72,13 +72,13 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
         views: ([.queries[].views[]?] | group_by(.view_name) | map({
           view_name: .[0].view_name, file: .[0].file,
           unmodeled_db_columns: ([.[].unmodeled_db_columns[]?] | unique),
-          fields: ([.[].fields[]? | "\(.field_name):\(.lookml_type // .field_type)\(if .timeframes then "[\(.timeframes | join(","))]" else "" end)\(if .primary_key then ":pk" else "" end)"] | unique)
+          fields: ([.[].fields[]? | "\(.field_name):\(.lookml_type // .field_type)\(if .timeframes then "[\(.timeframes | join(","))]" else "" end)\(if .primary_key then ":pk" else "" end)\(if .filters then "{\(.filters | tojson)}" else "" end)"] | unique)
         })),
         explores: ([.queries[].explores[]?] | group_by([.explore_name, .file]) | map({explore_name: .[0].explore_name, file: .[0].file, extends: .[0].extends, joins: ([.[].join_name // empty] | unique)})),
-        join_analysis: ([.queries[].join_analysis[]? | {explore_name, table: .sql_join.table, status, relationship, inferred_relationship, warnings: [.safety_warnings[]?.message]}] | unique),
+        join_analysis: ([.queries[].join_analysis[]? | {explore_name, sql_join: (.sql_join.table? // .sql_join), status, relationship, inferred_relationship, warnings: ([.safety_warnings[]?.rule] | unique)}] | unique),
         tests: ([.queries[].tests[]? | {file, explore_name}] | unique)
       } end
-    ' "./data/$RUN_ID/compare_initial.json" | head -c 9000 || true
+    ' "./data/$RUN_ID/compare_initial.json" | head -c 14000 || true
   fi
   ```
 - If the project has **no** existing `.model.lkml` (`MODEL_NAME` empty above) or you are creating a new model, set `MODEL_NAME="${MODEL_NAME:-${PROJECT_ID//-/_}}"`, ask the user for `CONNECTION_NAME` if not provided, register the model via [scripts/configure_model.py](scripts/configure_model.py), and run `setup_repo.sh --skip-preflight` + `snapshot -u` + `sql-lookml-compare --compact` (creating `./data/$RUN_ID/lookml/$MODEL_NAME.model.lkml` *after* any `generate_bronze_view.py` + `lookml pull` so `lookml pull` never deletes a local-only `.model.lkml` file):
