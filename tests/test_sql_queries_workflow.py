@@ -1461,3 +1461,66 @@ def test_case_filter_unescaped_comma_and_zero_hint_and_test_target_guard():
     assert (res_ref.lookml_model_explores["m::p_ok"].errors or []) == []
 
 
+def test_pre_gate_half_away_round_cte_pct_table_calc_backing_and_test_gate():
+    sql_cte = (
+        "WITH ledger AS (SELECT id, ROUND(SAFE_DIVIDE(sold, total) * 100.0, 2) AS sell_through_pct FROM t) "
+        "SELECT id, sell_through_pct FROM ledger"
+    )
+    assert compare_row_sets(
+        [{"id": 1, "sell_through_pct": 46.88}],
+        [{"p.id": 1, "ii.sell_through_rate": 0.46875}],
+        sql=sql_cte,
+        looker_fields=["p.id", "ii.sell_through_rate"],
+    ) == (True, [])
+    assert compare_row_sets(
+        [{"country": "Austria", "avg_age": 31.3}],
+        [{"u.country": "Austria", "u.avg_resident_age": 31.25}],
+        sql="SELECT country, ROUND(AVG(age), 1) AS avg_age FROM u GROUP BY 1",
+        looker_fields=["u.country", "u.avg_resident_age"],
+    ) == (True, [])
+
+    dfs_shadow = [{"table_calculation": "unsold_units", "expression": "${pif.unsold_units} + ${p.count}"}]
+    assert compare_row_sets(
+        [{"tier": "S2", "skus": 63, "unsold_units": 63}],
+        [{"p.tier": "S2", "p.count": 63, "pif.unsold_units": 0, "unsold_units": 63}],
+        sql="SELECT tier, skus, unsold_units FROM s",
+        looker_fields=["p.tier", "p.count", "pif.unsold_units", "unsold_units"],
+        dynamic_fields=dfs_shadow,
+    ) == (True, [])
+    ok_bad, diffs_bad = compare_row_sets([{"a": 1}], [{"v.a": 1, "v.b": 2}])
+    assert ok_bad is False and "['v.a', 'v.b']" in diffs_bad[0]
+
+    tq_ran = []
+    res = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {
+            "raw_sql": "SELECT id, sell_through_pct FROM x;",
+            "connection_name": "bq",
+            "data_json": '{"project_id": "p"}',
+            "inline_queries_json": json.dumps({
+                "0": {
+                    "model": "m",
+                    "view": "p",
+                    "fields": ["p.id", "ii.sell_through_rate"],
+                    "dynamic_fields": json.dumps([
+                        {"table_calculation": "sell_through_pct", "expression": "${ii.sell_through_rate} * 100"}
+                    ]),
+                }
+            }),
+            "test_queries_json": json.dumps({"slice": {"model": "m", "view": "t", "fields": ["t.c"]}}),
+        },
+        {
+            "create_sql_query": lambda **_kw: {"slug": "s0"},
+            "create_query": lambda **_kw: {"id": "1", "slug": "q0"},
+            "run_sql_query": lambda **_kw: '[{"id": 1, "sell_through_pct": 99.0}]',
+            "run_inline_query": lambda body, **_kw: (
+                tq_ran.append(1) or '[{"t.c": 1}]'
+                if body.get("view") == "t"
+                else '[{"p.id": 1, "ii.sell_through_rate": 0.4688, "sell_through_pct": 46.88}]'
+            ),
+        },
+    )
+    assert res["passed"] is False and tq_ran == [] and "test_query_results" not in res
+
+
+
