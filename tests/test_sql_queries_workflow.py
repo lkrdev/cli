@@ -1,6 +1,8 @@
 import importlib.util
 import json
 import os
+import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -951,7 +953,7 @@ def test_pre_gate_order_by_round_ties_and_pr_data_json_compaction():
     pr_sh = (SCRIPTS_DIR / "create_github_pr.sh").read_text()
     assert "jq -c 'del(.test_query_results, .queries[]?.sql_rows)'" in pr_sh
     assert 'elif [[ "$lang" == "json" ]]; then jq -c .' in pr_sh
-    assert "limit=40000" in pr_sh
+    assert "MAX_SUMMARY=$(( 62000" in pr_sh
 
     seen_fids: list[str | None] = []
     res_fid = _run_monty(
@@ -1524,4 +1526,34 @@ def test_pre_gate_half_away_round_cte_pct_table_calc_backing_and_test_gate():
     assert res["passed"] is False and tq_ran == [] and "test_query_results" not in res
 
 
-
+def test_create_github_pr_body_cap_and_intact_data_json(tmp_path: Path):
+    sdir = tmp_path / "run"
+    sdir.mkdir()
+    (sdir / "summary.md").write_text("S" * 30000)
+    (sdir / "input.sql").write_text("SELECT 1;\n" * 2000)
+    (sdir / "snapshot_check.json").write_text(json.dumps({"requires_review": False}))
+    queries = [{"query_index": i, "sql": "SELECT " + ("x" * 2800), "parity_status": "matched"} for i in range(14)]
+    (sdir / "data.json").write_text(json.dumps({
+        "run_id": "r1",
+        "git_remote_url": "o/r",
+        "branch_name": "b1",
+        "queries": queries,
+    }))
+    gh = tmp_path / "gh"
+    gh.write_text(
+        '#!/usr/bin/env python3\nimport json, pathlib, sys\n'
+        'a = sys.argv[1:]\n'
+        'b = a[a.index("--body") + 1]\n'
+        'pathlib.Path(sys.argv[0] + "." + a[1]).write_text(b)\n'
+        'if a[1] == "create": print("https://github.com/o/r/pull/99")\n'
+    )
+    gh.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "GH_TOKEN": "tok"}
+    out = subprocess.check_output(["bash", str(SCRIPTS_DIR / "create_github_pr.sh"), str(sdir)], env=env, text=True)
+    assert out.strip() == "https://github.com/o/r/pull/99"
+    pr_body = Path(f"{gh}.create").read_text()
+    assert len(pr_body) < 65536 and "Summary truncated" in pr_body and "input.sql" not in pr_body
+    m = re.search(r"<summary><code>data\.json</code></summary>\s*```json\n(.*?)\n```", pr_body, re.DOTALL)
+    assert m is not None and len(json.loads(m.group(1))["queries"]) == 14
+    comment_body = Path(f"{gh}.comment").read_text()
+    assert "input.sql" in comment_body and "snapshot_check.json" in comment_body
