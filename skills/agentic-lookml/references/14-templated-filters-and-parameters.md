@@ -50,7 +50,7 @@ Define `filter:` or `parameter:` fields in a Gold view or Gold refinement (`gold
 
 ### Enforce `always_filter:` on the Gold Explore
 
-Never rely on silent `1=1` Liquid fallbacks or `conditionally_filter:`. Every `filter:` or `parameter:` used in Gold SQL must be listed in `always_filter:` on `gold/explores/:name.explore.lkml` (`tags: ["gold"]`) with a safe default value.
+Never rely on silent `1=1` Liquid fallbacks or `conditionally_filter:`. Every `filter:` or `parameter:` used in Gold SQL must be listed in `always_filter:` on `gold/explores/:name.explore.lkml` (`tags: ["gold"]`) with a safe default [looker-filters](../../looker-filters/SKILL.md) value.
 
 ## LookML template
 
