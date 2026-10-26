@@ -1021,6 +1021,80 @@ def test_pre_gate_limit_boundary_tie_and_digit_string_preservation():
     assert ok_zip is False and "SQL=02110, Looker=2110" in diffs_zip[0]
 
 
+def test_pre_gate_unordered_limit_fallback_and_grain_key_stripping():
+    sql = "SELECT first_name, age FROM `proj.ds.users` WHERE age < 25 LIMIT 2 -- sample;"
+    raw_sql_rows = [{"first_name": "Zoe", "age": 22}, {"first_name": "Mia", "age": 19}]
+    det_sql_rows = [{"first_name": "Aaron", "age": 18}, {"first_name": "Aaron", "age": 18}]
+    raw_lkr_rows = [
+        {"users.first_name": "Liam", "users.age": 20, "users.id": 50},
+        {"users.first_name": "Noah", "users.age": 21, "users.id": 51},
+    ]
+    det_lkr_rows = [
+        {"users.first_name": "Aaron", "users.age": 18, "users.id": 1},
+        {"users.first_name": "Aaron", "users.age": 18, "users.id": 9},
+    ]
+    created_sqls: list[dict[str, Any]] = []
+    inline_sorts: list[Any] = []
+
+    def fake_create_sql(body):
+        created_sqls.append(body)
+        return {"slug": "det" if "_lkr_det" in body["sql"] else "raw"}
+
+    def fake_run_sql(slug, **_kw):
+        return json.dumps(det_sql_rows if slug == "det" else raw_sql_rows)
+
+    def fake_inline(body, **_kw):
+        inline_sorts.append(body.get("sorts"))
+        return json.dumps(det_lkr_rows if body.get("sorts") else raw_lkr_rows)
+
+    q_fields = ["users.first_name", "users.age", "users.id"]
+    res = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {
+            "data_json": json.dumps({
+                "run_id": "r_det",
+                "connection_name": "bq_conn",
+                "queries": [
+                    {
+                        "query_index": 0,
+                        "sql_query_id": "raw",
+                        "sql": sql,
+                        "inline_query": {"model": "m", "view": "users", "fields": q_fields, "limit": "2"},
+                    }
+                ],
+            }),
+        },
+        {
+            "create_sql_query": fake_create_sql,
+            "run_sql_query": fake_run_sql,
+            "run_inline_query": fake_inline,
+        },
+    )
+    assert res["passed"] is True
+    assert created_sqls == [
+        {
+            "connection_name": "bq_conn",
+            "sql": "SELECT * FROM (\nSELECT first_name, age FROM `proj.ds.users` WHERE age < 25\n) AS _lkr_det ORDER BY 1, 2 LIMIT 2",
+        }
+    ]
+    assert inline_sorts == [None, ["users.first_name asc", "users.age asc"]]
+
+    # Also strips common_helpers.no_group directly while still rejecting extra non-key columns
+    ok_ng, _ = compare_row_sets(
+        [{"first_name": "Ada"}],
+        [{"users.first_name": "Ada", "common_helpers.no_group": 1}],
+        looker_fields=["users.first_name", "common_helpers.no_group"],
+    )
+    assert ok_ng is True
+    ok_extra, diffs_extra = compare_row_sets(
+        [{"first_name": "Ada"}],
+        [{"users.first_name": "Ada", "users.count": 5}],
+        looker_fields=["users.first_name", "users.count"],
+    )
+    assert ok_extra is False and "column count mismatch" in diffs_extra[0]
+
+
+
 
 
 

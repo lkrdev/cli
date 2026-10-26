@@ -3425,13 +3425,22 @@ def parse_sql_to_lookml(
     )
 
 
-def _valid_field_keys(views: list[LookmlViewMatch]) -> set[tuple[str, str, str]]:
+_ANY_AGG_RE = re.compile(
+    r"(?i)\b(?:COUNT|SUM|AVG|MIN|MAX|COUNTIF|STDDEV\w*|VAR_\w+|VARIANCE|CORR|COVAR_\w+|PERCENTILE_\w+|APPROX_\w+|MEDIAN)\s*\("
+)
+
+
+def _valid_field_keys(
+    views: list[LookmlViewMatch], *, allow_via_measures: bool = True
+) -> set[tuple[str, str, str]]:
     q_views = {vm.view_name.lower() for vm in views}
     valid_fms = [
         (vm.view_name, fm)
         for vm in views
         for fm in vm.fields
-        if (fm.ext_views <= q_views) and not (fm.via and fm.unmatched_filter)
+        if (fm.ext_views <= q_views)
+        and not (fm.via and fm.unmatched_filter)
+        and (allow_via_measures or not (fm.field_type == "measure" and fm.via))
     ]
     while True:
         avail_refs = {
@@ -3497,7 +3506,16 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                 if isinstance(pj, dict):
                     pj.pop("left_table", None)
                     pj.pop("right_table", None)
-        keep_fkeys = _valid_field_keys(result.queries[qi].views)
+        pq_obj = result.queries[qi].parsed_query
+        keep_fkeys = _valid_field_keys(
+            result.queries[qi].views,
+            allow_via_measures=bool(
+                pq_obj.group_by
+                or pq_obj.having
+                or any(c.is_agg for c in pq_obj.columns)
+                or _ANY_AGG_RE.search(pq_obj.raw_sql)
+            ),
+        )
         kept_views: list[dict[str, Any]] = []
         for vm in q.get("views") or []:
             if vm.get("sql_table_name"):
