@@ -42,7 +42,7 @@ Anchor `silver/explores/:base.explore.lkml` on the finest-grain transaction tabl
 
 ### Ensure primary keys on the "one" side of joins (cardinality audit SQL)
 
-While primary keys are not required for raw Bronze views operating without joins, a verified primary key is essential on the "one" side of any join as soon as a Bronze view is extended or joined into Silver or Gold. If the joined view lacks a verified `primary_key: yes`, run the cardinality audit via `lkr code-mode` (including a partition filter if the table is partitioned):
+While primary keys are not required for raw Bronze views operating without joins, a verified primary key is essential on the "one" side of any join as soon as a Bronze view is extended or joined into Silver or Gold. If the joined view lacks a verified `primary_key: yes`, run the cardinality audit via `lkr code-mode` (`sq = create_sql_query(body={"connection_name": conn, "sql": "..."}); run_sql_query(slug=sq["slug"], result_format="json")` — top-level Monty functions returning `dict`, never `sdk.*`; include a partition filter if partitioned):
 
 ```sql
 SELECT

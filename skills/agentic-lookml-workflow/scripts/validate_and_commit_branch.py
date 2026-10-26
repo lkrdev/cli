@@ -76,6 +76,13 @@ def main():
     if errors:
         return {"passed": False, "committed": False, "errors": errors, "failed_tests": []}
 
+    if len(f_ids) > 1 and t_names and len(f_ids) != len(t_names):
+        return {
+            "passed": False,
+            "committed": False,
+            "errors": [{"message": f"file_ids ({len(f_ids)}) and test_names ({len(t_names)}) must align 1:1"}],
+            "failed_tests": [],
+        }
     targets = (
         list(zip(f_ids, t_names))
         if f_ids and len(f_ids) == len(t_names)

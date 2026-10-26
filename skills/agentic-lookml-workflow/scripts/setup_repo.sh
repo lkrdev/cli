@@ -34,8 +34,9 @@ sync_model_includes() {
     local file_pattern="${glob_check##*/}"
     local glob_pat="${inc#*:}"
     local inc_line="include: \"$glob_pat\""
+    grep -qxF "$inc_line" "$model_file" 2>/dev/null && continue
     if [[ -d "$search_dir" ]] && find "$search_dir" -name "$file_pattern" 2>/dev/null | grep -q .; then
-      grep -qxF "$inc_line" "$model_file" 2>/dev/null || echo "$inc_line" >> "$model_file"
+      echo "$inc_line" >> "$model_file"
     fi
   done
   awk '

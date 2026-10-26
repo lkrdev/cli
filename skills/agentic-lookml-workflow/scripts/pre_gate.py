@@ -353,6 +353,11 @@ def compare_row_sets(
                 row_bad = True
         if row_bad:
             bad_idxs.append(idx)
+    if mismatches and sr_leaves:
+        for label, sk, lk, digits, mult, tm in cols:
+            pairs = [_cmp_pair(sr[sk], lr[lk], digits, mult, tm) for sr, lr in zip(sr_leaves, lr_leaves)]
+            if all(lv in (0, 0.0, None) for _, lv in pairs) and any(sv not in (0, 0.0, None) for sv, _ in pairs):
+                mismatches.append(f"Hint ({label}): all Looker values are 0/NULL — check LookML filters (escape ',' as '^,' or use '-NULL'/'NOT NULL').")
     if mismatches and fetch_extra is not None and tied_ob and s_ob and limit_n == len(sr_leaves) < 500:
         last_key = s_ob[-1]
         last_start = len(s_ob) - 1

@@ -1459,6 +1459,64 @@ def _find_invalid_value_format_errors(
     return errors
 
 
+def _find_case_filter_errors(
+    explore_name: str,
+    all_dims: list[ApiLookmlModelExploreField],
+    all_meas: list[ApiLookmlModelExploreField],
+    turtle_looks: list[ApiLookmlModelExploreTurtleLook],
+    explore_filters: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    case_labels = {
+        d.name: [c.value for c in d.sql_case]
+        for d in all_dims
+        if d.type == "string" and d.sql_case
+    }
+    if not case_labels:
+        return []
+    checks = [
+        *((m.name, flt.field, flt.condition) for m in all_meas for flt in (m.filters or [])),
+        *(
+            (f"{explore_name}.query.{tl.name.removeprefix('turtle::')}", fk, fv)
+            for tl in turtle_looks
+            for fk, fv in (tl.filters or {}).items()
+        ),
+        *((explore_name, ef["name"], ef["value"]) for ef in explore_filters),
+    ]
+    errors: list[dict[str, Any]] = []
+    for owner, target, cond in checks:
+        labels = case_labels.get(target)
+        if not labels or not cond or "{{" in cond or "{%" in cond:
+            continue
+        bad = [
+            part
+            for part in re.split(r"(?<!\^),", cond)
+            if (cands := {x for c in (part, part.strip()) if (x := c.removeprefix("-"))})
+            and not ({c.upper() for c in cands} & {"NULL", "EMPTY", "BLANK"})
+            and not any(
+                re.fullmatch(
+                    "".join(".*" if m == "%" else "." if m == "_" else re.escape(m[-1]) for m in re.findall(r"\^.|.", cand)),
+                    lbl,
+                    re.DOTALL | re.IGNORECASE,
+                )
+                for cand in cands
+                for lbl in labels
+            )
+        ]
+        if bad:
+            errors.append(
+                {
+                    "type": "invalid_case_filter",
+                    "field": owner,
+                    "fields": [target, cond],
+                    "message": (
+                        f"Filter on '{owner}' targeting case dimension '{target}' ({cond!r}) has token(s) "
+                        f"{bad} matching none of {labels}; escape literal commas as '^,' or filter on a yesno dimension."
+                    ),
+                }
+            )
+    return errors
+
+
 def _build_explore_from_assembled(
     model_name: str,
     model_obj: LookmlModel,
@@ -1735,12 +1793,28 @@ def _build_explore_from_assembled(
                 )
         index_fields = list(dict.fromkeys(index_fields))
 
+    always_filters = [
+        {"name": f.field, "value": f.condition}
+        for f in (
+            _extract_measure_filters(
+                (exp_obj.always_filter or {}).get("filters"), base_alias
+            )
+            or []
+        )
+    ]
     dup_errors = [
         *join_errors,
         *_find_duplicate_explore_fields(all_dims, all_meas, views_by_alias),
         *_find_raw_sql_aggregate_errors(all_meas),
         *_find_percent_scaling_errors(all_dims, all_meas, views_by_alias),
         *_find_invalid_value_format_errors(all_dims, all_meas, model_obj),
+        *_find_case_filter_errors(
+            explore_name,
+            all_dims,
+            all_meas,
+            turtle_looks,
+            [*always_filters, *cond_filters],
+        ),
     ]
     active_names = {f.name for f in (*all_dims, *all_meas, *all_filts, *all_params)}
     by_q_alias: dict[str, set[str]] = {}
@@ -1777,15 +1851,7 @@ def _build_explore_from_assembled(
         hidden=bool(exp_obj.hidden),
         sql_table_name=sql_table_name,
         aliases=all_aliases,
-        always_filter=[
-            {"name": f.field, "value": f.condition}
-            for f in (
-                _extract_measure_filters(
-                    (exp_obj.always_filter or {}).get("filters"), base_alias
-                )
-                or []
-            )
-        ],
+        always_filter=always_filters,
         conditionally_filter=cond_filters,
         index_fields=index_fields,
         sets=sets_list,
