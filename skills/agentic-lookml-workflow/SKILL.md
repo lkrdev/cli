@@ -75,7 +75,7 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
           fields: ([.[].fields[]? | "\(.field_name)\(if .primary_key then ":pk" elif .field_type == "measure" then ":m" else "" end)"] | unique | join(","))
         })),
         explores: ([.queries[].explores[]? | select((.file // "") | startswith("gold/") | not)] | group_by([.explore_name, .file]) | map({explore_name: .[0].explore_name, file: .[0].file, extends: .[0].extends, joins: ([.[].join_name // empty] | unique)})),
-        join_analysis: ([.queries[].join_analysis[]? | select(.explore_name as $e | ($gold | index($e)) == null) | "\(.explore_name):\((.sql_join.table? // .sql_join) | gsub("[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_]+\\."; "")):\(.status):\(.relationship // "")"] | unique),
+        join_analysis: ([.queries[].join_analysis[]? | select(.explore_name as $e | ($gold | index($e)) == null) | "\(.explore_name):\((.sql_join.table? // .sql_join // "") | gsub("[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_]+\\."; "")):\(.status):\(.relationship // "")"] | unique),
         tests: ([.queries[].tests[]? | {file, explore_name}] | unique)
       } end
     ' "./data/$RUN_ID/compare_initial.json" | head -c 9000 || true
