@@ -1331,6 +1331,43 @@ def test_pre_gate_native_case_ordinal_prefix_stripping_and_order_enforcement():
     assert ok_leg is True
 
 
+def test_pre_gate_ordered_limit_massive_tie_secondary_order_fallback():
+    sql = "SELECT session_id, user_id, COUNT(id) AS total_events FROM events GROUP BY 1, 2 ORDER BY total_events DESC LIMIT 2"
+    sql_queries: dict[str, str] = {}
+
+    def _create_sql(body):
+        slug = f"slug_{len(sql_queries)}"
+        sql_queries[slug] = body["sql"]
+        return {"slug": slug}
+
+    def _run_inline(body, **_kw):
+        sorts = body.get("sorts") or []
+        if sorts == ["e.count desc", "e.session_id asc", "e.user_id asc"]:
+            return json.dumps([{"e.session_id": f"s_{i}", "e.user_id": i, "e.count": 13} for i in (1, 2)])
+        if sorts and sorts[0] == "e.count asc":
+            return json.dumps([{"e.session_id": "s_min", "e.user_id": 5, "e.count": 10}] * 2)
+        return json.dumps([{"e.session_id": f"s_rand_{i}", "e.user_id": i, "e.count": 13} for i in (11, 22)])
+
+    def _check(sorts: list[str]) -> bool:
+        iq = {"0": {"model": "m", "view": "e", "fields": ["e.session_id", "e.user_id", "e.count"], "sorts": sorts, "limit": "2"}}
+        return _run_monty(
+            SCRIPTS_DIR / "pre_gate.py",
+            {"raw_sql": sql, "connection_name": "bq", "data_json": "{}", "inline_queries_json": json.dumps(iq)},
+            {
+                "create_sql_query": _create_sql,
+                "run_sql_query": lambda slug, **_kw: json.dumps(
+                    [{"session_id": f"s_{i}" if ", 1, 2, 3 LIMIT 2" in sql_queries[slug] else f"s_r_{i}", "user_id": i, "total_events": 13} for i in (1, 2)]
+                ),
+                "create_query": lambda **_kw: {"id": "1", "slug": "q_tie"},
+                "run_inline_query": _run_inline,
+            },
+        )["passed"]
+
+    assert _check(["e.count desc"]) is True
+    assert _check(["e.count asc"]) is False
+    assert _check([]) is False
+
+
 
 
 
