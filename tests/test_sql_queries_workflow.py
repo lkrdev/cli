@@ -985,7 +985,7 @@ def test_pre_gate_limit_boundary_tie_and_digit_string_preservation():
     def fake_inline(**kw):
         lim = (kw.get("body") or {}).get("limit")
         limits_called.append(lim)
-        return json.dumps(expanded_looker if lim == "53" else top3_looker)
+        return json.dumps(expanded_looker if lim == "500" else top3_looker)
 
     q_fields = ["u.depth", "u.uri_segment", "e.count", "e.approx_sessions"]
     res = _run_monty(
@@ -1007,7 +1007,7 @@ def test_pre_gate_limit_boundary_tie_and_digit_string_preservation():
             "run_inline_query": fake_inline,
         },
     )
-    assert res["passed"] is True and limits_called == ["3", "53"]
+    assert res["passed"] is True and limits_called == ["3", "500"]
 
     # Digit strings keep string formatting on mismatch; wrong value in tie pool still fails
     bad_pool = [*top3_looker, {"u.depth": 1, "u.uri_segment": "20095", "e.count": 59, "e.approx_sessions": 999}]
@@ -1131,10 +1131,15 @@ def test_pre_gate_timestamp_normalization_and_same_second_sort_ties():
         },
         {
             "run_sql_query": lambda **_kw: json.dumps(s_rows),
-            "run_inline_query": lambda body, **_kw: json.dumps(pool_rows if body.get("limit") == "52" else l_rows),
+            "run_inline_query": lambda body, **_kw: json.dumps(pool_rows if body.get("limit") == "500" else l_rows),
         },
     )
     assert res["passed"] is True
+    # Discrete ORDER BY tie-pool up to 500 rows (even when limit_n > 450)
+    assert compare_row_sets(
+        [{"id": i, "p": 9.0} for i in range(499)], [{"o.id": i + 1, "o.p": 9.0} for i in range(499)],
+        sql="SELECT id, p FROM o ORDER BY p DESC LIMIT 499", fetch_extra=lambda n: [{"o.id": i, "o.p": 9.0} for i in range(n)],
+    )[0]
     # When Looker emits subseconds (<group>_microsecond), subsecond differences still fail
     ok_sub, _ = compare_row_sets(
         [{"created_at": "2026-10-25T00:20:01.000000Z"}],
