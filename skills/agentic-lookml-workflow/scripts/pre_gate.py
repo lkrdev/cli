@@ -89,11 +89,18 @@ def _to_float(v):
     return None
 
 
+def _sql_round(f: float, digits: int = 4) -> float:
+    if f - f != 0:
+        return f
+    p = 10.0**digits
+    return round((int(abs(f) * p + 0.5 + 1e-12) / p) * (-1.0 if f < 0 else 1.0), digits)
+
+
 def normalize_val(v, digits=4):
     if v is None or isinstance(v, bool):
         return v
     f = _to_float(v)
-    return round(f, digits) if f is not None else (v.strip() if isinstance(v, str) else str(v))
+    return _sql_round(f, digits) if f is not None else (v.strip() if isinstance(v, str) else str(v))
 
 
 # ponytail: paren scan for Monty sandbox (no sqlglot); pass AST metadata from lkr parse sql if expressions wrap ROUND
@@ -101,6 +108,9 @@ def _sql_meta(sql: str):
     scales: dict[str, int] = {}
     pct_cols: set[str] = set()
     pct_idxs: set[int] = set()
+    pct_re = r"(?:\*\s*100(?:\.0*)?(?!\d|\.)|(?<!\d|\.)100(?:\.0*)?\s*\*)"
+    alias_re = r'(?:(?i:\bAS)\s+|(?<![+\-*/=<>,(])\s+|(?<=\))\s*)(?:`([^`]+)`|"([^"]+)"|([A-Za-z_]\w*))\s*$'
+    kw_skip = {"END", "NULL", "TRUE", "FALSE", "AND", "OR", "ELSE", "THEN", "FROM", "ASC", "DESC"}
     clean = re.sub(r"--[^\n]*|/\*[\s\S]*?\*/", " ", re.sub(r"'[^'\\]*(?:\\.[^'\\]*)*'", "''", sql or ""))
     for m in re.finditer(r"(?i)\bROUND\s*\(", clean):
         depth, comma, i = 1, -1, m.end()
@@ -120,12 +130,14 @@ def _sql_meta(sql: str):
             clean[i:],
         )
         alias = am and (am.group(1) or am.group(2) or am.group(3))
-        if alias and re.match(r"^[+-]?\d+$", arg2) and alias.upper() not in {"FROM", "ASC", "DESC"}:
+        if alias and re.match(r"^[+-]?\d+$", arg2) and alias.upper() not in kw_skip:
             scales[alias.lower()] = int(arg2)
 
     depth = 0
+    depths: list[int] = []
     top_chars = []
     for ch in clean:
+        depths.append(depth)
         if ch == "(":
             depth += 1
             top_chars.append(" ")
@@ -135,35 +147,38 @@ def _sql_meta(sql: str):
         else:
             top_chars.append(ch if depth == 0 else " ")
     top = "".join(top_chars)
-    sm = re.search(
-        r"(?i)\bSELECT\b([\s\S]*?)(?:\b(?:FROM|WHERE|GROUP|ORDER|LIMIT|HAVING|QUALIFY|UNION)\b|;|$)", top
-    )
     sel_exprs: list[str] = []
-    if sm:
-        base, pos = sm.start(1), 0
-        for p_idx, seg in enumerate(sm.group(1).split(",")):
-            expr = clean[base + pos : base + pos + len(seg)]
-            pos += len(seg) + 1
-            sel_exprs.append(
-                re.sub(
-                    r"\s+",
-                    "",
-                    re.sub(
-                        r'(?i)(?:\s+AS\s+|(?<![+\-*/=<>,(])\s+|\)\s*)(?!\b(?:END|NULL|TRUE|FALSE|AND|OR|ELSE|THEN)\b)(?:`[^`]+`|"[^"]+"|[A-Za-z_]\w*)\s*$',
-                        "",
-                        expr.strip(),
-                    ),
-                ).lower()
-            )
-            if re.search(r"(?:\*\s*100(?:\.0*)?(?!\d|\.)|(?<!\d|\.)100(?:\.0*)?\s*\*)", expr):
-                pct_idxs.add(p_idx)
-                am = re.search(
-                    r'(?:(?i:\bAS)\s+|(?<![+\-*/=<>,(])\s+|\)\s*)(?:`([^`]+)`|"([^"]+)"|([A-Za-z_]\w*))\s*$',
-                    expr.strip(),
-                )
-                alias = am and (am.group(1) or am.group(2) or am.group(3))
-                if alias and alias.upper() not in {"END", "NULL", "TRUE", "FALSE", "AND", "OR", "ELSE", "THEN"}:
-                    pct_cols.add(alias.lower())
+    end_kw = r"(?i)^(?:FROM|WHERE|GROUP|ORDER|LIMIT|HAVING|QUALIFY|UNION)\b"
+    for sm in re.finditer(r"(?i)\bSELECT\b", clean):
+        base_d, i, seg_start, segs = depths[sm.start()], sm.end(), sm.end(), []
+        while i < len(clean):
+            ch, d_i = clean[i], depths[i]
+            if d_i == base_d and (
+                ch in ");" or (ch.isalpha() and not (i and (clean[i - 1].isalnum() or clean[i - 1] == "_")) and re.match(end_kw, clean[i:]))
+            ):
+                break
+            if ch == "," and d_i == base_d:
+                segs.append(clean[seg_start:i])
+                seg_start = i + 1
+            i += 1
+        segs.append(clean[seg_start:i])
+        first_top = base_d == 0 and not sel_exprs
+        for p_idx, expr in enumerate(segs):
+            raw_e = re.sub(r"(?i)^(?:DISTINCT|ALL)\s+", "", expr.strip()) if p_idx == 0 else expr.strip()
+            am = re.search(alias_re, raw_e)
+            alias = am and (am.group(1) or am.group(2) or am.group(3))
+            al = alias.lower() if alias and alias.upper() not in kw_skip else None
+            core = re.sub(r"\s+", "", raw_e[: am.start()] if (am and al) else raw_e).lower()
+            if first_top:
+                sel_exprs.append(core)
+            src_col = core.split(".")[-1] if re.match(r"^[a-z_]\w*(?:\.[a-z_]\w*)?$", core) else ""
+            if al and src_col in scales and al not in scales:
+                scales[al] = scales[src_col]
+            if re.search(pct_re, raw_e) or src_col in pct_cols:
+                if base_d == 0:
+                    pct_idxs.add(p_idx)
+                if al:
+                    pct_cols.add(al)
     om = re.search(r"(?i)\bORDER\s+BY\b([\s\S]*?)(?:\b(?:LIMIT|OFFSET|FETCH)\b|;|$)", top)
     order_specs: list[str] = []
     if om:
@@ -198,7 +213,7 @@ def _norm_ts(v, ts_mode: str | None):
 def _cell_key(v, digits: int, mult: float = 1.0, ts_mode: str | None = None):
     v = _norm_ts(v, ts_mode)
     f = _to_float(v)
-    nv = round(f * mult, digits) if f is not None else normalize_val(v, digits)
+    nv = _sql_round(f * mult, digits) if f is not None else normalize_val(v, digits)
     if nv is None or isinstance(nv, bool):
         return (0 if nv is None else 1, float(nv or 0), "")
     return (2, float(nv), "") if isinstance(nv, (int, float)) else (3, 0.0, str(nv))
@@ -215,10 +230,10 @@ def _cmp_pair(rs, rl, digits: int, mult: float, ts_mode: str | None = None):
         return rs.strip(), rl.strip()
     sv, lv = normalize_val(rs, digits), normalize_val(rl, digits)
     lf = _to_float(rl)
-    return sv, (round(lf * mult, digits) if (mult != 1.0 and lf is not None) else lv)
+    return sv, (_sql_round(lf * mult, digits) if (mult != 1.0 and lf is not None) else lv)
 
 
-def _drop_grain_keys(sql_rows, looker_rows, f_norm: list[str]) -> set[str]:
+def _drop_grain_keys(sql_rows, looker_rows, f_norm: list[str], dfs: list | None = None) -> set[str]:
     if not sql_rows or not looker_rows:
         return set()
     s_set = {k.split(".")[-1].lower() for k in sql_rows[0]}
@@ -228,6 +243,16 @@ def _drop_grain_keys(sql_rows, looker_rows, f_norm: list[str]) -> set[str]:
         tail, leaf = f_norm[len(s_set)], f_norm[len(s_set)].split(".")[-1]
         if leaf not in s_set and (leaf in ("id", "pk") or leaf.endswith("_id")):
             drop.add(tail)
+    tcs = [d for d in (dfs or []) if isinstance(d, dict) and d.get("table_calculation")]
+    if tcs and len(l_keys) - len(drop) > len(s_set):
+        tc_names = {str(d["table_calculation"]).lower() for d in tcs}
+        tc_refs = {r.lower() for d in tcs for r in re.findall(r"\$\{(\w+\.\w+)\}", str(d.get("expression") or ""))}
+        for k in l_keys:
+            if len(l_keys) - len(drop) > len(s_set) and k in tc_refs and k not in tc_names and k.split(".")[-1] in tc_names:
+                drop.add(k)
+        cand = [k for k in l_keys if k in tc_refs and k not in drop and k.split(".")[-1] not in s_set]
+        if 0 < len(cand) == len(l_keys) - len(drop) - len(s_set):
+            drop.update(cand)
     return drop
 
 
@@ -237,6 +262,7 @@ def compare_row_sets(
     sql: str = "",
     looker_fields: list[str] | None = None,
     fetch_extra=None,
+    dynamic_fields: list | None = None,
 ):
     if len(sql_rows) != len(looker_rows):
         return False, [f"Row count mismatch: SQL={len(sql_rows)}, Looker={len(looker_rows)}"]
@@ -244,7 +270,7 @@ def compare_row_sets(
         return True, []
     scales, pct_cols, pct_idxs, sel_exprs, has_order_by, order_specs, limit_n = _sql_meta(sql)
     f_norm = [f.lower() for f in (looker_fields or [])]
-    drop_l = _drop_grain_keys(sql_rows, looker_rows, f_norm)
+    drop_l = _drop_grain_keys(sql_rows, looker_rows, f_norm, dynamic_fields)
 
     def _norm_lr(lr):
         raw_lr = {k.lower(): v for k, v in lr.items() if k.lower() not in drop_l}
@@ -253,7 +279,7 @@ def compare_row_sets(
     sr_leaves = [{k.split(".")[-1].lower(): v for k, v in sr.items()} for sr in sql_rows]
     lr_leaves = [_norm_lr(lr) for lr in looker_rows]
     bad_cols = [
-        f"Row {i} column count mismatch: SQL={len(sr)}, Looker={len(lr)}"
+        f"Row {i} column count mismatch: SQL={len(sr)} {list(sr)}, Looker={len(lr)} {list(lr)}"
         for i, (sr, lr) in enumerate(zip(sr_leaves, lr_leaves))
         if len(sr) != len(lr)
     ]
@@ -578,6 +604,7 @@ def main():
                 sql=stmt_sql,
                 looker_fields=q_fields,
                 fetch_extra=_fetch_tie_pool if isinstance(active_q, dict) else None,
+                dynamic_fields=dfs,
             )
             if not matched and stmt_pinned and not pinned_mode:
                 l_raw, l_rows = _run_looker_live(bypass_cache=True)
@@ -593,6 +620,7 @@ def main():
                     sql=stmt_sql,
                     looker_fields=q_fields,
                     fetch_extra=_fetch_tie_pool if isinstance(active_q, dict) else None,
+                    dynamic_fields=dfs,
                 )
             if not matched and isinstance(active_q, dict) and s_rows and len(s_rows) == len(l_rows) and not has_post_sql:
                 _, _, _, _, has_ob, _, _ = _sql_meta(stmt_sql)
@@ -604,7 +632,7 @@ def main():
                     lim_clause = clean_sql[lim_match.start() :].lstrip()
                     no_lim = clean_sql[: lim_match.start()].rstrip()
                     ord_cols = ", ".join(str(i) for i in range(1, len(s_rows[0]) + 1))
-                    drop_k = _drop_grain_keys(s_rows, l_rows, [f.lower() for f in q_fields])
+                    drop_k = _drop_grain_keys(s_rows, l_rows, [f.lower() for f in q_fields], dfs)
                     sort_f = [f for f in q_fields if f.lower() not in drop_k][: len(s_rows[0])]
                     seen_sf = {s.split()[0].lower() for s in ex_sorts}
                     det_sql = (
@@ -629,6 +657,7 @@ def main():
                             sql=stmt_sql if has_ob else f"{no_lim} ORDER BY {ord_cols} {lim_clause}",
                             looker_fields=q_fields,
                             fetch_extra=lambda new_lim, _dq=det_q: _fetch_tie_pool(new_lim, _dq),
+                            dynamic_fields=dfs,
                         )
             q["parity_status"] = "matched" if matched else "mismatched"
             q["mismatches"] = mismatches
@@ -658,7 +687,7 @@ def main():
         parsed_tq = {}
     test_queries = {str(k): v for k, v in parsed_tq.items() if isinstance(v, dict)}
 
-    if test_queries and not val_errors:
+    if test_queries and all_matched and not val_errors:
         test_results = {}
         for t_key, t_body in test_queries.items():
             try:
