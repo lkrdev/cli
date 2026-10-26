@@ -435,19 +435,26 @@ def main():
         if not sql_slug or not (active_q or q.get("query_id")):
             continue
         try:
-            if isinstance(q.get("sql_rows"), list):
-                s_rows = q["sql_rows"]
-            else:
-                s_raw = run_sql_query(slug=sql_slug, result_format="json")  # ty: ignore[unresolved-reference]
-                s_rows = json.loads(s_raw) if isinstance(s_raw, str) else (s_raw or [])
-                if isinstance(s_rows, list) and len(s_rows) <= 50:
-                    q["sql_rows"] = s_rows
-            l_raw = (
-                run_inline_query(result_format="json", body=active_q)  # ty: ignore[unresolved-reference]
-                if active_q
-                else run_query(query_id=q["query_id"], result_format="json")  # ty: ignore[unresolved-reference]
+            q.pop("sql_rows", None)
+            stmt_sql = str(q.get("sql") or "")
+            is_volatile = bool(
+                re.search(r"(?i)\b(?:CURRENT_TIMESTAMP|CURRENT_DATE|CURRENT_DATETIME|NOW)\b", stmt_sql)
             )
-            l_rows = json.loads(l_raw) if isinstance(l_raw, str) else (l_raw or [])
+
+            q_id = q.get("query_id")
+
+            def _run_looker_live(bypass_cache: bool = False, _aq=active_q, _qid=q_id):
+                kw = {"cache": False} if bypass_cache else {}
+                raw = (
+                    run_inline_query(result_format="json", body=_aq, **kw)  # ty: ignore[unresolved-reference]
+                    if _aq
+                    else run_query(query_id=_qid, result_format="json", **kw)  # ty: ignore[unresolved-reference]
+                )
+                return raw, (json.loads(raw) if isinstance(raw, str) else (raw or []))
+
+            s_raw = run_sql_query(slug=sql_slug, result_format="json")  # ty: ignore[unresolved-reference]
+            s_rows = json.loads(s_raw) if isinstance(s_raw, str) else (s_raw or [])
+            l_raw, l_rows = _run_looker_live(bypass_cache=is_volatile)
             raw_df = active_q.get("dynamic_fields") if isinstance(active_q, dict) else None
             dfs = (
                 json.loads(raw_df)
@@ -459,14 +466,10 @@ def main():
                 for d in dfs
                 if isinstance(d, dict) and (d.get("table_calculation") or d.get("measure") or d.get("dimension"))
             ]
-            def _fetch_tie_pool(new_lim: int, _q=active_q):
-                ext_q = dict(_q)
-                ext_q["limit"] = str(new_lim)
-                ext_raw = run_inline_query(result_format="json", body=ext_q)  # ty: ignore[unresolved-reference]
-                ext_parsed = json.loads(ext_raw) if isinstance(ext_raw, str) else (ext_raw or [])
+            def _fetch_tie_pool(new_lim: int, _q=active_q, _nc=is_volatile):
+                _, ext_parsed = _run_looker_live(bypass_cache=_nc, _aq={**_q, "limit": str(new_lim)})
                 return ext_parsed if isinstance(ext_parsed, list) else []
 
-            stmt_sql = str(q.get("sql") or "")
             matched, mismatches = compare_row_sets(
                 s_rows,
                 l_rows,
@@ -474,6 +477,31 @@ def main():
                 looker_fields=q_fields,
                 fetch_extra=_fetch_tie_pool if isinstance(active_q, dict) else None,
             )
+            if not matched and is_volatile:
+                for attempt in range(2):
+                    l_raw, l_rows = _run_looker_live(bypass_cache=True)
+                    fp = attempt
+                    for ch in str(l_raw):
+                        fp = (fp * 131 + ord(ch)) & 0xFFFFFFFFFFFFFFFF
+                    try:
+                        live_body = {
+                            "sql": f"{stmt_sql}\n-- parity-live-{fp:x}",
+                            **({"connection_name": c_name} if c_name else {}),
+                        }
+                        live_slug = (create_sql_query(body=live_body) or {}).get("slug") or sql_slug  # ty: ignore[unresolved-reference]
+                    except Exception:
+                        live_slug = sql_slug
+                    s_raw = run_sql_query(slug=live_slug, result_format="json")  # ty: ignore[unresolved-reference]
+                    s_rows = json.loads(s_raw) if isinstance(s_raw, str) else (s_raw or [])
+                    matched, mismatches = compare_row_sets(
+                        s_rows,
+                        l_rows,
+                        sql=stmt_sql,
+                        looker_fields=q_fields,
+                        fetch_extra=_fetch_tie_pool if isinstance(active_q, dict) else None,
+                    )
+                    if matched:
+                        break
             if not matched and isinstance(active_q, dict) and s_rows and len(s_rows) == len(l_rows):
                 _, _, _, _, has_ob, _, _ = _sql_meta(stmt_sql)
                 clean_sql = re.sub(r"(?:\s|--[^\n]*|/\*[\s\S]*?\*/|;)+$", "", stmt_sql)

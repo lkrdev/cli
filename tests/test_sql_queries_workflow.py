@@ -1150,6 +1150,47 @@ def test_pre_gate_timestamp_normalization_and_same_second_sort_ties():
     assert ok_sub is False
 
 
+def test_pre_gate_volatile_current_timestamp_bypasses_slug_cache():
+    sql = "SELECT COUNTIF(TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), created_at, DAY) < 90) AS fresh_units FROM ii"
+    created_bodies: list[dict[str, Any]] = []
+    cache_flags: list[Any] = []
+    base_q = {
+        "query_index": 0,
+        "sql_query_id": "s_cached",
+        "sql": sql,
+        "sql_rows": [{"fresh_units": 99999}],
+        "inline_query": {"model": "m", "view": "ii", "fields": ["ii.fresh_units"]},
+    }
+    res = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {"data_json": json.dumps({"run_id": "r_vol", "connection_name": "bq_conn", "queries": [base_q]})},
+        {
+            "create_sql_query": lambda body: created_bodies.append(body) or {"slug": "s_live"},
+            "run_sql_query": lambda slug, **_kw: json.dumps(
+                [{"fresh_units": 11221 if slug == "s_live" else 11222}]
+            ),
+            "run_inline_query": lambda body, **kw: cache_flags.append(kw.get("cache"))
+            or json.dumps([{"ii.fresh_units": 11221}]),
+        },
+    )
+    assert res["passed"] is True and "sql_rows" not in res["queries"][0]
+    assert cache_flags == [False, False] and res["queries"][0]["sql_query_id"] == "s_cached"
+    assert len(created_bodies) == 1 and "-- parity-live-" in created_bodies[0]["sql"]
+
+    res_bad = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {"data_json": json.dumps({"run_id": "r_vol_bad", "connection_name": "bq_conn", "queries": [base_q]})},
+        {
+            "create_sql_query": lambda body: {"slug": "s_live"},
+            "run_sql_query": lambda **_kw: json.dumps([{"fresh_units": 11221}]),
+            "run_inline_query": lambda **_kw: json.dumps([{"ii.fresh_units": 0}]),
+        },
+    )
+    assert res_bad["passed"] is False
+
+
+
+
 
 
 
