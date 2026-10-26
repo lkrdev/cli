@@ -151,6 +151,19 @@ def _cmp_pair(rs, rl, digits: int, mult: float):
     return sv, (round(lf * mult, digits) if (mult != 1.0 and lf is not None) else lv)
 
 
+def _drop_grain_keys(sql_rows, looker_rows, f_norm: list[str]) -> set[str]:
+    if not sql_rows or not looker_rows:
+        return set()
+    s_set = {k.split(".")[-1].lower() for k in sql_rows[0]}
+    l_keys = [k.lower() for k in looker_rows[0]]
+    drop = {k for k in l_keys if (k == "no_group" or k.endswith(".no_group")) and "no_group" not in s_set}
+    if len(l_keys) - len(drop) == len(s_set) + 1 and len(f_norm) > len(s_set):
+        tail, leaf = f_norm[len(s_set)], f_norm[len(s_set)].split(".")[-1]
+        if leaf not in s_set and (leaf in ("id", "pk") or leaf.endswith("_id")):
+            drop.add(tail)
+    return drop
+
+
 def compare_row_sets(
     sql_rows,
     looker_rows,
@@ -164,9 +177,10 @@ def compare_row_sets(
         return True, []
     scales, pct_cols, pct_idxs, sel_exprs, has_order_by, order_specs, limit_n = _sql_meta(sql)
     f_norm = [f.lower() for f in (looker_fields or [])]
+    drop_l = _drop_grain_keys(sql_rows, looker_rows, f_norm)
 
     def _norm_lr(lr):
-        raw_lr = {k.lower(): v for k, v in lr.items()}
+        raw_lr = {k.lower(): v for k, v in lr.items() if k.lower() not in drop_l}
         return {k: raw_lr[k] for k in [k for k in f_norm if k in raw_lr] + list(raw_lr)}
 
     sr_leaves = [{k.split(".")[-1].lower(): v for k, v in sr.items()} for sr in sql_rows]
@@ -319,6 +333,7 @@ def main():
         c_name = str(connection_name).strip()  # ty: ignore[unresolved-reference]
     except NameError:
         c_name = ""
+    c_name = c_name or str(data.get("connection_name") or "").strip()
 
     # 1. Initialize SQL Runner queries from raw_sql if provided
     try:
@@ -430,13 +445,38 @@ def main():
                 ext_parsed = json.loads(ext_raw) if isinstance(ext_raw, str) else (ext_raw or [])
                 return ext_parsed if isinstance(ext_parsed, list) else []
 
+            stmt_sql = str(q.get("sql") or "")
             matched, mismatches = compare_row_sets(
                 s_rows,
                 l_rows,
-                sql=str(q.get("sql") or ""),
+                sql=stmt_sql,
                 looker_fields=q_fields,
                 fetch_extra=_fetch_tie_pool if isinstance(active_q, dict) else None,
             )
+            if not matched and isinstance(active_q, dict) and s_rows and len(s_rows) == len(l_rows):
+                _, _, _, _, has_ob, _, _ = _sql_meta(stmt_sql)
+                clean_sql = re.sub(r"(?:\s|--[^\n]*|/\*[\s\S]*?\*/|;)+$", "", stmt_sql)
+                lim_match = re.search(r"(?i)\bLIMIT\s+(\d+)(?:\s+OFFSET\s+\d+)?\s*$", clean_sql)
+                if not has_ob and lim_match:
+                    lim_n = int(lim_match.group(1))
+                    no_lim = clean_sql[: lim_match.start()].rstrip()
+                    ord_cols = ", ".join(str(i) for i in range(1, len(s_rows[0]) + 1))
+                    det_sql = f"SELECT * FROM (\n{no_lim}\n) AS _lkr_det ORDER BY {ord_cols} LIMIT {lim_n}"
+                    det_body = {"sql": det_sql, **({"connection_name": c_name} if c_name else {})}
+                    det_slug = (create_sql_query(body=det_body) or {}).get("slug")  # ty: ignore[unresolved-reference]
+                    if det_slug:
+                        drop_k = _drop_grain_keys(s_rows, l_rows, [f.lower() for f in q_fields])
+                        sort_f = [f for f in q_fields if f.lower() not in drop_k][: len(s_rows[0])]
+                        det_q = {**active_q, "sorts": [f"{f} asc" for f in sort_f]}
+                        ds = run_sql_query(slug=det_slug, result_format="json")  # ty: ignore[unresolved-reference]
+                        dl = run_inline_query(result_format="json", body=det_q)  # ty: ignore[unresolved-reference]
+                        matched, mismatches = compare_row_sets(
+                            json.loads(ds) if isinstance(ds, str) else (ds or []),
+                            json.loads(dl) if isinstance(dl, str) else (dl or []),
+                            sql=f"{no_lim} ORDER BY {ord_cols} LIMIT {lim_n}",
+                            looker_fields=q_fields,
+                            fetch_extra=lambda new_lim, _dq=det_q: _fetch_tie_pool(new_lim, _dq),
+                        )
             q["parity_status"] = "matched" if matched else "mismatched"
             q["mismatches"] = mismatches
             all_matched = all_matched and matched

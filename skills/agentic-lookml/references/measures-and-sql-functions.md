@@ -2,7 +2,7 @@
 
 When translating SQL `SELECT` projections and `WHERE` clauses into LookML measures, agents must separate presentation formatting and query-time slicing from semantic aggregation. Naive 1:1 SQL translation introduces silent metric bugs (unfiltered measures with filtered names, row-level rounding drift, broken symmetric aggregates, and duplicate hidden helper measures).
 
-Apply this guide to **every** query—including `simple_single_table` queries without `CASE WHEN`.
+Apply this guide whenever a query contains SQL aggregates, scalar wrappers, or metric definitions.
 
 ## SQL function and wrapper evaluation matrix
 

@@ -4273,3 +4273,37 @@ def test_star_schema_transitive_pk_fk_join_analysis_and_explore_queries():
     assert ja1["proj.ds.users INNER proj.ds.users"]["status"] == "missing_join"
 
 
+def test_compact_sql_lookml_compare_prunes_via_measures_on_row_queries():
+    from typer.testing import CliRunner
+
+    from lkr.main import app
+
+    lkml = (
+        'connection: "bq"\n'
+        "view: users {\n"
+        "  sql_table_name: `proj.ds.users` ;;\n"
+        "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+        "  dimension: age { type: number sql: ${TABLE}.age ;; }\n"
+        "  dimension: is_young_customer { type: yesno sql: ${age} < 25 ;; }\n"
+        "  measure: avg_age { type: average sql: ${age} ;; }\n"
+        "}\n"
+        "explore: users {}\n"
+    )
+    sql = (
+        "SELECT id, age FROM `proj.ds.users` WHERE age < 25 LIMIT 25; "
+        "WITH c AS (SELECT AVG(age) AS a FROM `proj.ds.users`) SELECT a FROM c"
+    )
+    res = CliRunner().invoke(
+        app,
+        ["parse", "sql-lookml-compare", "--sql", sql, "--lookml", lkml, "--offline", "--compact"],
+    )
+    assert res.exit_code == 0, res.output
+    q_row, q_cte_agg = json.loads(res.output)["queries"]
+    row_fields = {(f["field_type"], f["field_name"]) for f in q_row["views"][0]["fields"]}
+    assert ("dimension", "is_young_customer") in row_fields
+    assert ("measure", "avg_age") not in row_fields
+    cte_fields = {(f["field_type"], f["field_name"]) for f in q_cte_agg["views"][0]["fields"]}
+    assert ("measure", "avg_age") in cte_fields
+
+
+
