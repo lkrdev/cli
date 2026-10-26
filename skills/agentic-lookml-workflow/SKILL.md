@@ -64,7 +64,7 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
       bash .agents/skills/agentic-lookml-workflow/scripts/setup_repo.sh --skip-preflight
     lkr parse lookml snapshot --path "./data/$RUN_ID/lookml" -u
     lkr parse sql-lookml-compare --compact --sql-file "./data/$RUN_ID/input.sql" --path "./data/$RUN_ID/lookml" --output "./data/$RUN_ID/compare_initial.json"
-    jq -c . "./data/$RUN_ID/compare_initial.json" | head -c 8000
+    jq -c . "./data/$RUN_ID/compare_initial.json" | head -c 8000 || true
   fi
   ```
 - If the project has **no** existing `.model.lkml` (`MODEL_NAME` empty above) or you are creating a new model, set `MODEL_NAME="${MODEL_NAME:-${PROJECT_ID//-/_}}"`, ask the user for `CONNECTION_NAME` if not provided, register the model via [scripts/configure_model.py](scripts/configure_model.py), and run `setup_repo.sh --skip-preflight` + `snapshot -u` + `sql-lookml-compare --compact` (creating `./data/$RUN_ID/lookml/$MODEL_NAME.model.lkml` *after* any `generate_bronze_view.py` + `lookml pull` so `lookml pull` never deletes a local-only `.model.lkml` file):
