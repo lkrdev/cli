@@ -143,6 +143,17 @@ view: order_items_sequenced {
 }
 ```
 
+When an active Silver Explore (`silver/explores/order_items.explore.lkml`) already exposes the base entity, join the row-window SDT back `1:1` on the row PK and whitelist only `[id, <new_window_fields>]` via `fields:` so inherited base columns are not duplicated:
+
+```lookml
+join: order_items_sequenced {
+  type: left_outer
+  relationship: one_to_one
+  sql_on: ${order_items.id} = ${order_items_sequenced.id} ;;
+  fields: [order_items_sequenced.id, order_items_sequenced.prior_order_raw, order_items_sequenced.prior_order_time, order_items_sequenced.prior_order_date]
+}
+```
+
 ## Architecture rules
 
 Default year-over-year and month-over-month `LAG()` window comparisons over displayed rows to Table Calculations (`offset()`) in the Query or Dashboard Layer, paired with a Quick Start `query:` on the Silver Explore that pre-populates the base dimensions, measures, and sorts (zero derived tables). Native Looker `period_over_period` measures can be used when the target Looker instance version and dialect support them natively.

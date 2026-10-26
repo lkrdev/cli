@@ -53,8 +53,9 @@ append_details_block() {
   local label="$2"
   local lang="$3"
   if [[ -f "$file_path" ]]; then
-    local body
-    body=$(if [[ "$label" == "snapshot_check.json" ]]; then jq 'del(.snapshots)' "$file_path" 2>/dev/null || cat "$file_path"; elif [[ "$label" == "data.json" ]]; then jq -c 'del(.test_query_results, .queries[]?.sql_rows)' "$file_path" 2>/dev/null || cat "$file_path"; elif [[ "$lang" == "json" ]]; then jq -c . "$file_path" 2>/dev/null || cat "$file_path"; else cat "$file_path"; fi | head -c 12000)
+    local body limit=12000
+    if [[ "$label" == "data.json" ]]; then limit=40000; fi
+    body=$(if [[ "$label" == "snapshot_check.json" ]]; then jq 'del(.snapshots)' "$file_path" 2>/dev/null || cat "$file_path"; elif [[ "$label" == "data.json" ]]; then jq -c 'del(.test_query_results, .queries[]?.sql_rows)' "$file_path" 2>/dev/null || cat "$file_path"; elif [[ "$lang" == "json" ]]; then jq -c . "$file_path" 2>/dev/null || cat "$file_path"; else cat "$file_path"; fi | head -c "$limit")
     printf '\n\n<details>\n<summary><code>%s</code></summary>\n\n```%s\n%s\n```\n</details>' \
       "$label" "$lang" "$body"
   fi
