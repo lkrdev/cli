@@ -3577,6 +3577,8 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
         if q.get("tests"):
             dedup_tests: list[dict[str, Any]] = []
             for tm in q["tests"]:
+                if kept_exp_keys and (tm.get("model_name"), tm.get("explore_name")) not in kept_exp_keys:
+                    continue
                 t_flds = tm.get("fields") or ([tm["field"]] if tm.get("field") else [])
                 if kept_explore_fields and not any(f in kept_explore_fields for f in t_flds):
                     continue
