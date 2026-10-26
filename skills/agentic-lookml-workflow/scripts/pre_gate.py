@@ -28,6 +28,57 @@ def split_sql_statements(raw_sql: str) -> list[str]:
     return [s.strip() for s in "".join(out).split("\0") if s.strip()]
 
 
+def _pin_temporal_sql(sql_text: str, run_id: str = "") -> tuple[str, bool]:
+    rm = re.match(r"^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})", str(run_id or ""))
+    ymd = f"{rm.group(1)}-{rm.group(2)}-{rm.group(3)}" if rm else "2026-01-01"
+    hms = f"{rm.group(4)}:{rm.group(5)}:{rm.group(6)}" if rm else "00:00:00"
+    ts_lit = f"CAST('{ymd} {hms}+00:00' AS TIMESTAMP)"
+    pat = (
+        r"""(?is)('[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*"|`[^`\\]*(?:\\.[^`\\]*)*`|--[^\n]*|/\*[\s\S]*?\*/|\bAS\s+\w+|\.\s*\w+)"""
+        r"""|\b(CURRENT_TIMESTAMP|CURRENT_DATETIME|CURRENT_DATE|CURRENT_TIME)\b(?:\s*\(\s*([^()]*?)\s*\))?"""
+        r"""|\b(NOW)\s*\(\s*\d*\s*\)"""
+    )
+    out, last, pinned = [], 0, False
+    for m in re.finditer(pat, sql_text or ""):
+        if m.group(1) is not None:
+            continue
+        out.append(sql_text[last : m.start()])
+        fn = (m.group(2) or m.group(4) or "").upper()
+        arg = (m.group(3) or "").strip()
+        kind = {"CURRENT_DATETIME": ("DATETIME", f"{ymd} {hms}"), "CURRENT_TIME": ("TIME", hms)}.get(
+            fn, ("DATE", ymd)
+        )
+        out.append(
+            ts_lit
+            if fn in ("CURRENT_TIMESTAMP", "NOW")
+            else (f"{kind[0]}({ts_lit}, {arg})" if (arg and not arg.isdigit()) else f"CAST('{kind[1]}' AS {kind[0]})")
+        )
+        last, pinned = m.end(), True
+    return ("".join([*out, sql_text[last:]]), True) if pinned else (sql_text, False)
+
+
+def _fp(s: str) -> str:
+    h = 0
+    for ch in s:
+        h = (h * 131 + ord(ch)) & 0xFFFFFFFFFFFFFFFF
+    return f"{h:x}"
+
+
+def _remap_compiled_rows(rows, q_fields: list[str]):
+    alias_map = {re.sub(r"[^a-z0-9_]", "_", f.lower()): f for f in q_fields}
+    explicit = {f.lower() for f in q_fields}
+    return [
+        {
+            alias_map.get(kl, k): v
+            for k, v in r.items()
+            for kl in [k.lower()]
+            if not (kl.endswith("__sort_") and kl not in explicit)
+        }
+        for r in (rows or [])
+        if isinstance(r, dict)
+    ]
+
+
 def _to_float(v):
     if v is not None and not isinstance(v, bool):
         if isinstance(v, str) and re.match(r"^0\d+$", v.strip()):
@@ -437,24 +488,9 @@ def main():
         try:
             q.pop("sql_rows", None)
             stmt_sql = str(q.get("sql") or "")
-            is_volatile = bool(
-                re.search(r"(?i)\b(?:CURRENT_TIMESTAMP|CURRENT_DATE|CURRENT_DATETIME|NOW)\b", stmt_sql)
-            )
-
+            run_id_str = str(data.get("run_id") or "")
+            pinned_stmt, stmt_pinned = _pin_temporal_sql(stmt_sql, run_id_str)
             q_id = q.get("query_id")
-
-            def _run_looker_live(bypass_cache: bool = False, _aq=active_q, _qid=q_id):
-                kw = {"cache": False} if bypass_cache else {}
-                raw = (
-                    run_inline_query(result_format="json", body=_aq, **kw)  # ty: ignore[unresolved-reference]
-                    if _aq
-                    else run_query(query_id=_qid, result_format="json", **kw)  # ty: ignore[unresolved-reference]
-                )
-                return raw, (json.loads(raw) if isinstance(raw, str) else (raw or []))
-
-            s_raw = run_sql_query(slug=sql_slug, result_format="json")  # ty: ignore[unresolved-reference]
-            s_rows = json.loads(s_raw) if isinstance(s_raw, str) else (s_raw or [])
-            l_raw, l_rows = _run_looker_live(bypass_cache=is_volatile)
             raw_df = active_q.get("dynamic_fields") if isinstance(active_q, dict) else None
             dfs = (
                 json.loads(raw_df)
@@ -466,9 +502,65 @@ def main():
                 for d in dfs
                 if isinstance(d, dict) and (d.get("table_calculation") or d.get("measure") or d.get("dimension"))
             ]
-            def _fetch_tie_pool(new_lim: int, _q=active_q, _nc=is_volatile):
-                _, ext_parsed = _run_looker_live(bypass_cache=_nc, _aq={**_q, "limit": str(new_lim)})
-                return ext_parsed if isinstance(ext_parsed, list) else []
+            has_post_sql = bool(
+                (
+                    isinstance(active_q, dict)
+                    and any(active_q.get(k) for k in ("pivots", "fill_fields", "subtotals", "row_total"))
+                )
+                or any(isinstance(d, dict) and d.get("table_calculation") for d in dfs)
+            )
+
+            def _exec_sql(sql_str: str, _cn=c_name):
+                body = {"sql": sql_str, **({"connection_name": _cn} if _cn else {})}
+                slug = (create_sql_query(body=body) or {}).get("slug")  # ty: ignore[unresolved-reference]
+                if not slug:
+                    return None
+                raw = run_sql_query(slug=slug, result_format="json")  # ty: ignore[unresolved-reference]
+                return json.loads(raw) if isinstance(raw, str) else (raw or [])
+
+            def _q_call(fmt: str, aq=active_q, qid=q_id, **kw):
+                return (
+                    run_inline_query(result_format=fmt, body=aq, **kw)  # ty: ignore[unresolved-reference]
+                    if aq
+                    else run_query(query_id=qid, result_format=fmt, **kw)  # ty: ignore[unresolved-reference]
+                )
+
+            def _compile_pinned_sql(aq=active_q, _rid=run_id_str):
+                l_sql = _q_call("sql", aq=aq)
+                ok = isinstance(l_sql, str) and re.match(r"(?is)^(?:\s|--[^\n]*|/\*[\s\S]*?\*/)*(?:SELECT|WITH)\b", l_sql)
+                return _pin_temporal_sql(l_sql, _rid)[0] if ok else None
+
+            def _run_pinned_q(aq=active_q, _ps=pinned_stmt, _qf=q_fields):
+                pl = _compile_pinned_sql(aq=aq)
+                raw_r = _exec_sql(f"-- parity-pin-{_fp(_ps + chr(0) + pl)}\n{pl}") if pl else None
+                return _remap_compiled_rows(raw_r, _qf) if isinstance(raw_r, list) else None
+
+            def _run_looker_live(bypass_cache: bool = False, _aq=active_q):
+                raw = _q_call("json", aq=_aq, **({"cache": False} if bypass_cache else {}))
+                return raw, (json.loads(raw) if isinstance(raw, str) else (raw or []))
+
+            pinned_mode = False
+            s_rows, l_rows = [], []
+            if stmt_pinned and not has_post_sql:
+                try:
+                    pinned_l_sql = _compile_pinned_sql()
+                    if pinned_l_sql is not None:
+                        tag = f"-- parity-pin-{_fp(pinned_stmt + chr(0) + pinned_l_sql)}\n"
+                        ps_rows, pl_rows = _exec_sql(f"{tag}{pinned_stmt}"), _exec_sql(f"{tag}{pinned_l_sql}")
+                        if ps_rows is not None and pl_rows is not None:
+                            s_rows, l_rows, pinned_mode = ps_rows, _remap_compiled_rows(pl_rows, q_fields), True
+                except Exception:
+                    pinned_mode = False
+
+            if not pinned_mode:
+                s_raw = run_sql_query(slug=sql_slug, result_format="json")  # ty: ignore[unresolved-reference]
+                s_rows = json.loads(s_raw) if isinstance(s_raw, str) else (s_raw or [])
+                _, l_rows = _run_looker_live(bypass_cache=stmt_pinned)
+
+            def _fetch_tie_pool(new_lim: int, _q=active_q, _pm=pinned_mode, _nc=stmt_pinned):
+                nq = {**_q, "limit": str(new_lim)}
+                res_p = _run_pinned_q(aq=nq) if _pm else _run_looker_live(bypass_cache=_nc, _aq=nq)[1]
+                return res_p if isinstance(res_p, list) else []
 
             matched, mismatches = compare_row_sets(
                 s_rows,
@@ -477,51 +569,39 @@ def main():
                 looker_fields=q_fields,
                 fetch_extra=_fetch_tie_pool if isinstance(active_q, dict) else None,
             )
-            if not matched and is_volatile:
-                for attempt in range(2):
-                    l_raw, l_rows = _run_looker_live(bypass_cache=True)
-                    fp = attempt
-                    for ch in str(l_raw):
-                        fp = (fp * 131 + ord(ch)) & 0xFFFFFFFFFFFFFFFF
-                    try:
-                        live_body = {
-                            "sql": f"{stmt_sql}\n-- parity-live-{fp:x}",
-                            **({"connection_name": c_name} if c_name else {}),
-                        }
-                        live_slug = (create_sql_query(body=live_body) or {}).get("slug") or sql_slug  # ty: ignore[unresolved-reference]
-                    except Exception:
-                        live_slug = sql_slug
-                    s_raw = run_sql_query(slug=live_slug, result_format="json")  # ty: ignore[unresolved-reference]
-                    s_rows = json.loads(s_raw) if isinstance(s_raw, str) else (s_raw or [])
-                    matched, mismatches = compare_row_sets(
-                        s_rows,
-                        l_rows,
-                        sql=stmt_sql,
-                        looker_fields=q_fields,
-                        fetch_extra=_fetch_tie_pool if isinstance(active_q, dict) else None,
-                    )
-                    if matched:
-                        break
+            if not matched and stmt_pinned and not pinned_mode:
+                l_raw, l_rows = _run_looker_live(bypass_cache=True)
+                try:
+                    ps_retry = _exec_sql(f"-- parity-live-{_fp(str(l_raw))}\n{stmt_sql}")
+                except Exception:
+                    ps_retry = None
+                if ps_retry is not None:
+                    s_rows = ps_retry
+                matched, mismatches = compare_row_sets(
+                    s_rows,
+                    l_rows,
+                    sql=stmt_sql,
+                    looker_fields=q_fields,
+                    fetch_extra=_fetch_tie_pool if isinstance(active_q, dict) else None,
+                )
             if not matched and isinstance(active_q, dict) and s_rows and len(s_rows) == len(l_rows):
                 _, _, _, _, has_ob, _, _ = _sql_meta(stmt_sql)
-                clean_sql = re.sub(r"(?:\s|--[^\n]*|/\*[\s\S]*?\*/|;)+$", "", stmt_sql)
+                base_stmt = pinned_stmt if pinned_mode else stmt_sql
+                clean_sql = re.sub(r"(?:\s|--[^\n]*|/\*[\s\S]*?\*/|;)+$", "", base_stmt)
                 lim_match = re.search(r"(?i)\bLIMIT\s+(\d+)(?:\s+OFFSET\s+\d+)?\s*$", clean_sql)
                 if not has_ob and lim_match:
                     lim_n = int(lim_match.group(1))
                     no_lim = clean_sql[: lim_match.start()].rstrip()
                     ord_cols = ", ".join(str(i) for i in range(1, len(s_rows[0]) + 1))
-                    det_sql = f"SELECT * FROM (\n{no_lim}\n) AS _lkr_det ORDER BY {ord_cols} LIMIT {lim_n}"
-                    det_body = {"sql": det_sql, **({"connection_name": c_name} if c_name else {})}
-                    det_slug = (create_sql_query(body=det_body) or {}).get("slug")  # ty: ignore[unresolved-reference]
-                    if det_slug:
+                    ds_rows = _exec_sql(f"SELECT * FROM (\n{no_lim}\n) AS _lkr_det ORDER BY {ord_cols} LIMIT {lim_n}")
+                    if ds_rows is not None:
                         drop_k = _drop_grain_keys(s_rows, l_rows, [f.lower() for f in q_fields])
                         sort_f = [f for f in q_fields if f.lower() not in drop_k][: len(s_rows[0])]
                         det_q = {**active_q, "sorts": [f"{f} asc" for f in sort_f]}
-                        ds = run_sql_query(slug=det_slug, result_format="json")  # ty: ignore[unresolved-reference]
-                        dl = run_inline_query(result_format="json", body=det_q)  # ty: ignore[unresolved-reference]
+                        dl_rows = (_run_pinned_q(aq=det_q) if pinned_mode else _run_looker_live(_aq=det_q)[1]) or []
                         matched, mismatches = compare_row_sets(
-                            json.loads(ds) if isinstance(ds, str) else (ds or []),
-                            json.loads(dl) if isinstance(dl, str) else (dl or []),
+                            ds_rows,
+                            dl_rows,
                             sql=f"{no_lim} ORDER BY {ord_cols} LIMIT {lim_n}",
                             looker_fields=q_fields,
                             fetch_extra=lambda new_lim, _dq=det_q: _fetch_tie_pool(new_lim, _dq),
