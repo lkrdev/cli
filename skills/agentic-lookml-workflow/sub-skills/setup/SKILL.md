@@ -4,7 +4,7 @@ description: >
   Repository and Looker project bootstrap sub-skill for `agentic-lookml-workflow`.
   Installs and verifies required packages (`uv`, `lkr-dev-cli[tools,code-mode,parse]`, `gh`, `jq`)
   and companion skills (`agentic-lookml`, `generate-view-from-table`, `lkr-code-mode`, `lkr-project-helper`,
-  `lookml`, `lookml-field-curation`), authenticates in `--dev` mode, ensures a LookML `.model.lkml` file
+  `looker-expressions`, `looker-filters`, `lookml`, `lookml-field-curation`), authenticates in `--dev` mode, ensures a LookML `.model.lkml` file
   exists (asking for `CONNECTION_NAME` or listing instance connections, defaulting `MODEL_NAME` to `PROJECT_ID`
   with hyphens replaced by underscores, and registering the model via `create_lookml_model`), installs
   `.github/workflows/lookml-pr-checks.yml`, and syncs the Looker production branch with GitHub.

@@ -511,6 +511,8 @@ def test_setup_repo_skip_preflight_and_opt_in_secrets_and_preflight_fast_path(tm
         "generate-view-from-table",
         "lkr-code-mode",
         "lkr-project-helper",
+        "looker-expressions",
+        "looker-filters",
         "lookml",
         "lookml-field-curation",
     ):

@@ -72,6 +72,8 @@ if [[ ! -d "skills/agentic-lookml-workflow" ]]; then
     "generate-view-from-table"
     "lkr-code-mode"
     "lkr-project-helper"
+    "looker-expressions"
+    "looker-filters"
     "lookml"
     "lookml-field-curation"
   )

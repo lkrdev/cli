@@ -43,7 +43,7 @@ GROUP BY 1
 
 ### Run the Canonical Looker Query translation gate first
 
-If the outer query only averages or totals rows that are already displayed at the inner `GROUP BY` grain in the visualization (for example, `AVG(daily_revenue)` on a daily chart), express the base dimensions and measures as a standard Silver Explore `query:` Quick Start and apply the Table Calculation (`mean(${orders.total_revenue})`) in the Query or Dashboard Layer (`WriteQuery` payload or dashboard element, never inside the `explore: { query: {} }` block) with zero derived tables.
+If the outer query only averages or totals rows that are already displayed at the inner `GROUP BY` grain in the visualization (for example, `AVG(daily_revenue)` on a daily chart), express the base dimensions and measures as a standard Silver Explore `query:` Quick Start and apply the Table Calculation (`mean(${orders.total_revenue})`, see [looker-expressions](../../looker-expressions/SKILL.md)) in the Query or Dashboard Layer (`run_inline_query` / `create_query` `body` or dashboard element, never inside the `explore: { query: {} }` block) with zero derived tables.
 
 ### Prefer a consolidated Silver Native Derived Table (`explore_source:`)
 
