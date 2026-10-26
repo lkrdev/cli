@@ -483,15 +483,14 @@ def main():
                     fp = attempt
                     for ch in str(l_raw):
                         fp = (fp * 131 + ord(ch)) & 0xFFFFFFFFFFFFFFFF
-                    live_slug = sql_slug
                     try:
                         live_body = {
                             "sql": f"{stmt_sql}\n-- parity-live-{fp:x}",
                             **({"connection_name": c_name} if c_name else {}),
                         }
                         live_slug = (create_sql_query(body=live_body) or {}).get("slug") or sql_slug  # ty: ignore[unresolved-reference]
-                    except NameError:
-                        pass
+                    except Exception:
+                        live_slug = sql_slug
                     s_raw = run_sql_query(slug=live_slug, result_format="json")  # ty: ignore[unresolved-reference]
                     s_rows = json.loads(s_raw) if isinstance(s_raw, str) else (s_raw or [])
                     matched, mismatches = compare_row_sets(
