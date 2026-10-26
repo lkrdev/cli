@@ -90,6 +90,8 @@ def _to_float(v):
 
 
 def _sql_round(f: float, digits: int = 4) -> float:
+    if f - f != 0:
+        return f
     p = 10.0**digits
     return round((int(abs(f) * p + 0.5 + 1e-12) / p) * (-1.0 if f < 0 else 1.0), digits)
 

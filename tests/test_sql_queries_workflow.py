@@ -1478,6 +1478,7 @@ def test_pre_gate_half_away_round_cte_pct_table_calc_backing_and_test_gate():
         sql="SELECT country, ROUND(AVG(age), 1) AS avg_age FROM u GROUP BY 1",
         looker_fields=["u.country", "u.avg_resident_age"],
     ) == (True, [])
+    assert normalize_val(float("inf")) == float("inf")
 
     dfs_shadow = [{"table_calculation": "unsold_units", "expression": "${pif.unsold_units} + ${p.count}"}]
     assert compare_row_sets(
