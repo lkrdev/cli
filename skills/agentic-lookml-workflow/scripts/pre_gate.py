@@ -295,14 +295,14 @@ def compare_row_sets(
                 row_bad = True
         if row_bad:
             bad_idxs.append(idx)
-    if mismatches and fetch_extra is not None and tied_ob and s_ob and limit_n == len(sr_leaves) <= 450:
+    if mismatches and fetch_extra is not None and tied_ob and s_ob and limit_n == len(sr_leaves) < 500:
         last_key = s_ob[-1]
         last_start = len(s_ob) - 1
         while last_start > 0 and s_ob[last_start - 1] == last_key:
             last_start -= 1
         if bad_idxs[0] >= last_start:
             try:
-                extra_rows = fetch_extra(min(limit_n + 50, 500)) or []
+                extra_rows = fetch_extra(500) or []
             except Exception:
                 extra_rows = []
             pool = [
