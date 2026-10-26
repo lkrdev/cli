@@ -1281,6 +1281,55 @@ def test_pre_gate_volatile_current_timestamp_pins_compiled_sql_and_falls_back_fo
     assert res_bad["passed"] is False
 
 
+def test_pre_gate_native_case_ordinal_prefix_stripping_and_order_enforcement():
+    sql = "SELECT CASE WHEN x < 10 THEN '1. North' ELSE '2. Europe' END AS region, country, COUNT(id) AS cnt FROM u GROUP BY 1, 2 ORDER BY region, cnt DESC"
+    s_rows = [
+        {"region": "1. North", "country": "US", "cnt": 50},
+        {"region": "2. Europe", "country": "UK", "cnt": 20},
+        {"region": "2. Europe", "country": "FR", "cnt": 20},
+    ]
+    l_rows = [
+        {"u.region": "North", "u.country": "US", "u.cnt": 50},
+        {"u.region": "Europe", "u.country": "FR", "u.cnt": 20},
+        {"u.region": "Europe", "u.country": "UK", "u.cnt": 20},
+    ]
+    res = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {
+            "data_json": json.dumps({
+                "run_id": "r_ord",
+                "queries": [
+                    {
+                        "query_index": 0,
+                        "sql_query_id": "s_ord",
+                        "sql": sql,
+                        "inline_query": {"model": "m", "view": "u", "fields": ["u.region", "u.country", "u.cnt"]},
+                    }
+                ],
+            })
+        },
+        {
+            "run_sql_query": lambda **_kw: json.dumps(s_rows),
+            "run_inline_query": lambda **_kw: json.dumps(l_rows),
+        },
+    )
+    assert res["passed"] is True
+
+    # Wrong LookML case: branch order (e.g. bucket #1 accidentally placed in else:) must still fail ORDER BY parity
+    bad_order = [l_rows[1], l_rows[2], l_rows[0]]
+    ok_bad, diffs_bad = compare_row_sets(s_rows, bad_order, sql=sql, looker_fields=["u.region", "u.country", "u.cnt"])
+    assert ok_bad is False and "SQL=North, Looker=Europe" in diffs_bad[0]
+
+    # Legacy LookML dimensions that retain '1. ' prefixes still match 1-to-1
+    ok_leg, _ = compare_row_sets(
+        [{"tier": "1. Impulse"}],
+        [{"p.tier": "1. Impulse"}],
+        sql="SELECT tier FROM p ORDER BY tier",
+        looker_fields=["p.tier"],
+    )
+    assert ok_leg is True
+
+
 
 
 
