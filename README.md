@@ -474,11 +474,11 @@ Options:
 - `--model-offset` slices the table output to show different sets of models (the table shows 5 models at a time).
 
 
-## Gemini Enterprise agents (`lkr tools agents`)
+## Gemini Enterprise and A2A agents (`lkr tools agents`)
 
-Looker's UI only supports connecting one default Gemini Enterprise (Discovery Engine) app per Looker instance. `lkr tools agents` lets you publish, list, and delete Looker Conversational Analytics (CA) agents across multiple Gemini Enterprise apps, GCP projects, and locations (`global`, `us`, `eu`).
+Looker's UI only supports connecting one default Gemini Enterprise (Discovery Engine) app per Looker instance. `lkr tools agents` lets you publish, list, and delete Looker Conversational Analytics (CA) agents across multiple Gemini Enterprise apps, GCP projects, and locations (`global`, `us`, `eu`), and generate A2A `0.3.0` Agent Cards.
 
-For all flags and options, see the [lkr tools agents CLI docs](./lkr.md#lkr-tools-agents) ([publish](./lkr.md#lkr-tools-agents-publish), [list](./lkr.md#lkr-tools-agents-list), [delete](./lkr.md#lkr-tools-agents-delete)).
+For all flags and options, see the [lkr tools agents CLI docs](./lkr.md#lkr-tools-agents) ([publish](./lkr.md#lkr-tools-agents-publish), [list](./lkr.md#lkr-tools-agents-list), [delete](./lkr.md#lkr-tools-agents-delete), [card](./lkr.md#lkr-tools-agents-card)).
 
 > [!IMPORTANT]
 > Before publishing an agent, make sure **Admin > Gemini in Looker > Publish to Gemini Enterprise** is enabled on your Looker instance, and that the Looker service account has IAM permissions (Discovery Engine Admin) on the target GCP project plus a Gemini Enterprise user license in **Gemini Enterprise > Manage Users** (or "Assign licenses automatically" enabled on the app).
@@ -532,6 +532,91 @@ uvx lkr-dev-cli tools agents delete <agent_id> \
   --engine-id <gemini_enterprise_engine_id> \
   --gcp-token $(gcloud auth print-access-token)
 ```
+
+### Generating an A2A Agent Card
+
+`lkr tools agents card` generates an **Agent-to-Agent** (**A2A**) `0.3.0` Agent Card JSON file (`looker-<agent_id>-agent-card.json`) from your Looker agent's name, description, Explore sources, and active golden queries (omitting internal instructions unless `--include-instructions` is set, or replacing `skills[]` via `--skills-file`). Looker `26.10.0+` is required (`26.2.0` added the initial route and `26.6.0` added SSE, with default enablement and instruction support in `26.10.0+`).
+
+```bash
+# Fetch agent metadata from Looker and write looker-<agent_id>-agent-card.json (OAuth2 default)
+uvx lkr-dev-cli tools agents card <agent_id>
+
+# Build a bearer-token card offline (zero Looker API calls) and print to stdout
+uvx lkr-dev-cli --base-url https://acme.cloud.looker.com \
+  tools agents card <agent_id> --offline --auth bearer -o -
+```
+
+Example `looker-<agent_id>-agent-card.json` output (`--auth oauth2`, default):
+
+```json
+{
+  "protocolVersion": "0.3.0",
+  "name": "eCommerce Analytics Agent",
+  "description": "Answers order and revenue questions.",
+  "url": "https://acme.cloud.looker.com/api/4.0/a2a/agents/<agent_id>",
+  "version": "1.0.0",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false
+  },
+  "defaultInputModes": [
+    "text/plain",
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "text/plain",
+    "application/json",
+    "text/event-stream"
+  ],
+  "skills": [
+    {
+      "id": "ecommerce-analytics-agent",
+      "name": "eCommerce Analytics Agent",
+      "description": "Answers order and revenue questions.",
+      "tags": [
+        "looker",
+        "conversational-analytics",
+        "thelook",
+        "order_items"
+      ],
+      "examples": [
+        "What was revenue last month?"
+      ]
+    }
+  ],
+  "securitySchemes": {
+    "LookerOAuth2": {
+      "type": "oauth2",
+      "flows": {
+        "authorizationCode": {
+          "authorizationUrl": "https://acme.cloud.looker.com/auth",
+          "tokenUrl": "https://acme.cloud.looker.com/api/token",
+          "scopes": {
+            "cors_api": "Looker API access"
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "LookerOAuth2": [
+        "cors_api"
+      ]
+    }
+  ]
+}
+```
+
+#### Connecting an app with the Agent Card
+
+1. Enable **Admin > Platform > Gemini in Looker > Publish to Gemini Enterprise** on your Looker `26.10.0+` instance.
+2. Run `uvx lkr-dev-cli tools agents card <agent_id>` to write `looker-<agent_id>-agent-card.json` (`url` intentionally omits `/chat` to target Looker's open A2A `0.3.0` JSON-RPC + SSE endpoint).
+3. Authenticate your client to Looker:
+   - **3LO OAuth2 PKCE (`--auth oauth2`, default)**: Register a public OAuth client via `register_oauth_client_app` with your `redirect_uri` and run PKCE (`S256`, scope `cors_api`) against `<base_url>/auth` and `<base_url>/api/token`. Looker public PKCE clients have no `client_secret`—if a host platform requires a non-empty `client_secret` field alongside PKCE, pass any placeholder string (or use `lkr tools agents publish` for Gemini Enterprise).
+   - **Bearer token (`--auth bearer`)**: Exchange API credentials at `POST <base_url>/api/4.0/login` for an `access_token`.
+4. Load `looker-<agent_id>-agent-card.json` in your A2A client (`a2a-sdk` or ADK `RemoteA2aAgent`), pass `Authorization: Bearer <access_token>`, omit `params.message.contextId` on turn 1, and pass back Looker's returned `contextId` on follow-up turns.
+5. *(Optional)* Upload `looker-<agent_id>-agent-card.json` to GCP Agent Registry as an `a2a-agent-card` spec (`card` logs a warning if the file exceeds Agent Registry's 10,240-byte / 10 KiB limit).
 
 
 ## Optional dependencies

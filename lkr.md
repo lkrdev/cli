@@ -444,6 +444,7 @@ $ lkr tools agents [OPTIONS] COMMAND [ARGS]...
 * `publish`: Publish a Looker CA agent to a Gemini...
 * `delete`: Unpublish/delete a Looker CA agent from...
 * `list`: List and deduplicate published agents...
+* `card`: Generate and save an A2A 0.3.0 Agent Card...
 
 #### `lkr tools agents publish`
 
@@ -512,6 +513,31 @@ $ lkr tools agents list [OPTIONS]
 * `--looker-api`: Scan all Looker agents sequentially via Looker API (paced at 10 req/min) when --gcp-token is omitted
 * `--update-artifact / --no-update-artifact`: Sync discovered publication states (including Gemini UI deletions) back to the Looker artifact store  [default: update-artifact]
 * `--json`: Output deduplicated agent publications as JSON
+* `--help`: Show this message and exit.
+
+#### `lkr tools agents card`
+
+Generate and save an A2A 0.3.0 Agent Card JSON for a Looker CA agent.
+
+**Usage**:
+
+```console
+$ lkr tools agents card [OPTIONS] {agent_id}
+```
+
+**Arguments**:
+
+* `agent_id`: Looker Conversational Analytics Agent ID (GUID)  [required]
+
+**Options**:
+
+* `-o, --output <path>`: Output file path (&#x27;-&#x27; for stdout)
+* `--offline`: Skip Looker API call
+* `--name <str>`: Override card name
+* `--description <str>`: Override card description
+* `--auth <oauth2|bearer>`: Security scheme  [default: oauth2]
+* `--skills-file <file>`: JSON file with custom A2A skills array
+* `--include-instructions`: Append Looker context.instructions to skill description
 * `--help`: Show this message and exit.
 
 ## `lkr code-mode`
