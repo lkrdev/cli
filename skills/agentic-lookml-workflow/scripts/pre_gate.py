@@ -206,6 +206,8 @@ def _parse_ts(v):
 
 
 def _norm_ts(v, ts_mode: str | None):
+    if ts_mode == "bool":
+        return {"true": True, "yes": True, "false": False, "no": False}.get(v.strip().lower(), v) if isinstance(v, str) else v
     tp = _parse_ts(v) if ts_mode else None
     return (tp[0] if ts_mode == "sec" or not tp[1] else f"{tp[0]}.{tp[1]}") if tp else v
 
@@ -314,10 +316,15 @@ def compare_row_sets(
             l_abs = sum(abs(f) for r in lr_leaves for f in [_to_float(r.get(lk))] if f is not None)
             if l_abs > 0 and abs(s_abs - l_abs * 100.0) < abs(s_abs - l_abs):
                 mult = 100.0
-        s_ts = [_parse_ts(r.get(sk)) for r in sr_leaves if r.get(sk) is not None]
-        l_ts = [_parse_ts(r.get(lk)) for r in lr_leaves if r.get(lk) is not None]
+        s_vals = [r[sk] for r in sr_leaves if r.get(sk) is not None]
+        l_vals = [r[lk] for r in lr_leaves if r.get(lk) is not None]
+        s_ts, l_ts = [_parse_ts(x) for x in s_vals], [_parse_ts(x) for x in l_vals]
         is_ts = bool(s_ts and l_ts) and all(x is not None for x in s_ts + l_ts)
-        ts_mode = ("sec" if not any(x[1] for x in l_ts if x) else "sub") if is_ts else None
+        is_b = bool(s_vals and l_vals) and all(
+            isinstance(x, bool) or (isinstance(x, str) and x.strip().lower() in ("true", "false", "yes", "no"))
+            for x in s_vals + l_vals
+        )
+        ts_mode = "bool" if is_b else (("sec" if not any(x[1] for x in l_ts if x) else "sub") if is_ts else None)
         same_leaf = lk == sk or (lk.split(".")[-1] == sk and len(l_by_leaf.get(sk, ())) == 1)
         cols.append((sk if same_leaf else f"{sk}->{lk}", sk, lk, digits, mult, ts_mode))
     order_idxs: list[int] = []

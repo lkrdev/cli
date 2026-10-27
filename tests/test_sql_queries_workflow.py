@@ -1561,3 +1561,18 @@ def test_create_github_pr_body_cap_and_intact_data_json(tmp_path: Path):
     (sdir / "data.json").write_text(json.dumps({"run_id": "r1", "git_remote_url": "o/r", "branch_name": "b1", "queries": queries * 2}))
     subprocess.check_output(["bash", str(SCRIPTS_DIR / "create_github_pr.sh"), str(sdir)], env=env, text=True)
     assert "data.json omitted" in Path(f"{gh}.create").read_text() and len(Path(f"{gh}.create").read_text()) < 65536
+
+
+def test_pre_gate_compare_row_sets_normalizes_sql_bool_and_looker_yesno():
+    ok, diffs = compare_row_sets(
+        [{"path": "a->b", "converted": "false"}, {"path": "a->c", "converted": "true"}],
+        [{"f.path": "a->b", "f.is_converted": "No"}, {"f.path": "a->c", "f.is_converted": "Yes"}],
+        sql="SELECT path, COUNTIF(x > 0) > 0 AS converted FROM t GROUP BY 1 ORDER BY converted ASC",
+        looker_fields=["f.path", "f.is_converted"],
+    )
+    assert ok is True and diffs == []
+    ok_bad, _ = compare_row_sets(
+        [{"converted": True}],
+        [{"f.is_converted": "No"}],
+    )
+    assert ok_bad is False
