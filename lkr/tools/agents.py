@@ -1075,7 +1075,9 @@ def card_agent_command(
 
     if skills_file:
         if project_id:
-            assert sdk is not None
+            if sdk is None:
+                logger.error("Looker SDK is not initialized.")
+                raise typer.Exit(1)
             try:
                 raw_skills = sdk.get_file_content(
                     project_id=project_id, file_path=skills_file.lstrip("/")
