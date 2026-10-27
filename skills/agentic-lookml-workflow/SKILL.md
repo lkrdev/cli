@@ -69,13 +69,13 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
       ([.queries[].parsed_query.tables[]?.name // empty] | map(select(type == "string")) | unique) as $qt |
       ([.queries[].explores[]? | select((.file // "") | startswith("gold/")).explore_name] | unique) as $gold | {
         tests: ([.queries[].tests[]?.file // empty | sub("^tests/"; "") | sub("\\.test\\.lkml$"; "")] | unique),
-        explores: ([.queries[].explores[]? | select(((.file // "") | startswith("gold/") | not) and (((.file // "") | startswith("bronze/") and endswith("_base.explore.lkml")) | not))] | group_by([.explore_name, .file]) | map("\(.[0].file | split("/")[0]):\(.[0].explore_name):\([.[].join_name // empty] | unique | join(","))")),
+        explores: ([.queries[].explores[]? | select(((.file // "") | startswith("gold/") | not) and (((.file // "") | startswith("bronze/") and endswith("_base.explore.lkml")) | not))] | group_by([.explore_name, .file]) | map("\((.[0].file // "") | split("/")[0]):\(.[0].explore_name):\([.[].join_name // empty] | unique | join(","))")),
         gold_explores: ([.queries[].explores[]? | select((.file // "") | startswith("gold/")).explore_name] | unique),
         missing_joins: ([.queries[].join_analysis[]? | select((.explore_name as $e | ($gold | index($e)) == null) and .status == "missing_join" and (.explore_name as $en | ($qt | index($en)) != null)) | "\(.explore_name):\((.sql_join.table? // .sql_join // "") | gsub("[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_]+\\.|`"; ""))"] | unique),
         queries: [.queries[] | {tables: ([.parsed_query.tables[]?.name] | unique), ctes: (.parsed_query.ctes // []), joins: [.parsed_query.joins[]?.table | gsub("[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_]+\\.|`"; "")]}],
         unmodeled_db_columns: ([.queries[].views[]? | select(((.unmodeled_db_columns // []) | length) > 0) | {view_name, unmodeled_db_columns}] | unique_by(.view_name)),
         views: ([.queries[].views[]? | select((.file // "") | startswith("gold/") | not)] | group_by(.view_name) | map(([.[].fields[]?] | unique_by(.field_name)) as $fs | ((.[0].view_name // "") as $vn | (($qt | index($vn)) != null) or ($fs | length) <= 12) as $full |
-          "\(.[0].file | split("/")[0]):\(.[0].view_name):\([$fs[] | select(((.hidden // false) | not) or .primary_key) | select($full or .primary_key or .field_type == "measure") | "\(.field_name)\(if .primary_key then ":pk" elif .field_type == "measure" then ":m" elif ((.lookml_type // .type // "") | startswith("duration")) then ":dur" else "" end)"] | join(","))"
+          "\((.[0].file // "") | split("/")[0]):\(.[0].view_name):\([$fs[] | select(((.hidden // false) | not) or .primary_key) | select($full or .primary_key or .field_type == "measure") | "\(.field_name)\(if .primary_key then ":pk" elif .field_type == "measure" then ":m" elif ((.lookml_type // .type // "") | startswith("duration")) then ":dur" else "" end)"] | join(","))"
         ))
       }
     ' "./data/$RUN_ID/compare_initial.json" | tee "./data/$RUN_ID/compare_summary.json" | head -c 9500 || true
