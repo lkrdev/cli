@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1018,29 +1019,31 @@ def card_agent_command(
         typer.Option("--auth", help="Security scheme"),
     ] = "oauth2",
     skills_file: Annotated[
-        Path | None,
+        str | None,
         typer.Option(
             "--skills-file",
-            exists=True,
-            dir_okay=False,
-            readable=True,
-            help="JSON file with custom A2A skills array",
+            help="Local path or Looker project path (with --project-id) to JSON skill(s)",
         ),
     ] = None,
-    include_instructions: Annotated[
-        bool,
+    project_id: Annotated[
+        str | None,
         typer.Option(
-            "--include-instructions",
-            help="Append Looker context.instructions to skill description",
+            "--project-id",
+            help="Looker project ID to read --skills-file from",
         ),
-    ] = False,
+    ] = None,
 ) -> None:
     """Generate and save an A2A 0.3.0 Agent Card JSON for a Looker CA agent."""
     if not re.fullmatch(r"[\w-]+", agent_id := agent_id.strip()):
         raise typer.BadParameter("Invalid Looker agent ID.")
+    if offline and project_id:
+        raise typer.BadParameter("--project-id cannot be used with --offline.")
+    if project_id and not skills_file:
+        raise typer.BadParameter("--project-id requires --skills-file.")
 
     auth_obj = None if offline else get_auth(ctx)
-    agent = None if auth_obj is None else auth_obj.get_current_sdk().get_agent(agent_id)
+    sdk = None if auth_obj is None else auth_obj.get_current_sdk()
+    agent = None if sdk is None else sdk.get_agent(agent_id)
 
     raw_url = get(ctx, ["obj", "ctx_lkr", "base_url"]) or os.environ.get(
         "LOOKERSDK_BASE_URL"
@@ -1058,31 +1061,64 @@ def card_agent_command(
 
     resolved_name = (name or get(agent, "name") or f"Looker Agent {agent_id}").strip()
     resolved_desc = (description or get(agent, "description") or f"Looker CA agent ({agent_id})").strip()
+    src_tags = (str(get(s, k) or "").strip() for s in (get(agent, "sources") or []) for k in ("model", "explore"))
+    tags = list(dict.fromkeys(["looker", "conversational-analytics", *(t for t in src_tags if t)]))
+    qs = (str(q).strip() for gq in (get(agent, "golden_queries") or []) if get(gq, "is_active") is not False for q in (get(gq, "questions") or []))
+    examples = list(dict.fromkeys(q for q in qs if q))
+    base_skill: dict[str, Any] = {
+        "id": re.sub(r"[^a-z0-9]+", "-", resolved_name.lower()).strip("-") or "looker-ca-agent",
+        "name": resolved_name,
+        "description": resolved_desc,
+        "tags": tags,
+        **({"examples": examples} if examples else {}),
+    }
 
     if skills_file:
+        if project_id:
+            assert sdk is not None
+            try:
+                raw_skills = sdk.get_file_content(
+                    project_id=project_id, file_path=skills_file.lstrip("/")
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to read '{skills_file}' from Looker project '{project_id}' (pass lkr --dev if on dev branch): {e}"
+                )
+                raise typer.Exit(1) from e
+        else:
+            try:
+                raw_skills = Path(skills_file).read_text(encoding="utf-8")
+            except OSError as e:
+                raise typer.BadParameter(f"Cannot read --skills-file: {e}") from e
         try:
-            skills = json.loads(skills_file.read_text(encoding="utf-8"))
+            parsed = json.loads(raw_skills)
         except json.JSONDecodeError as e:
             raise typer.BadParameter(f"Invalid JSON in --skills-file: {e}") from e
-        if not isinstance(skills, list):
-            raise typer.BadParameter("--skills-file must contain a JSON array of skill objects.")
-    else:
-        src_tags = (str(get(s, k) or "").strip() for s in (get(agent, "sources") or []) for k in ("model", "explore"))
-        tags = list(dict.fromkeys(["looker", "conversational-analytics", *(t for t in src_tags if t)]))
-        qs = (str(q).strip() for gq in (get(agent, "golden_queries") or []) if get(gq, "is_active") is not False for q in (get(gq, "questions") or []))
-        examples = list(dict.fromkeys(q for q in qs if q))
-        skill_desc = resolved_desc
-        if include_instructions and (instr := str(get(agent, ["context", "instructions"]) or "").strip()):
-            skill_desc = f"{resolved_desc}\n\nInstructions: {instr}"
+        items = [parsed] if isinstance(parsed, dict) else parsed
+        if not isinstance(items, list) or not items or not all(isinstance(s, dict) for s in items):
+            raise typer.BadParameter(
+                "--skills-file must contain a JSON skill object or non-empty array of skill objects."
+            )
         skills = [
-            {
-                "id": re.sub(r"[^a-z0-9]+", "-", resolved_name.lower()).strip("-") or "looker-ca-agent",
-                "name": resolved_name,
-                "description": skill_desc,
-                "tags": tags,
-                **({"examples": examples} if examples else {}),
-            }
+            {**base_skill, **{k: v for k, v in s.items() if v is not None}}
+            for s in items
         ]
+    else:
+        if not (skill_desc := (description or "").strip()):
+            try:
+                skill_desc = (
+                    typer.prompt(
+                        "Skill routing description (when should another agent call this endpoint?)",
+                        default=resolved_desc,
+                        err=True,
+                    ).strip()
+                    or resolved_desc
+                )
+            except (RuntimeError, EOFError):
+                if sys.stdin.isatty():
+                    raise
+                skill_desc = resolved_desc
+        skills = [{**base_skill, "description": skill_desc}]
 
     # Omit /chat: /api/4.0/a2a/agents/<id> serves open A2A 0.3.0 JSON-RPC + SSE.
     card: dict[str, Any] = {
