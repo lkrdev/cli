@@ -57,7 +57,7 @@ Keep `silver/explores/orders.explore.lkml` strictly limited to `PK = FK` equalit
 ### Verify disjoint versus overlapping intervals
 
 1. For disjoint intervals (clean SCD Type 2 tables where one order matches at most one interval), join directly in `gold/explores/` with `relationship: many_to_one`.
-2. For overlapping intervals (where one order can match multiple intervals or campaigns), set `relationship: one_to_many` (or `many_to_many`) in `gold/explores/` so Looker activates symmetric aggregates on `orders` measures.
+2. For overlapping intervals (where one order can match multiple intervals or campaigns), set `relationship: one_to_many` (or `many_to_many`) in `gold/explores/` so Looker activates symmetric aggregates on `orders` measures; when computing pair-grain measures across a `1:M` self-join (`AVG(TIMESTAMP_DIFF(o2.created_at, o1.created_at, HOUR) / 24.0)`), bare-join a Gold helper view declaring composite pair PK `CONCAT(CAST(${base.pk} AS STRING), '_', CAST(COALESCE(${alias.pk}, 0) AS STRING))`.
 3. For point-in-time `AS OF` attribution (keeping only the single most recent prior match), create a Gold Derived Table (`gold/order_latest_touch_map.view.lkml` using `${view.SQL_TABLE_NAME}` and `${view.field}` for every table and column reference) that resolves the `1:1` mapping (`order_id` to `latest_touch_id` via `QUALIFY ROW_NUMBER() = 1`), then join it into `gold/explores/`.
 
 ### Calendar spine table (`bronze/calendar_dates.view.lkml`)
