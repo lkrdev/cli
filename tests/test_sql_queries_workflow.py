@@ -1526,6 +1526,7 @@ def test_pre_gate_half_away_round_cte_pct_table_calc_backing_and_test_gate():
     assert res["passed"] is False and tq_ran == [] and "test_query_results" not in res
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX bash script test")
 def test_create_github_pr_body_cap_and_intact_data_json(tmp_path: Path):
     sdir = tmp_path / "run"
     sdir.mkdir()
@@ -1557,3 +1558,6 @@ def test_create_github_pr_body_cap_and_intact_data_json(tmp_path: Path):
     assert m is not None and len(json.loads(m.group(1))["queries"]) == 14
     comment_body = Path(f"{gh}.comment").read_text()
     assert "input.sql" in comment_body and "snapshot_check.json" in comment_body
+    (sdir / "data.json").write_text(json.dumps({"run_id": "r1", "git_remote_url": "o/r", "branch_name": "b1", "queries": queries * 2}))
+    subprocess.check_output(["bash", str(SCRIPTS_DIR / "create_github_pr.sh"), str(sdir)], env=env, text=True)
+    assert "data.json omitted" in Path(f"{gh}.create").read_text() and len(Path(f"{gh}.create").read_text()) < 65536

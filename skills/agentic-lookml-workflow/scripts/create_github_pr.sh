@@ -65,7 +65,11 @@ ARTIFACTS_SECTION=$'\n\n### Session Artifacts'
 ARTIFACTS_SECTION+="$(append_details_block "$SESSION_DIR/metrics.md" "metrics.md" "markdown" 8000)"
 if [[ -f "$DATA_JSON" ]]; then
   DATA_COMPACT=$(jq -c 'del(.test_query_results, .queries[]?.sql_rows)' "$DATA_JSON" 2>/dev/null || cat "$DATA_JSON")
-  ARTIFACTS_SECTION+="$(printf '\n\n<details>\n<summary><code>data.json</code></summary>\n\n```json\n%s\n```\n</details>' "$DATA_COMPACT")"
+  if (( ${#DATA_COMPACT} > 50000 )); then
+    ARTIFACTS_SECTION+=$'\n\n*(data.json omitted from PR description as it exceeds 50,000 characters.)*'
+  else
+    ARTIFACTS_SECTION+="$(printf '\n\n<details>\n<summary><code>data.json</code></summary>\n\n```json\n%s\n```\n</details>' "$DATA_COMPACT")"
+  fi
 fi
 
 PR_HEADER="Automated SQL-to-LookML refactor (\`$RUN_ID\`).$SNAPSHOT_SECTION$QUERIES_TABLE"
