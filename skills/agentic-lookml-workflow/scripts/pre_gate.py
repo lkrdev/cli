@@ -382,7 +382,14 @@ def compare_row_sets(
         for label, sk, lk, digits, mult, tm in cols:
             sv, lv_cmp = _cmp_pair(sr_leaf[sk], lr_leaf[lk], digits, mult, tm)
             if sv != lv_cmp:
-                mismatches.append(f"Row {idx} ({label}): SQL={sv}, Looker={lv_cmp}")
+                rf_s, rf_l = _to_float(sr_leaf[sk]), _to_float(lr_leaf[lk])
+                rl_scaled = rf_l * mult if (rf_l is not None and mult != 1.0) else rf_l
+                raw_hint = (
+                    f" [raw_sql={rf_s}, raw_looker={rl_scaled}]"
+                    if rf_s is not None and rl_scaled is not None and (rf_s != sv or rl_scaled != lv_cmp)
+                    else ""
+                )
+                mismatches.append(f"Row {idx} ({label}): SQL={sv}, Looker={lv_cmp}{raw_hint}")
                 row_bad = True
         if row_bad:
             bad_idxs.append(idx)
@@ -429,12 +436,14 @@ def compare_row_sets(
     return not mismatches, mismatches[:5]
 
 
-def _as_dict(raw):
+def _parse_json_dict(raw, label: str = ""):
+    if not raw or (isinstance(raw, str) and not raw.strip()):
+        return {}, None
     try:
-        parsed = json.loads(raw) if isinstance(raw, str) else (raw or {})
-    except (json.JSONDecodeError, TypeError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, TypeError) as e:
+        return {}, f"Invalid {label}: {e}" if label else str(e)
+    return (parsed, None) if isinstance(parsed, dict) else ({}, f"Invalid {label}: expected JSON object")
 
 
 def _exec_sql(sql_str: str, conn_name: str):
@@ -451,7 +460,7 @@ def _exec_sql(sql_str: str, conn_name: str):
 
 def main():
     try:
-        data = _as_dict(data_json)  # ty: ignore[unresolved-reference]
+        data = _parse_json_dict(data_json)[0]  # ty: ignore[unresolved-reference]
     except NameError:
         data = {}
 
@@ -515,9 +524,12 @@ def main():
 
     # 3. Register inline queries and check parity
     try:
-        payloads = _as_dict(inline_queries_json)  # ty: ignore[unresolved-reference]
+        payloads, iq_err = _parse_json_dict(inline_queries_json, "inline_queries_json")  # ty: ignore[unresolved-reference]
     except NameError:
-        payloads = {}
+        payloads, iq_err = {}, None
+    if iq_err:
+        val_errors.append({"message": iq_err, "severity": "error"})
+        data["validation_errors"] = val_errors
 
     all_matched = True
     queries_list = data.get("queries") or []
@@ -689,9 +701,13 @@ def main():
 
     # 4. Run optional test-slice baseline queries (raw unformatted JSON for .test.lkml assertions)
     try:
-        parsed_tq = _as_dict(test_queries_json)  # ty: ignore[unresolved-reference]
+        parsed_tq, tq_err = _parse_json_dict(test_queries_json, "test_queries_json")  # ty: ignore[unresolved-reference]
     except NameError:
-        parsed_tq = {}
+        parsed_tq, tq_err = {}, None
+    if tq_err:
+        val_errors.append({"message": tq_err, "severity": "error"})
+        data["validation_errors"] = val_errors
+        data["test_query_results"] = {"_error": tq_err}
     test_queries = {str(k): v for k, v in parsed_tq.items() if isinstance(v, dict)}
 
     if test_queries and all_matched and not val_errors:

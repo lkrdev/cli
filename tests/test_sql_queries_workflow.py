@@ -321,6 +321,8 @@ def test_pre_gate_initializes_sql_and_validates_and_checks_parity():
     )
     assert res2["queries"][0]["sql_query_id"] == "sql_slug_2"
     assert res2["queries"][0]["sql"] == "SELECT id, count FROM orders WHERE status = 'Cancelled'"
+    assert res2["passed"] is False
+    assert "inline_queries_json" in res2["validation_errors"][0]["message"]
 
 
 def test_pre_gate_aligns_outer_sql_round_scale_without_loosening_unrounded_columns():
@@ -1576,3 +1578,34 @@ def test_pre_gate_compare_row_sets_normalizes_sql_bool_and_looker_yesno():
         [{"f.is_converted": "No"}],
     )
     assert ok_bad is False
+
+
+def test_pre_gate_malformed_test_queries_json_surfaces_error_and_raw_float_mismatch_hint():
+    ok_f, diffs_f = compare_row_sets(
+        [{"decile": 9, "avg_age": 40.8}],
+        [{"f.decile": 9, "u.avg_age": 40.744732}],
+        sql="SELECT decile, ROUND(AVG(age), 1) AS avg_age FROM u GROUP BY 1",
+        looker_fields=["f.decile", "u.avg_age"],
+    )
+    assert ok_f is False and "[raw_sql=40.8, raw_looker=40.744732]" in diffs_f[0]
+
+    res = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {
+            "raw_sql": "SELECT 1 AS x;",
+            "connection_name": "bq",
+            "data_json": '{"project_id": "p"}',
+            "inline_queries_json": '{"0": {"model": "m", "view": "v", "fields": ["v.x"]}}',
+            "test_queries_json": '{"slice": {"model": "m", "view": "v", "fields": ["v.x"]}}}',
+        },
+        {
+            "create_sql_query": lambda **_kw: {"slug": "s0"},
+            "create_query": lambda **_kw: {"id": "1", "slug": "q0"},
+            "run_sql_query": lambda **_kw: '[{"x": 1}]',
+            "run_inline_query": lambda **_kw: '[{"v.x": 1}]',
+        },
+    )
+    assert res["all_queries_matched"] is True
+    assert res["passed"] is False
+    assert "Invalid test_queries_json" in res["test_query_results"]["_error"]
+    assert any("Invalid test_queries_json" in e["message"] for e in res["validation_errors"])
