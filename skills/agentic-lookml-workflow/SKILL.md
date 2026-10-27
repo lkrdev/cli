@@ -66,13 +66,13 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
     lkr parse lookml snapshot --path "./data/$RUN_ID/lookml" -u >/dev/null
     lkr parse sql-lookml-compare --compact --sql-file "./data/$RUN_ID/input.sql" --path "./data/$RUN_ID/lookml" --output "./data/$RUN_ID/compare_initial.json" >/dev/null
     jq -c '
-      ([.queries[].parsed_query.tables[]?.name] | unique) as $qt |
+      ([.queries[].parsed_query.tables[]?.name // empty] | map(select(type == "string")) | unique) as $qt |
       ([.queries[].explores[]? | select((.file // "") | startswith("gold/")).explore_name] | unique) as $gold | {
         tests: ([.queries[].tests[]? | {file, explore_name}] | unique),
         explores: ([.queries[].explores[]? | select((.file // "") | startswith("gold/") | not)] | group_by([.explore_name, .file]) | map({explore_name: .[0].explore_name, file: .[0].file, extends: .[0].extends, joins: ([.[].join_name // empty] | unique)})),
         join_analysis: ([.queries[].join_analysis[]? | select((.explore_name as $e | ($gold | index($e)) == null) and (.status != "missing_join" or (.explore_name as $en | ($qt | index($en)) != null))) | "\(.explore_name):\((.sql_join.table? // .sql_join // "") | gsub("[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_]+\\."; "")):\(.status):\(.relationship // "")"] | unique),
         queries: [.queries[] | {tables: [.parsed_query.tables[]?.name], ctes: .parsed_query.ctes, joins: [.parsed_query.joins[]?.table]}],
-        views: ([.queries[].views[]? | select((.view_name as $v | ($qt | any(. as $t | $v == $t or ($v | contains($t))))) or ((.unmodeled_db_columns // []) | length > 0))] | group_by(.view_name) | map(([.[].fields[]?] | unique_by(.field_name)) as $fs | ((.[0].view_name as $vn | ($qt | index($vn)) != null) or ($fs | length) <= 20) as $full | {
+        views: ([.queries[].views[]? | select(((.view_name // "") as $v | ($qt | any(. as $t | $v == $t or ($v | contains($t))))) or ((.unmodeled_db_columns // []) | length > 0))] | group_by(.view_name) | map(([.[].fields[]?] | unique_by(.field_name)) as $fs | ((.[0].view_name as $vn | ($qt | index($vn)) != null) or ($fs | length) <= 20) as $full | {
           view_name: .[0].view_name, file: .[0].file,
           unmodeled_db_columns: ([.[].unmodeled_db_columns[]?] | unique),
           fields: ([$fs[] | select($full or .primary_key or .field_type == "measure") | "\(.field_name)\(if .primary_key then ":pk" elif .field_type == "measure" then ":m" elif ((.type // "") | startswith("duration")) then ":dur" else "" end)"] | join(","))
