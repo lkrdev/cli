@@ -1,0 +1,55 @@
+name: CI Windows
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+jobs:
+  validate-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: latest
+
+      - name: Install dependencies
+        run: uv sync --extra all
+
+      - name: Run pytest
+        run: uv run pytest tests/ -v
+
+      - name: Smoke test packaged wheel and file I/O
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          uv build --wheel
+          $dist = "$PWD/dist"
+          cd (mkdir -Force "$env:RUNNER_TEMP/lkr smoke")
+          if ((uvx --find-links $dist --from "lkr-dev-cli[all]==0.0.0" lkr --version) -ne "0.0.0") { throw "wrong wheel" }
+          uv tool install --find-links $dist "lkr-dev-cli[all]==0.0.0"
+          mkdir -Force views\bronze | Out-Null
+          'view: orders { sql_table_name: shop.orders ;; dimension: id { label: "日本語 — 🔍" primary_key: yes sql: ${TABLE}.id ;; } measure: count { type: count } }' > views\bronze\orders.view.lkml
+          "-- 日本語 — 🔍`nSELECT id, COUNT(*) AS c FROM shop.orders GROUP BY 1;" > query.sql
+          '{"name":"orders","label":"日本語 — 🔍","fields":{"dimensions":[{"name":"orders.id","type":"number","label":"日本語 — 🔍"}],"measures":[{"name":"orders.count","type":"count"}]}}' > explore.json
+          '{"model":"shop","view":"orders","fields":["orders.id","orders.count"],"filters":{"orders.id":"1"}}' > query.json
+          lkr --help
+          lkr parse lookml --path views --output lookml.json
+          $raw = Get-Content -Raw -Encoding utf8 lookml.json
+          if (-not ($raw.Contains('"bronze/orders"') -and $raw.Contains('日本語 — 🔍'))) { throw "bad lookml.json" }
+          lkr parse sql-lookml-compare --sql-file query.sql --path views --output compare.json
+          lkr schema generate -m shop -e orders -f explore.json -o schema.json
+          lkr schema validate --schema-file schema.json --query-file query.json
+          lkr code-mode help run_lookml_test
+          lkr code-mode type WriteQuery
