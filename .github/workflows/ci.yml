@@ -75,3 +75,31 @@ jobs:
 
       - name: Run pytest
         run: uv run pytest tests/ -v
+
+      - name: Smoke test packaged wheel in PowerShell
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $dist = Join-Path $env:GITHUB_WORKSPACE "dist"
+          uv build --wheel --out-dir $dist
+
+          $work = Join-Path $env:RUNNER_TEMP "lkr-smoke"
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          Set-Location $work
+
+          $ver = (uvx --find-links $dist --from "lkr-dev-cli[all]==0.0.0" lkr --version | Out-String).Trim()
+          if ($ver -ne "0.0.0") { throw "Expected wheel version 0.0.0, got '$ver'" }
+
+          $env:UV_TOOL_DIR = Join-Path $work "tools"
+          $env:UV_TOOL_BIN_DIR = Join-Path $work "bin"
+          uv tool install --find-links $dist "lkr-dev-cli[all]==0.0.0"
+          $lkr = Join-Path $env:UV_TOOL_BIN_DIR "lkr.exe"
+
+          & $lkr --help
+          & $lkr parse sql --sql "SELECT id, count(*) AS c FROM orders GROUP BY 1"
+          & $lkr parse lookml --lookml "view: orders { dimension: id { primary_key: yes } }"
+          & $lkr code-mode type WriteQuery
+          '{"name":"orders","fields":{"dimensions":[{"name":"orders.id","type":"number"}],"measures":[{"name":"orders.count","type":"count"}]}}' | Set-Content -Path explore.json -Encoding utf8NoBOM
+          '{"model":"shop","view":"orders","fields":["orders.id","orders.count"]}' | Set-Content -Path query.json -Encoding utf8NoBOM
+          & $lkr schema validate -m shop -e orders -f explore.json --query-file query.json
