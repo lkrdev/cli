@@ -467,3 +467,157 @@ def test_project_number_validation_rejects_string_project_id():
     )
     assert res.exit_code != 0
     assert "numeric GCP project number" in (res.stdout + (res.stderr or ""))
+
+
+@patch("lkr.tools.agents.logger")
+@patch("lkr.tools.agents.get_auth")
+def test_agents_card(mock_get_auth, mock_logger, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("LOOKERSDK_BASE_URL", raising=False)
+    sdk = _make_mock_sdk()
+    sdk.get_agent.return_value = {
+        "id": "agent-123",
+        "name": "eCommerce Analytics Agent",
+        "description": "Answers order and revenue questions.",
+        "sources": [
+            {"model": "thelook", "explore": "order_items"},
+            {"model": "thelook", "explore": "users"},
+        ],
+        "golden_queries": [
+            {"is_active": True, "questions": ["What was revenue last month?"]},
+            {"is_active": False, "questions": ["Deprecated question"]},
+        ],
+        "context": {"instructions": "x" * 11_000},
+    }
+    mock_get_auth.return_value.get_current_sdk.return_value = sdk
+    mock_get_auth.return_value._get_current_auth.return_value = MagicMock(
+        base_url="https://demo.cloud.looker.com/"
+    )
+
+    # 1. Default online card: fetches agent, defaults to oauth2 (cors_api), omits instructions, writes file
+    res = runner.invoke(app, ["tools", "agents", "card", "agent-123"])
+    assert res.exit_code == 0
+    sdk.get_agent.assert_called_once_with("agent-123")
+    mock_logger.warning.assert_not_called()
+    card = json.loads(
+        (tmp_path / "looker-agent-123-agent-card.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert (
+        card["url"]
+        == "https://demo.cloud.looker.com/api/4.0/a2a/agents/agent-123"
+    )
+    assert card["security"] == [{"LookerOAuth2": ["cors_api"]}]
+    flow = card["securitySchemes"]["LookerOAuth2"]["flows"][
+        "authorizationCode"
+    ]
+    assert flow["scopes"] == {"cors_api": "Looker API access"}
+    skill = card["skills"][0]
+    assert "xxxx" not in skill["description"]
+    assert skill["tags"] == [
+        "looker",
+        "conversational-analytics",
+        "thelook",
+        "order_items",
+        "users",
+    ]
+    assert skill["examples"] == ["What was revenue last month?"]
+
+    # 2. --include-instructions exceeds 10,240 bytes -> logs warning
+    res_big = runner.invoke(
+        app,
+        [
+            "tools",
+            "agents",
+            "card",
+            "agent-123",
+            "--include-instructions",
+            "-o",
+            "-",
+        ],
+    )
+    assert res_big.exit_code == 0
+    mock_logger.warning.assert_called_once()
+    assert "10,240-byte" in mock_logger.warning.call_args.args[0]
+
+    # 3. Offline bearer + custom skills + -o - (zero SDK/auth calls)
+    mock_get_auth.reset_mock()
+    skills_path = tmp_path / "skills.json"
+    custom_skills = [
+        {
+            "id": "freight",
+            "name": "Freight",
+            "description": "KPIs",
+            "tags": ["freight"],
+        }
+    ]
+    skills_path.write_text(json.dumps(custom_skills), encoding="utf-8")
+    res_off = runner.invoke(
+        app,
+        [
+            "--base-url",
+            "jbhunt.cloud.looker.com",
+            "tools",
+            "agents",
+            "card",
+            "agent-456",
+            "--offline",
+            "--auth",
+            "bearer",
+            "--skills-file",
+            str(skills_path),
+            "-o",
+            "-",
+        ],
+    )
+    assert res_off.exit_code == 0
+    mock_get_auth.assert_not_called()
+    assert not (tmp_path / "looker-agent-456-agent-card.json").exists()
+    card_off = json.loads(res_off.stdout)
+    assert card_off["skills"] == custom_skills
+    assert card_off["security"] == [{"bearerAuth": []}]
+
+    # 4. Path traversal, missing offline base URL (zero auth calls), and invalid skills JSON rejected
+    assert (
+        runner.invoke(
+            app,
+            [
+                "--base-url",
+                "demo.cloud.looker.com",
+                "tools",
+                "agents",
+                "card",
+                "../evil",
+                "--offline",
+            ],
+        ).exit_code
+        != 0
+    )
+    monkeypatch.delenv("LOOKERSDK_BASE_URL", raising=False)
+    assert (
+        runner.invoke(
+            app, ["tools", "agents", "card", "agent-456", "--offline"]
+        ).exit_code
+        != 0
+    )
+    mock_get_auth.assert_not_called()
+
+    bad_skills = tmp_path / "bad_skills.json"
+    bad_skills.write_text("{not-json", encoding="utf-8")
+    res_bad = runner.invoke(
+        app,
+        [
+            "--base-url",
+            "demo.cloud.looker.com",
+            "tools",
+            "agents",
+            "card",
+            "agent-456",
+            "--offline",
+            "--skills-file",
+            str(bad_skills),
+        ],
+    )
+    assert res_bad.exit_code != 0
+    assert "Invalid JSON" in (res_bad.stdout + (res_bad.stderr or ""))

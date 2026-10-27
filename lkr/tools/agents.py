@@ -1,14 +1,16 @@
 import json
+import os
 import re
 import time
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from pathlib import Path
+from typing import Annotated, Any, Literal
 
 import requests
 import typer
 from looker_sdk.sdk.api40 import models as models40
 
-from lkr.auth_service import get_auth
+from lkr.auth_service import get_auth, normalize_base_url
 from lkr.extended_sdk_methods import (
     ExtendedLooker40SDK,
     GeminiEnterpriseAgentRequest,
@@ -985,3 +987,156 @@ def list_agent_artifacts_command(
         typer.echo(f"State:      {r['state']}")
         typer.echo(f"Sources:    {','.join(r.get('discovery_sources') or [])}")
         typer.echo(f"Updated At: {r['updated_at']}")
+
+
+@agents_group.command(name="card")
+def card_agent_command(
+    ctx: typer.Context,
+    agent_id: Annotated[
+        str,
+        typer.Argument(help="Looker Conversational Analytics Agent ID (GUID)"),
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output", "-o", help="Output file path ('-' for stdout)"
+        ),
+    ] = None,
+    offline: Annotated[
+        bool,
+        typer.Option("--offline", help="Skip Looker API call"),
+    ] = False,
+    name: Annotated[
+        str | None, typer.Option("--name", help="Override card name")
+    ] = None,
+    description: Annotated[
+        str | None,
+        typer.Option("--description", help="Override card description"),
+    ] = None,
+    auth: Annotated[
+        Literal["oauth2", "bearer"],
+        typer.Option("--auth", help="Security scheme"),
+    ] = "oauth2",
+    skills_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--skills-file",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="JSON file with custom A2A skills array",
+        ),
+    ] = None,
+    include_instructions: Annotated[
+        bool,
+        typer.Option(
+            "--include-instructions",
+            help="Append Looker context.instructions to skill description",
+        ),
+    ] = False,
+) -> None:
+    """Generate and save an A2A 0.3.0 Agent Card JSON for a Looker CA agent."""
+    if not re.fullmatch(r"[\w-]+", agent_id := agent_id.strip()):
+        raise typer.BadParameter("Invalid Looker agent ID.")
+
+    auth_obj = None if offline else get_auth(ctx)
+    agent = None if auth_obj is None else auth_obj.get_current_sdk().get_agent(agent_id)
+
+    raw_url = get(ctx, ["obj", "ctx_lkr", "base_url"]) or os.environ.get(
+        "LOOKERSDK_BASE_URL"
+    )
+    if not raw_url and auth_obj is not None:
+        try:
+            raw_url = get(auth_obj._get_current_auth(), "base_url")
+        except (Exception, typer.Exit) as e:  # noqa: BLE001
+            logger.debug(f"Could not read base_url from auth: {e}")
+
+    origin, netloc = normalize_base_url(raw_url if isinstance(raw_url, str) else "")
+    if not netloc:
+        logger.error("Could not determine Looker base URL. Pass lkr --base-url <url> ...")
+        raise typer.Exit(1)
+
+    resolved_name = (name or get(agent, "name") or f"Looker Agent {agent_id}").strip()
+    resolved_desc = (description or get(agent, "description") or f"Looker CA agent ({agent_id})").strip()
+
+    if skills_file:
+        try:
+            skills = json.loads(skills_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            raise typer.BadParameter(f"Invalid JSON in --skills-file: {e}") from e
+        if not isinstance(skills, list):
+            raise typer.BadParameter("--skills-file must contain a JSON array of skill objects.")
+    else:
+        src_tags = (str(get(s, k) or "").strip() for s in (get(agent, "sources") or []) for k in ("model", "explore"))
+        tags = list(dict.fromkeys(["looker", "conversational-analytics", *(t for t in src_tags if t)]))
+        qs = (str(q).strip() for gq in (get(agent, "golden_queries") or []) if get(gq, "is_active") is not False for q in (get(gq, "questions") or []))
+        examples = list(dict.fromkeys(q for q in qs if q))
+        skill_desc = resolved_desc
+        if include_instructions and (instr := str(get(agent, ["context", "instructions"]) or "").strip()):
+            skill_desc = f"{resolved_desc}\n\nInstructions: {instr}"
+        skills = [
+            {
+                "id": re.sub(r"[^a-z0-9]+", "-", resolved_name.lower()).strip("-") or "looker-ca-agent",
+                "name": resolved_name,
+                "description": skill_desc,
+                "tags": tags,
+                **({"examples": examples} if examples else {}),
+            }
+        ]
+
+    # Omit /chat: /api/4.0/a2a/agents/<id> serves open A2A 0.3.0 JSON-RPC + SSE.
+    card: dict[str, Any] = {
+        "protocolVersion": "0.3.0",
+        "name": resolved_name,
+        "description": resolved_desc,
+        "url": f"{origin}/api/4.0/a2a/agents/{agent_id}",
+        "version": "1.0.0",
+        "capabilities": {"streaming": True, "pushNotifications": False},
+        "defaultInputModes": ["text/plain", "application/json"],
+        "defaultOutputModes": [
+            "text/plain",
+            "application/json",
+            "text/event-stream",
+        ],
+        "skills": skills,
+    }
+    if auth == "oauth2":
+        card["securitySchemes"] = {
+            "LookerOAuth2": {
+                "type": "oauth2",
+                "flows": {
+                    "authorizationCode": {
+                        "authorizationUrl": f"{origin}/auth",
+                        "tokenUrl": f"{origin}/api/token",
+                        "scopes": {"cors_api": "Looker API access"},
+                    }
+                },
+            }
+        }
+        card["security"] = [{"LookerOAuth2": ["cors_api"]}]
+    else:
+        card["securitySchemes"] = {
+            "bearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT",
+                "description": "Looker API access token",
+            }
+        }
+        card["security"] = [{"bearerAuth": []}]
+
+    payload = json.dumps(card, indent=2, ensure_ascii=False) + "\n"
+    # ponytail: UTF-8 JSON bytes approximate AgentSpec.content (protobuf Struct) 10 KiB size; use Struct.ByteSize() only if protobuf becomes a dep
+    size = len(payload.encode("utf-8"))
+    if size > 10_240:
+        logger.warning(
+            f"Agent card is {size:,} bytes, exceeding the 10,240-byte (10 KiB) GCP Agent Registry limit."
+        )
+
+    if output == Path("-"):
+        typer.echo(payload, nl=False)
+    else:
+        target = output or Path(f"looker-{agent_id}-agent-card.json")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(payload, encoding="utf-8", newline="\n")
+        typer.echo(f"Wrote {target} ({size:,} bytes)")
