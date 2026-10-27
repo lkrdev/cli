@@ -143,7 +143,7 @@ view: order_items_sequenced {
 }
 ```
 
-When an active Silver Explore (`silver/explores/order_items.explore.lkml`) already exposes the base entity, join the row-window SDT back `1:1` on the row PK and whitelist only `[id, <new_window_fields>]` via `fields:` so inherited base columns are not duplicated (if an existing session/entity NDT on that Explore also needs measures from the row-window SDT, join the SDT onto a `hidden: yes` intermediate `silver/explores/:table_steps_base.explore.lkml` extending `:table_base`, point the NDT's `explore_source:` at `:table_steps_base`, and extend `:table_steps_base` in `silver/explores/:table.explore.lkml` to stay acyclic):
+When an active Silver Explore (`silver/explores/order_items.explore.lkml`) already exposes the base entity, join the row-window SDT (ordered `ROW_NUMBER`/`LAG` or partition-only `MIN/MAX/AVG(...) OVER (PARTITION BY ...)`) back `1:1` on the row PK and whitelist only `[id, <new_window_fields>]` via `fields:` so inherited base columns are not duplicated—because `fields:` excludes inherited base fields on the SDT, place any dimensions or measures combining base and window fields in `silver/:base_:sdt_fields.view.lkml` (and if an existing session/entity NDT on that Explore also needs measures from the row-window SDT, join the SDT onto a `hidden: yes` intermediate `silver/explores/:table_steps_base.explore.lkml` extending `:table_base`, point the NDT's `explore_source:` at `:table_steps_base`, and extend `:table_steps_base` in `silver/explores/:table.explore.lkml` to stay acyclic):
 
 ```lookml
 join: order_items_sequenced {
