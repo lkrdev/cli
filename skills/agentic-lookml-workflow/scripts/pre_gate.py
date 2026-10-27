@@ -273,11 +273,7 @@ def _align_cols(sql_rows, looker_rows, scales, pct_cols, pct_idxs, looker_fields
         f"Row {i} column count mismatch: SQL={len(sr)} {list(sr)}, Looker={len(lr)} {list(lr)}"
         for i, (sr, lr) in enumerate(zip(sr_leaves, lr_leaves))
         if len(sr) != len(lr)
-    ] or (
-        [f"Column count mismatch: SQL={len(s_keys)} {s_keys}, Looker={len(l_keys)} {l_keys}"]
-        if any(len(sr) != len(l_keys) for sr in sr_leaves) or any(len(lr) != len(s_keys) for lr in lr_leaves)
-        else []
-    )
+    ]
     if bad_cols:
         return sr_leaves, lr_leaves, [], _norm_lr, bad_cols[:5]
     l_by_leaf: dict[str, list[str]] = {}
@@ -453,7 +449,7 @@ def compare_row_sets(
 def _ntile_conserved(
     sql_rows, looker_rows, sql: str, looker_fields: list[str] | None = None, dynamic_fields: list | None = None
 ) -> bool:
-    if len(sql_rows) < 2 or len(looker_rows) < 2:
+    if len(sql_rows) < 2 or len(sql_rows) != len(looker_rows):
         return False
     scales, pct_cols, pct_idxs, sel_exprs, _, _, _ = _sql_meta(sql)
     sr_leaves, lr_leaves, cols, _, bad_cols = _align_cols(
@@ -473,31 +469,24 @@ def _ntile_conserved(
         for nv in [_norm_ts(r[b_lk], b_tm)]
         for nf in [_to_float(nv)]
     }
-    if len(s_by_b) != len(sr_leaves) or len(l_by_b) != len(lr_leaves):
-        return False
-    if [b for b in s_by_b if b in l_by_b] != [b for b in l_by_b if b in s_by_b]:
+    if len(s_by_b) != len(sr_leaves) or list(s_by_b) != list(l_by_b):
         return False
     _, c_sk, c_lk, _, c_m, _ = cols[cnt_i]
-    all_b = list(s_by_b) + [k for k in l_by_b if k not in s_by_b]
     ns: dict = {}
     nl: dict = {}
-    for b in all_b:
-        fs = _to_float(s_by_b[b][c_sk]) if b in s_by_b else 0.0
-        raw_fl = _to_float(l_by_b[b][c_lk]) if b in l_by_b else 0.0
+    for b in s_by_b:
+        fs = _to_float(s_by_b[b][c_sk])
+        raw_fl = _to_float(l_by_b[b][c_lk])
         fl = raw_fl * c_m if raw_fl is not None else None
-        if fs is None or fl is None or fs < 0 or fl < 0:
-            return False
-        if (b not in s_by_b or b not in l_by_b) and max(fs, fl) > 5.0:
-            return False
-        if abs(fs - fl) > max(25.0, 4.0 * ((fs + fl) ** 0.5)):
+        if fs is None or fl is None or fs < 0 or fl < 0 or abs(fs - fl) > max(25.0, 4.0 * ((fs + fl) ** 0.5)):
             return False
         ns[b] = fs
         nl[b] = fl
     tot_s, tot_l = round(sum(ns.values())), round(sum(nl.values()))
     if tot_s <= 0 or tot_s != tot_l:
         return False
-    b_pairs = [(bf, b) for b in all_b for bf in [_to_float(b)] if bf is not None]
-    if len(b_pairs) == len(all_b) and abs(
+    b_pairs = [(bf, b) for b in s_by_b for bf in [_to_float(b)] if bf is not None]
+    if len(b_pairs) == len(s_by_b) and abs(
         sum(bf * ns[b] for bf, b in b_pairs) - sum(bf * nl[b] for bf, b in b_pairs)
     ) > 1e-6:
         return False
@@ -513,7 +502,7 @@ def _ntile_conserved(
             if abs(sum(ns[b] * svs[b] for b in s_by_b) - sum(nl[b] * lvs[b] for b in l_by_b)) / tot_s > 10.0 ** (-digits) + 1e-9:
                 return False
         elif ("sum(" in expr or "count(" in expr) and "/" not in expr:
-            if abs(sum(svs.values()) - sum(lvs.values())) > len(all_b) * 0.5 * (10.0 ** (-digits)) + 1e-6:
+            if abs(sum(svs.values()) - sum(lvs.values())) > len(s_by_b) * 0.5 * (10.0 ** (-digits)) + 1e-6:
                 return False
         else:
             return False
