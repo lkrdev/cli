@@ -258,19 +258,7 @@ def _drop_grain_keys(sql_rows, looker_rows, f_norm: list[str], dfs: list | None 
     return drop
 
 
-def compare_row_sets(
-    sql_rows,
-    looker_rows,
-    sql: str = "",
-    looker_fields: list[str] | None = None,
-    fetch_extra=None,
-    dynamic_fields: list | None = None,
-):
-    if len(sql_rows) != len(looker_rows):
-        return False, [f"Row count mismatch: SQL={len(sql_rows)}, Looker={len(looker_rows)}"]
-    if not sql_rows:
-        return True, []
-    scales, pct_cols, pct_idxs, sel_exprs, has_order_by, order_specs, limit_n = _sql_meta(sql)
+def _align_cols(sql_rows, looker_rows, scales, pct_cols, pct_idxs, looker_fields=None, dynamic_fields=None):
     f_norm = [f.lower() for f in (looker_fields or [])]
     drop_l = _drop_grain_keys(sql_rows, looker_rows, f_norm, dynamic_fields)
 
@@ -280,14 +268,14 @@ def compare_row_sets(
 
     sr_leaves = [{k.split(".")[-1].lower(): v for k, v in sr.items()} for sr in sql_rows]
     lr_leaves = [_norm_lr(lr) for lr in looker_rows]
+    s_keys, l_keys = list(sr_leaves[0]), list(lr_leaves[0])
     bad_cols = [
         f"Row {i} column count mismatch: SQL={len(sr)} {list(sr)}, Looker={len(lr)} {list(lr)}"
         for i, (sr, lr) in enumerate(zip(sr_leaves, lr_leaves))
         if len(sr) != len(lr)
     ]
     if bad_cols:
-        return False, bad_cols[:5]
-    s_keys, l_keys = list(sr_leaves[0]), list(lr_leaves[0])
+        return sr_leaves, lr_leaves, [], _norm_lr, bad_cols[:5]
     l_by_leaf: dict[str, list[str]] = {}
     for lk in l_keys:
         l_by_leaf.setdefault(lk.split(".")[-1], []).append(lk)
@@ -327,6 +315,28 @@ def compare_row_sets(
         ts_mode = "bool" if is_b else (("sec" if not any(x[1] for x in l_ts if x) else "sub") if is_ts else None)
         same_leaf = lk == sk or (lk.split(".")[-1] == sk and len(l_by_leaf.get(sk, ())) == 1)
         cols.append((sk if same_leaf else f"{sk}->{lk}", sk, lk, digits, mult, ts_mode))
+    return sr_leaves, lr_leaves, cols, _norm_lr, []
+
+
+def compare_row_sets(
+    sql_rows,
+    looker_rows,
+    sql: str = "",
+    looker_fields: list[str] | None = None,
+    fetch_extra=None,
+    dynamic_fields: list | None = None,
+):
+    if len(sql_rows) != len(looker_rows):
+        return False, [f"Row count mismatch: SQL={len(sql_rows)}, Looker={len(looker_rows)}"]
+    if not sql_rows:
+        return True, []
+    scales, pct_cols, pct_idxs, sel_exprs, has_order_by, order_specs, limit_n = _sql_meta(sql)
+    sr_leaves, lr_leaves, cols, _norm_lr, bad_cols = _align_cols(
+        sql_rows, looker_rows, scales, pct_cols, pct_idxs, looker_fields, dynamic_fields
+    )
+    if bad_cols:
+        return False, bad_cols
+    s_keys = list(sr_leaves[0])
     order_idxs: list[int] = []
     s_ob = None
     tied_ob = False
@@ -434,6 +444,69 @@ def compare_row_sets(
             if all_found:
                 return True, []
     return not mismatches, mismatches[:5]
+
+
+def _ntile_conserved(
+    sql_rows, looker_rows, sql: str, looker_fields: list[str] | None = None, dynamic_fields: list | None = None
+) -> bool:
+    if len(sql_rows) < 2 or len(sql_rows) != len(looker_rows):
+        return False
+    scales, pct_cols, pct_idxs, sel_exprs, _, _, _ = _sql_meta(sql)
+    sr_leaves, lr_leaves, cols, _, bad_cols = _align_cols(
+        sql_rows, looker_rows, scales, pct_cols, pct_idxs, looker_fields, dynamic_fields
+    )
+    if bad_cols or len(cols) < 2 or len(sel_exprs) != len(cols):
+        return False
+    cnt_cands = [j for j in range(1, len(cols)) if re.match(r"^count\([^()]*\)$", sel_exprs[j])]
+    cnt_i = ([j for j in cnt_cands if not sel_exprs[j].startswith("count(distinct")] + cnt_cands + [-1])[0]
+    if cnt_i < 0:
+        return False
+    _, b_sk, b_lk, b_d, b_m, b_tm = cols[0]
+    s_by_b = {normalize_val(_norm_ts(r[b_sk], b_tm), b_d): r for r in sr_leaves}
+    l_by_b = {
+        (_sql_round(nf * b_m, b_d) if (b_m != 1.0 and nf is not None) else normalize_val(nv, b_d)): r
+        for r in lr_leaves
+        for nv in [_norm_ts(r[b_lk], b_tm)]
+        for nf in [_to_float(nv)]
+    }
+    if len(s_by_b) != len(sr_leaves) or list(s_by_b) != list(l_by_b):
+        return False
+    _, c_sk, c_lk, _, c_m, _ = cols[cnt_i]
+    ns: dict = {}
+    nl: dict = {}
+    for b in s_by_b:
+        fs = _to_float(s_by_b[b][c_sk])
+        raw_fl = _to_float(l_by_b[b][c_lk])
+        fl = raw_fl * c_m if raw_fl is not None else None
+        if fs is None or fl is None or fs < 0 or fl < 0 or abs(fs - fl) > max(25.0, 4.0 * ((fs + fl) ** 0.5)):
+            return False
+        ns[b] = fs
+        nl[b] = fl
+    tot_s, tot_l = round(sum(ns.values())), round(sum(nl.values()))
+    if tot_s <= 0 or tot_s != tot_l:
+        return False
+    b_pairs = [(bf, b) for b in s_by_b for bf in [_to_float(b)] if bf is not None]
+    if len(b_pairs) == len(s_by_b) and abs(
+        sum(bf * ns[b] for bf, b in b_pairs) - sum(bf * nl[b] for bf, b in b_pairs)
+    ) > 1e-6:
+        return False
+    for j, (_, sk, lk, digits, mult, _) in enumerate(cols):
+        if j in (0, cnt_i):
+            continue
+        expr = sel_exprs[j]
+        svs = {b: f for b in s_by_b for f in [_to_float(s_by_b[b][sk])] if f is not None}
+        lvs = {b: f * mult for b in l_by_b for f in [_to_float(l_by_b[b][lk])] if f is not None}
+        if len(svs) != len(s_by_b) or len(lvs) != len(l_by_b):
+            return False
+        if "avg(" in expr and "/" not in expr:
+            if abs(sum(ns[b] * svs[b] for b in s_by_b) - sum(nl[b] * lvs[b] for b in l_by_b)) / tot_s > 10.0 ** (-digits) + 1e-9:
+                return False
+        elif ("sum(" in expr or "count(" in expr) and "/" not in expr:
+            if abs(sum(svs.values()) - sum(lvs.values())) > len(s_by_b) * 0.5 * (10.0 ** (-digits)) + 1e-6:
+                return False
+        else:
+            return False
+    return True
 
 
 def _parse_json_dict(raw, label: str = ""):
@@ -678,6 +751,32 @@ def main():
                             fetch_extra=lambda new_lim, _dq=det_q: _fetch_tie_pool(new_lim, _dq),
                             dynamic_fields=dfs,
                         )
+            if (
+                not matched
+                and s_rows
+                and l_rows
+                and not has_post_sql
+                and re.search(r"(?i)\bNTILE\s*\(", stmt_sql)
+                and _ntile_conserved(s_rows, l_rows, stmt_sql, q_fields, dfs)
+            ):
+                base_nt = pinned_stmt if pinned_mode else stmt_sql
+                for p_i in (1, 2):
+                    try:
+                        p_rows = _exec_sql(
+                            f"-- parity-ntile-{p_i}-{_fp(run_id_str + str(s_rows[0]))}\n{base_nt}", c_name
+                        )
+                    except Exception:
+                        p_rows = None
+                    if (
+                        isinstance(p_rows, list)
+                        and p_rows
+                        and isinstance(p_rows[0], dict)
+                        and set(p_rows[0]) == set(s_rows[0])
+                        and not compare_row_sets(s_rows, p_rows, sql=stmt_sql)[0]
+                        and _ntile_conserved(s_rows, p_rows, stmt_sql)
+                    ):
+                        matched, mismatches = True, []
+                        break
             q["parity_status"] = "matched" if matched else "mismatched"
             q["mismatches"] = mismatches
             all_matched = all_matched and matched
