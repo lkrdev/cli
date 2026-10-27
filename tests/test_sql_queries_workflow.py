@@ -1609,3 +1609,82 @@ def test_pre_gate_malformed_test_queries_json_surfaces_error_and_raw_float_misma
     assert res["passed"] is False
     assert "Invalid test_queries_json" in res["test_query_results"]["_error"]
     assert any("Invalid test_queries_json" in e["message"] for e in res["validation_errors"])
+
+
+def test_pre_gate_nondeterministic_ntile_shuffle_conservation_and_rejects_broken_lookml():
+    ntile_sql = (
+        "WITH s AS (SELECT user_id, age, spend, "
+        "NTILE(5) OVER (ORDER BY freq DESC) AS f_score, "
+        "NTILE(5) OVER (ORDER BY spend DESC) AS m_score FROM u) "
+        "SELECT (f_score + m_score) AS rf_score, COUNT(user_id) AS customer_count, "
+        "ROUND(AVG(age), 1) AS avg_age, ROUND(AVG(spend), 2) AS avg_spend "
+        "FROM s GROUP BY rf_score ORDER BY rf_score DESC;"
+    )
+    # 100 buyers: 50 tied buyers shuffle by 1 across scores 10, 9, 8, 7 while preserving N=100,
+    # sum(score * n) = 10*40 + 9*2 + 8*28 + 7*30 = 852 == 10*39 + 9*3 + 8*29 + 7*29 = 852,
+    # and population sums age_sum=4000.0 (avg=40.0), spend_sum=2500.0 (avg=25.0).
+    s_cached = [
+        {"rf_score": "10", "customer_count": 40, "avg_age": 40.0, "avg_spend": 30.0},
+        {"rf_score": "9", "customer_count": 2, "avg_age": 35.0, "avg_spend": 25.0},
+        {"rf_score": "8", "customer_count": 28, "avg_age": 40.0, "avg_spend": 25.0},
+        {"rf_score": "7", "customer_count": 30, "avg_age": 40.3, "avg_spend": 18.33},
+    ]
+    s_probe = [
+        {"rf_score": "10", "customer_count": 41, "avg_age": 40.0, "avg_spend": 29.88},
+        {"rf_score": "9", "customer_count": 1, "avg_age": 30.0, "avg_spend": 25.0},
+        {"rf_score": "8", "customer_count": 27, "avg_age": 40.2, "avg_spend": 25.0},
+        {"rf_score": "7", "customer_count": 31, "avg_age": 40.2, "avg_spend": 18.55},
+    ]
+    l_shuffled = [
+        {"rf.score": 10, "rf.count": 39, "u.avg_age": 40.102564, "rf.avg_spend": 30.128205},
+        {"rf.score": 9, "rf.count": 3, "u.avg_age": 35.0, "rf.avg_spend": 25.0},
+        {"rf.score": 8, "rf.count": 29, "u.avg_age": 40.0, "rf.avg_spend": 24.827586},
+        {"rf.score": 7, "rf.count": 29, "u.avg_age": 40.517241, "rf.avg_spend": 18.275862},
+    ]
+    iq = json.dumps({
+        "0": {
+            "model": "m",
+            "view": "u",
+            "fields": ["rf.score", "rf.count", "u.avg_age", "rf.avg_spend"],
+            "sorts": ["rf.score desc"],
+        }
+    })
+    tq = json.dumps({"s": {"model": "m", "view": "u", "fields": ["u.c"]}})
+    sql_slugs: dict[str, str] = {}
+
+    def fake_create_sql(body, **_kw):
+        slug = f"s{len(sql_slugs)}"
+        sql_slugs[slug] = body["sql"]
+        return {"slug": slug}
+
+    # (a) Non-deterministic NTILE shuffle with exact conservation passes & populates test_query_results
+    res_ok = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {"raw_sql": ntile_sql, "connection_name": "bq", "data_json": '{"project_id": "p"}', "inline_queries_json": iq, "test_queries_json": tq},
+        {
+            "create_sql_query": fake_create_sql,
+            "create_query": lambda **_kw: {"id": "1", "slug": "q0"},
+            "run_sql_query": lambda slug, **_kw: json.dumps(s_probe if "parity-ntile-" in sql_slugs[slug] else s_cached),
+            "run_inline_query": lambda body, **_kw: '[{"u.c": 7}]' if body["fields"] == ["u.c"] else json.dumps(l_shuffled),
+        },
+    )
+    assert res_ok["passed"] is True and res_ok["test_query_results"] == {"s": [{"u.c": 7}]}
+
+    # (b) Deterministic NTILE SQL (warehouse probe matches s_cached identically) still rejects mismatch
+    res_det = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {"raw_sql": ntile_sql, "connection_name": "bq", "data_json": '{"project_id": "p"}', "inline_queries_json": iq},
+        {
+            "create_sql_query": fake_create_sql,
+            "create_query": lambda **_kw: {"id": "1", "slug": "q0"},
+            "run_sql_query": lambda **_kw: json.dumps(s_cached),
+            "run_inline_query": lambda **_kw: json.dumps(l_shuffled),
+        },
+    )
+    assert res_det["passed"] is False
+
+    # (c) Broken LookML measure (grand mean spend shifted from 25.0 to 29.0) fails without probing SQL
+    l_broken = [{**r, "rf.avg_spend": r["rf.avg_spend"] + 4.0} for r in l_shuffled]
+    assert pre_gate_mod._ntile_conserved(
+        s_cached, l_broken, ntile_sql, ["rf.score", "rf.count", "u.avg_age", "rf.avg_spend"]
+    ) is False
