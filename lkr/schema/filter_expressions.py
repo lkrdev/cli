@@ -14,8 +14,17 @@ NUMERIC_FIELD_TYPES = frozenset(
         "max",
         "median",
         "percentile",
+        "distance",
+        "date_day_of_month", "date_day_of_week_index", "date_day_of_year",
+        "date_fiscal_month_num", "date_hour_of_day", "date_month_num", "date_week_of_year",
     }
 )
+
+DATETIME_FIELD_TYPES = frozenset({
+    "date", "date_date", "date_time", "date_raw", "date_second", "date_week",
+    "date_month", "date_quarter", "date_year", "date_fiscal_quarter",
+    "date_fiscal_year", "date_microsecond", "datetime", "time",
+})
 
 FILTER_EXPRESSION_DEFS: dict[str, Any] = {
     "StringFilterExpression": {
@@ -170,14 +179,13 @@ def classify_filter_expression_ref(field: dict[str, Any]) -> str:
         return "#/$defs/BooleanFilterExpression"
     if ftype == "location":
         return "#/$defs/LocationFilterExpression"
+    if field.get("is_numeric") or ftype in NUMERIC_FIELD_TYPES or ftype.startswith("duration"):
+        return "#/$defs/NumberFilterExpression"
     if (
-        field.get("is_timeframe")
-        or field.get("can_time_filter")
-        or ftype.startswith(("date", "time", "duration"))
+        field.get("is_timeframe") or field.get("can_time_filter")
+        or ftype in DATETIME_FIELD_TYPES or ftype.startswith(("date_hour", "date_minute", "date_millisecond"))
     ):
         return "#/$defs/DateTimeFilterExpression"
-    if field.get("is_numeric") or ftype in NUMERIC_FIELD_TYPES:
-        return "#/$defs/NumberFilterExpression"
     return "#/$defs/StringFilterExpression"
 
 

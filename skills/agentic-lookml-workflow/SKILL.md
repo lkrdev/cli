@@ -66,19 +66,18 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
     lkr parse lookml snapshot --path "./data/$RUN_ID/lookml" -u >/dev/null
     lkr parse sql-lookml-compare --compact --sql-file "./data/$RUN_ID/input.sql" --path "./data/$RUN_ID/lookml" --output "./data/$RUN_ID/compare_initial.json" >/dev/null
     jq -c '
-      if (.queries | length) == 1 then .
-      else ([.queries[].explores[]? | select((.file // "") | startswith("gold/")).explore_name] | unique) as $gold | {
+      ([.queries[].explores[]? | select((.file // "") | startswith("gold/")).explore_name] | unique) as $gold | {
+        tests: ([.queries[].tests[]? | {file, explore_name}] | unique),
+        explores: ([.queries[].explores[]? | select((.file // "") | startswith("gold/") | not)] | group_by([.explore_name, .file]) | map({explore_name: .[0].explore_name, file: .[0].file, extends: .[0].extends, joins: ([.[].join_name // empty] | unique)})),
+        join_analysis: ([.queries[].join_analysis[]? | select(.explore_name as $e | ($gold | index($e)) == null) | "\(.explore_name):\((.sql_join.table? // .sql_join // "") | gsub("[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_]+\\."; "")):\(.status):\(.relationship // "")"] | unique),
         queries: [.queries[] | {tables: [.parsed_query.tables[]?.name], ctes: .parsed_query.ctes, joins: [.parsed_query.joins[]?.table]}],
         views: ([.queries[].views[]?] | group_by(.view_name) | map({
           view_name: .[0].view_name, file: .[0].file,
           unmodeled_db_columns: ([.[].unmodeled_db_columns[]?] | unique),
-          fields: ([.[].fields[]? | "\(.field_name)\(if .primary_key then ":pk" elif .field_type == "measure" then ":m" else "" end)"] | unique | join(","))
-        })),
-        explores: ([.queries[].explores[]? | select((.file // "") | startswith("gold/") | not)] | group_by([.explore_name, .file]) | map({explore_name: .[0].explore_name, file: .[0].file, extends: .[0].extends, joins: ([.[].join_name // empty] | unique)})),
-        join_analysis: ([.queries[].join_analysis[]? | select(.explore_name as $e | ($gold | index($e)) == null) | "\(.explore_name):\((.sql_join.table? // .sql_join // "") | gsub("[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_]+\\."; "")):\(.status):\(.relationship // "")"] | unique),
-        tests: ([.queries[].tests[]? | {file, explore_name}] | unique)
-      } end
-    ' "./data/$RUN_ID/compare_initial.json" | head -c 9000 || true
+          fields: ([.[].fields[]? | "\(.field_name)\(if .primary_key then ":pk" elif .field_type == "measure" then ":m" elif ((.type // "") | startswith("duration")) then ":dur" else "" end)"] | unique | join(","))
+        }))
+      }
+    ' "./data/$RUN_ID/compare_initial.json" | tee "./data/$RUN_ID/compare_summary.json" | head -c 24000 || true
   fi
   ```
 - If the project has **no** existing `.model.lkml` (`MODEL_NAME` empty above) or you are creating a new model, set `MODEL_NAME="${MODEL_NAME:-${PROJECT_ID//-/_}}"`, ask the user for `CONNECTION_NAME` if not provided, register the model via [scripts/configure_model.py](scripts/configure_model.py), and run `setup_repo.sh --skip-preflight` + `snapshot -u` + `sql-lookml-compare --compact` (creating `./data/$RUN_ID/lookml/$MODEL_NAME.model.lkml` *after* any `generate_bronze_view.py` + `lookml pull` so `lookml pull` never deletes a local-only `.model.lkml` file):
@@ -111,7 +110,7 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
   ```
 - Follow [agentic-lookml](../agentic-lookml/SKILL.md) to author Bronze refinements, Bronze/Silver/Gold explores, and views **together before the first push**:
   - Wait for `compare_initial.json` before opening `references/` playbooks or [measures-and-sql-functions.md](../agentic-lookml/references/measures-and-sql-functions.md), and skip both when inline single-table/simple-aggregate rules already cover the query.
-  - Read only `.refinement.lkml` files that need Bronze edits (skipping untouched refinements once `compare_initial.json` confirms their PKs/fields, and reading head/tail slices on `>150`-line refinements) and active `hidden: no` `.explore.lkml` headers (`StartLine=1, EndLine=140`, skipping historical `query:` blocks)—never read `hidden: yes` `*_base.explore.lkml` when a Silver explore is active (unless promoting a physical join/`UNNEST` into both `*_base` and Silver), unrelated tables, `bronze/:table.view.lkml`, `.model.lkml`, `*.snap.json.md`, `*.json` artifacts, or existing `.test.lkml` (`compare_initial.json` `.tests` already identifies existing `.test.lkml` files; append new `test:` blocks via `write_file` with `Append=True` and a leading newline after `pre_gate.py` without running `head`/`ls`).
+  - Read only `.refinement.lkml` files that need Bronze edits (skipping untouched refinements once `compare_summary.json` confirms their PKs/fields, and reading head/tail slices on `>150`-line refinements) and active `hidden: no` `.explore.lkml` headers (`StartLine=1, EndLine=140`, skipping historical `query:` blocks)—never read `hidden: yes` `*_base.explore.lkml` when a Silver explore is active (unless promoting a physical join/`UNNEST` into both `*_base` and Silver), unrelated tables, `bronze/:table.view.lkml`, `.model.lkml`, `*.snap.json.md`, raw `compare_initial.json`/`data.json` (re-read small `compare_summary.json` only if context compacts), or existing `.test.lkml` (`compare_summary.json` `.tests` already identifies existing `.test.lkml` files; append new `test:` blocks via `write_file` with `Append=True` and a leading newline after `pre_gate.py` without running `head`/`ls`).
   - Explicitly `include:` referenced files in standalone `.explore.lkml` / `.test.lkml` files, `rm -f` any obsolete `bronze/explores/:table.explore.lkml` when detaching to `:table_base.explore.lkml` (`lookml push --only-changed` removes deleted files on the remote branch), sync `$MODEL_NAME.model.lkml` globs via `LOOKML_DIR="./data/$RUN_ID/lookml" ... setup_repo.sh --skip-preflight` if needed, and prefer one `write_file` overwrite over 3+ `edit_file` calls on a short LookML file (on >120-line Explores, place new `query:` blocks right below `join:` blocks so `include:` + `join:` + `query:` fit in a single contiguous `edit_file`).
   - Chain per-explore offline `--validate` (across `INLINE_QUERIES_JSON` `.view`s plus any modified upstream `explore_source:` explores) + `schema validate --explore-file`, `lookml push`, and [scripts/pre_gate.py](scripts/pre_gate.py) (including `test_queries_json` across all target explores) in **one shell call**, printing the compact `jq` summary so `data.json` need not be re-read:
   ```bash

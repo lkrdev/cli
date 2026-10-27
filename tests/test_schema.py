@@ -120,10 +120,13 @@ def test_extract_enum_values_and_classify_filter_expression_ref():
         classify_filter_expression_ref({"type": "number", "is_numeric": True})
         == "#/$defs/NumberFilterExpression"
     )
-    assert (
-        classify_filter_expression_ref({"type": "string"})
-        == "#/$defs/StringFilterExpression"
-    )
+    for ref, types in (
+        ("NumberFilterExpression", ("duration_day", "date_month_num", "date_hour_of_day")),
+        ("DateTimeFilterExpression", ("date", "date_year", "date_minute15")),
+        ("StringFilterExpression", ("string", "date_day_of_week", "date_month_name")),
+    ):
+        for t in types:
+            assert classify_filter_expression_ref({"type": t}) == f"#/$defs/{ref}"
 
 
 def test_filter_expression_patterns():
