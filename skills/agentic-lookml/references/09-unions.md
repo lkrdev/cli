@@ -122,6 +122,16 @@ explore: unified_events {
 }
 ```
 
-## Architecture rules
+## Gold Long Metrics `UNION ALL` SDT (`gold/:name.view.lkml` & standalone `gold/explores/:name.explore.lkml`)
 
-Silver `UNION ALL` SDTs must use `${view.SQL_TABLE_NAME}` and `${view.field}` for every table and column reference, extend the primary Bronze view (`extends: [base_view]`), override the inherited single-column PK (`primary_key: no`) in favor of `compound_pk` (`primary_key: yes`), and exclude unprojected parent columns on the Explore via `fields: [ALL_FIELDS*, -view.unmapped_col]`.
+Standalone Gold Long Metrics `UNION ALL` explores (`tags: ["gold"]`, `view_name: :ledger_sdt`) omit `extends: [silver_explore]` because unpivoting `K` metric rows per fact row multiplies grain and invalidates 1x-grain parent measures; bare-join `_sdt_<other>` (`sql: ;;`, `relationship: one_to_one`, `fields: []`) for cross-table columns (`{{ _sdt_<other>.<col>._sql }}`):
+
+```lookml
+# gold/order_items_financial_ledger.view.lkml (extends: [order_items]) + gold/explores/order_items_financial_ledger.explore.lkml
+explore: order_items_financial_ledger {
+  view_name: order_items_financial_ledger
+  tags: ["gold"]
+  fields: [ALL_FIELDS*, -order_items_financial_ledger.total_revenue]
+  join: _sdt_inventory_items { from: inventory_items sql: ;; relationship: one_to_one fields: [] }
+}
+```
