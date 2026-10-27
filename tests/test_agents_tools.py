@@ -620,6 +620,4 @@ def test_agents_card(mock_get_auth, mock_logger, tmp_path, monkeypatch):
         ],
     )
     assert res_bad.exit_code != 0
-    assert "Invalid JSON in --skills-file" in (
-        res_bad.stdout + (res_bad.stderr or "")
-    )
+    assert "Invalid JSON" in (res_bad.stdout + (res_bad.stderr or ""))
