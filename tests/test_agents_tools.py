@@ -578,7 +578,7 @@ def test_agents_card(mock_get_auth, mock_logger, tmp_path, monkeypatch):
     assert card_off["skills"] == custom_skills
     assert card_off["security"] == [{"bearerAuth": []}]
 
-    # 4. Path traversal rejected
+    # 4. Path traversal, missing offline base URL (zero auth calls), and invalid skills JSON rejected
     assert (
         runner.invoke(
             app,
@@ -593,4 +593,33 @@ def test_agents_card(mock_get_auth, mock_logger, tmp_path, monkeypatch):
             ],
         ).exit_code
         != 0
+    )
+    monkeypatch.delenv("LOOKERSDK_BASE_URL", raising=False)
+    assert (
+        runner.invoke(
+            app, ["tools", "agents", "card", "agent-456", "--offline"]
+        ).exit_code
+        != 0
+    )
+    mock_get_auth.assert_not_called()
+
+    bad_skills = tmp_path / "bad_skills.json"
+    bad_skills.write_text("{not-json", encoding="utf-8")
+    res_bad = runner.invoke(
+        app,
+        [
+            "--base-url",
+            "demo.cloud.looker.com",
+            "tools",
+            "agents",
+            "card",
+            "agent-456",
+            "--offline",
+            "--skills-file",
+            str(bad_skills),
+        ],
+    )
+    assert res_bad.exit_code != 0
+    assert "Invalid JSON in --skills-file" in (
+        res_bad.stdout + (res_bad.stderr or "")
     )

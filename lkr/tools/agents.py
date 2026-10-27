@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import time
 from datetime import UTC, datetime
@@ -1041,10 +1042,12 @@ def card_agent_command(
     auth_obj = None if offline else get_auth(ctx)
     agent = None if auth_obj is None else auth_obj.get_current_sdk().get_agent(agent_id)
 
-    raw_url = get(ctx, ["obj", "ctx_lkr", "base_url"])
-    if not raw_url:
+    raw_url = get(ctx, ["obj", "ctx_lkr", "base_url"]) or os.environ.get(
+        "LOOKERSDK_BASE_URL"
+    )
+    if not raw_url and auth_obj is not None:
         try:
-            raw_url = get((auth_obj or get_auth(ctx))._get_current_auth(), "base_url")
+            raw_url = get(auth_obj._get_current_auth(), "base_url")
         except (Exception, typer.Exit) as e:  # noqa: BLE001
             logger.debug(f"Could not read base_url from auth: {e}")
 
@@ -1057,7 +1060,10 @@ def card_agent_command(
     resolved_desc = (description or get(agent, "description") or f"Looker CA agent ({agent_id})").strip()
 
     if skills_file:
-        skills = json.loads(skills_file.read_text(encoding="utf-8"))
+        try:
+            skills = json.loads(skills_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            raise typer.BadParameter(f"Invalid JSON in --skills-file: {e}") from e
         if not isinstance(skills, list):
             raise typer.BadParameter("--skills-file must contain a JSON array of skill objects.")
     else:
