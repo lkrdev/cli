@@ -536,8 +536,8 @@ $ lkr tools agents card [OPTIONS] {agent_id}
 * `--name <str>`: Override card name
 * `--description <str>`: Override card description
 * `--auth <oauth2|bearer>`: Security scheme  [default: oauth2]
-* `--skills-file <file>`: JSON file with custom A2A skills array
-* `--include-instructions`: Append Looker context.instructions to skill description
+* `--skills-file <str>`: Local path or Looker project path (with --project-id) to JSON skill(s)
+* `--project-id <str>`: Looker project ID to read --skills-file from
 * `--help`: Show this message and exit.
 
 ## `lkr code-mode`

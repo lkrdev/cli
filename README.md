@@ -535,15 +535,39 @@ uvx lkr-dev-cli tools agents delete <agent_id> \
 
 ### Generating an A2A Agent Card
 
-`lkr tools agents card` generates an **Agent-to-Agent** (**A2A**) `0.3.0` Agent Card JSON file (`looker-<agent_id>-agent-card.json`) from your Looker agent's name, description, Explore sources, and active golden queries (omitting internal instructions unless `--include-instructions` is set, or replacing `skills[]` via `--skills-file`). Looker `26.10.0+` is required (`26.2.0` added the initial route and `26.6.0` added SSE, with default enablement and instruction support in `26.10.0+`).
+`lkr tools agents card` generates an **Agent-to-Agent** (**A2A**) `0.3.0` Agent Card JSON file (`looker-<agent_id>-agent-card.json`) from your Looker agent's name, description, Explore sources (`tags`), and active golden queries (`examples`). Looker `26.10.0+` is required (`26.2.0` added the initial route and `26.6.0` added SSE, with default enablement and instruction support in `26.10.0+`).
+
+Because Looker agents do not store a dedicated A2A routing summary ("when should another agent call this endpoint?"), `card` handles `skills[]` in three ways while preserving Looker's active golden queries as `examples` unless overridden:
+
+1. **Interactive prompt (default)**: Keeps Looker's `agent.description` on `card.description` and prompts for `skills[0].description` (press Enter to reuse Looker's description).
+2. **Looker project file (`--project-id` + `--skills-file`)**: Reads a JSON skill object or array stored inside a Looker project (for example, `agents/ecommerce_skill.json`), merges any omitted `tags` or `examples` from the Looker agent, and writes `looker-<agent_id>-agent-card.json`.
+3. **Local file (`--skills-file`)**: Reads a JSON skill object or array from local disk.
+
+For example, store `agents/ecommerce_skill.json` in your Looker project (`thelook`):
+
+```json
+{
+  "id": "orders-and-revenue",
+  "name": "Orders & Revenue",
+  "description": "Route here when the user asks about order volume, GMV, returns, or brand performance."
+}
+```
+
+Then read that skill file from Looker and write `looker-<agent_id>-agent-card.json`:
 
 ```bash
-# Fetch agent metadata from Looker and write looker-<agent_id>-agent-card.json (OAuth2 default)
+# Read skill JSON from a Looker project (pass `lkr --dev` before `tools` if only on your dev branch) and write looker-<agent_id>-agent-card.json
+uvx lkr-dev-cli tools agents card <agent_id> \
+  --project-id thelook \
+  --skills-file agents/ecommerce_skill.json
+
+# Interactive prompt for skills[0].description (OAuth2 default), or read a local skills JSON file
 uvx lkr-dev-cli tools agents card <agent_id>
+uvx lkr-dev-cli tools agents card <agent_id> --skills-file ./skills.json
 
 # Build a bearer-token card offline (zero Looker API calls) and print to stdout
 uvx lkr-dev-cli --base-url https://acme.cloud.looker.com \
-  tools agents card <agent_id> --offline --auth bearer -o -
+  tools agents card <agent_id> --offline --description "Routes order and revenue questions." --auth bearer -o -
 ```
 
 Example `looker-<agent_id>-agent-card.json` output (`--auth oauth2`, default):
