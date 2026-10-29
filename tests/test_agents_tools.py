@@ -531,12 +531,19 @@ def test_agents_card(mock_get_auth, mock_logger, tmp_path, monkeypatch):
     ]
     assert skill["examples"] == ["What was revenue last month?"]
 
-    # 2. Looker project --skills-file (--project-id): reads via get_file_content, merges Looker golden_queries & tags, writes card
+    # 2. Looker project --metadata-file (--project-id): reads card/skills metadata via get_file_content, merges Looker golden_queries & tags when omitted, writes card
     sdk.get_file_content.return_value = json.dumps(
         {
-            "id": "orders-routing",
-            "name": "Orders & Revenue",
-            "description": "Call when the user asks about orders or GMV.",
+            "id": "finance-revenue-card",
+            "name": "finance-revenue-analytics",
+            "description": "Enterprise customer revenue and sales performance.",
+            "skills": [
+                {
+                    "id": "customer_revenue_profitability",
+                    "name": "Customer Revenue and Costed Profitability",
+                    "description": "Analyze enterprise customer revenue and costed profit.",
+                }
+            ],
         }
     )
     res_proj = runner.invoke(
@@ -548,23 +555,30 @@ def test_agents_card(mock_get_auth, mock_logger, tmp_path, monkeypatch):
             "agent-123",
             "--project-id",
             "thelook",
-            "--skills-file",
-            "/agents/ecommerce_skill.json",
+            "--metadata-file",
+            "/agents/finance_revenue_analytics.json",
         ],
     )
     assert res_proj.exit_code == 0
     sdk.get_file_content.assert_called_once_with(
-        project_id="thelook", file_path="agents/ecommerce_skill.json"
+        project_id="thelook", file_path="agents/finance_revenue_analytics.json"
     )
-    proj_skill = json.loads(
+    proj_card = json.loads(
         (tmp_path / "looker-agent-123-agent-card.json").read_text(
             encoding="utf-8"
         )
-    )["skills"][0]
-    assert proj_skill["id"] == "orders-routing"
+    )
+    assert proj_card["id"] == "finance-revenue-card"
+    assert proj_card["name"] == "finance-revenue-analytics"
+    assert (
+        proj_card["description"]
+        == "Enterprise customer revenue and sales performance."
+    )
+    proj_skill = proj_card["skills"][0]
+    assert proj_skill["id"] == "customer_revenue_profitability"
     assert (
         proj_skill["description"]
-        == "Call when the user asks about orders or GMV."
+        == "Analyze enterprise customer revenue and costed profit."
     )
     assert proj_skill["examples"] == ["What was revenue last month?"]
     assert "order_items" in proj_skill["tags"]
@@ -587,9 +601,9 @@ def test_agents_card(mock_get_auth, mock_logger, tmp_path, monkeypatch):
     mock_logger.warning.assert_called_once()
     assert "10,240-byte" in mock_logger.warning.call_args.args[0]
 
-    # 4. Offline bearer + local --skills-file + -o - (zero SDK/auth calls)
+    # 4. Offline bearer + local --metadata-file + -o - (zero SDK/auth calls)
     mock_get_auth.reset_mock()
-    skills_path = tmp_path / "skills.json"
+    meta_path = tmp_path / "metadata.json"
     custom_skills = [
         {
             "id": "freight",
@@ -598,7 +612,7 @@ def test_agents_card(mock_get_auth, mock_logger, tmp_path, monkeypatch):
             "tags": ["freight"],
         }
     ]
-    skills_path.write_text(json.dumps(custom_skills), encoding="utf-8")
+    meta_path.write_text(json.dumps(custom_skills), encoding="utf-8")
     res_off = runner.invoke(
         app,
         [
@@ -611,8 +625,8 @@ def test_agents_card(mock_get_auth, mock_logger, tmp_path, monkeypatch):
             "--offline",
             "--auth",
             "bearer",
-            "--skills-file",
-            str(skills_path),
+            "--metadata-file",
+            str(meta_path),
             "-o",
             "-",
         ],
@@ -624,10 +638,10 @@ def test_agents_card(mock_get_auth, mock_logger, tmp_path, monkeypatch):
     assert card_off["skills"] == custom_skills
     assert card_off["security"] == [{"bearerAuth": []}]
 
-    # 5. Path traversal, --offline + --project-id, missing offline base URL (zero auth calls), and invalid skills JSON rejected
+    # 5. Path traversal, --offline + --project-id, missing offline base URL (zero auth calls), and invalid metadata JSON rejected
     for bad_args in (
         ["--base-url", "demo.cloud.looker.com", "tools", "agents", "card", "../evil", "--offline"],
-        ["--base-url", "demo.cloud.looker.com", "tools", "agents", "card", "agent-456", "--offline", "--project-id", "thelook", "--skills-file", "s.json"],
+        ["--base-url", "demo.cloud.looker.com", "tools", "agents", "card", "agent-456", "--offline", "--project-id", "thelook", "--metadata-file", "s.json"],
         ["--base-url", "demo.cloud.looker.com", "tools", "agents", "card", "agent-456", "--project-id", "thelook"],
     ):
         assert runner.invoke(app, bad_args).exit_code != 0
@@ -640,8 +654,8 @@ def test_agents_card(mock_get_auth, mock_logger, tmp_path, monkeypatch):
     )
     mock_get_auth.assert_not_called()
 
-    bad_skills = tmp_path / "bad_skills.json"
-    bad_skills.write_text("{not-json", encoding="utf-8")
+    bad_meta = tmp_path / "bad_meta.json"
+    bad_meta.write_text("{not-json", encoding="utf-8")
     res_bad = runner.invoke(
         app,
         [
@@ -652,8 +666,8 @@ def test_agents_card(mock_get_auth, mock_logger, tmp_path, monkeypatch):
             "card",
             "agent-456",
             "--offline",
-            "--skills-file",
-            str(bad_skills),
+            "--metadata-file",
+            str(bad_meta),
         ],
     )
     assert res_bad.exit_code != 0

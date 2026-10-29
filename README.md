@@ -537,33 +537,47 @@ uvx lkr-dev-cli tools agents delete <agent_id> \
 
 `lkr tools agents card` generates an **Agent-to-Agent** (**A2A**) `0.3.0` Agent Card JSON file (`looker-<agent_id>-agent-card.json`) from your Looker agent's name, description, Explore sources (`tags`), and active golden queries (`examples`). Looker `26.10.0+` is required (`26.2.0` added the initial route and `26.6.0` added SSE, with default enablement and instruction support in `26.10.0+`).
 
-Because Looker agents do not store a dedicated A2A routing summary ("when should another agent call this endpoint?"), `card` handles `skills[]` in three ways while preserving Looker's active golden queries as `examples` unless overridden:
+Because Looker agents do not store a dedicated A2A routing summary ("when should another agent call this endpoint?"), `card` populates routing metadata in three ways while preserving Looker's active golden queries as `examples` unless overridden:
 
 1. **Interactive prompt (default)**: Keeps Looker's `agent.description` on `card.description` and prompts for `skills[0].description` (press Enter to reuse Looker's description).
-2. **Looker project file (`--project-id` + `--skills-file`)**: Reads a JSON skill object or array stored inside a Looker project (for example, `agents/ecommerce_skill.json`), merges any omitted `tags` or `examples` from the Looker agent, and writes `looker-<agent_id>-agent-card.json`.
-3. **Local file (`--skills-file`)**: Reads a JSON skill object or array from local disk.
+2. **Looker project file (`--project-id` + `--metadata-file`)**: Reads a JSON card/skill metadata object (`{"name", "description", "skills": [...]}`), single skill object, or skill array stored inside a Looker project (for example, `agents/finance_revenue_analytics.json`), merges any omitted `tags` or `examples` from the Looker agent, and writes `looker-<agent_id>-agent-card.json`.
+3. **Local file (`--metadata-file`)**: Reads a JSON card/skill metadata file from local disk.
 
-For example, store `agents/ecommerce_skill.json` in your Looker project (`thelook`):
+For example, store `agents/finance_revenue_analytics.json` in your Looker project (`finance_analytics`):
 
 ```json
 {
-  "id": "orders-and-revenue",
-  "name": "Orders & Revenue",
-  "description": "Route here when the user asks about order volume, GMV, returns, or brand performance."
+  "name": "finance-revenue-analytics",
+  "description": "Enterprise customer revenue, costed profitability, and monthly sales actuals versus budget.",
+  "skills": [
+    {
+      "id": "customer_revenue_profitability",
+      "name": "Customer Revenue and Costed Profitability",
+      "description": "Analyze enterprise customer revenue, load volume, costed profit, and customer rankings.",
+      "tags": ["customer revenue", "profitability", "load volume"],
+      "examples": ["Which customers generated the most revenue last year?"]
+    }
+  ]
 }
 ```
 
-Then read that skill file from Looker and write `looker-<agent_id>-agent-card.json`:
+Then read that metadata file from Looker and write `looker-<agent_id>-agent-card.json` (or pipe `-o -` directly into GCP Agent Registry):
 
 ```bash
-# Read skill JSON from a Looker project (pass `lkr --dev` before `tools` if only on your dev branch) and write looker-<agent_id>-agent-card.json
+# Read metadata JSON from a Looker project (pass `lkr --dev` before `tools` if only on your dev branch) and write looker-<agent_id>-agent-card.json
 uvx lkr-dev-cli tools agents card <agent_id> \
-  --project-id thelook \
-  --skills-file agents/ecommerce_skill.json
+  --project-id finance_analytics \
+  --metadata-file agents/finance_revenue_analytics.json
 
-# Interactive prompt for skills[0].description (OAuth2 default), or read a local skills JSON file
+# Interactive prompt for skills[0].description (OAuth2 default), or read a local metadata JSON file
 uvx lkr-dev-cli tools agents card <agent_id>
-uvx lkr-dev-cli tools agents card <agent_id> --skills-file ./skills.json
+uvx lkr-dev-cli tools agents card <agent_id> --metadata-file ./metadata.json
+
+# Pipe directly into GCP Agent Registry (`-o -` writes raw JSON to stdout)
+gcloud agent-registry services update looker-finance-revenue-analytics \
+  --project=<gcp_project_id> \
+  --location=us-central1 \
+  --agent-spec-content="$(uvx lkr-dev-cli tools agents card <agent_id> --project-id finance_analytics --metadata-file agents/finance_revenue_analytics.json -o -)"
 
 # Build a bearer-token card offline (zero Looker API calls) and print to stdout
 uvx lkr-dev-cli --base-url https://acme.cloud.looker.com \
@@ -636,11 +650,11 @@ Example `looker-<agent_id>-agent-card.json` output (`--auth oauth2`, default):
 
 1. Enable **Admin > Platform > Gemini in Looker > Publish to Gemini Enterprise** on your Looker `26.10.0+` instance.
 2. Run `uvx lkr-dev-cli tools agents card <agent_id>` to write `looker-<agent_id>-agent-card.json` (`url` intentionally omits `/chat` to target Looker's open A2A `0.3.0` JSON-RPC + SSE endpoint).
-3. Authenticate your client to Looker:
-   - **3LO OAuth2 PKCE (`--auth oauth2`, default)**: Register a public OAuth client via `register_oauth_client_app` with your `redirect_uri` and run PKCE (`S256`, scope `cors_api`) against `<base_url>/auth` and `<base_url>/api/token`. Looker public PKCE clients have no `client_secret`—if a host platform requires a non-empty `client_secret` field alongside PKCE, pass any placeholder string (or use `lkr tools agents publish` for Gemini Enterprise).
-   - **Bearer token (`--auth bearer`)**: Exchange API credentials at `POST <base_url>/api/4.0/login` for an `access_token`.
+3. Choose the card's `securitySchemes` declaration via `--auth`:
+   - **`--auth oauth2` (default)**: Declares per-user Looker OAuth2 (`<base_url>/auth` and `<base_url>/api/token`, scope `cors_api`) for platforms that manage per-user OAuth flows (for Gemini Enterprise, use `lkr tools agents publish`).
+   - **`--auth bearer`**: Declares `Authorization: Bearer <token>` for custom A2A/ADK orchestrators that exchange Looker API credentials at `POST <base_url>/api/4.0/login`.
 4. Load `looker-<agent_id>-agent-card.json` in your A2A client (`a2a-sdk` or ADK `RemoteA2aAgent`), pass `Authorization: Bearer <access_token>`, omit `params.message.contextId` on turn 1, and pass back Looker's returned `contextId` on follow-up turns.
-5. *(Optional)* Upload `looker-<agent_id>-agent-card.json` to GCP Agent Registry as an `a2a-agent-card` spec (`card` logs a warning if the file exceeds Agent Registry's 10,240-byte / 10 KiB limit).
+5. *(Optional)* Register or update the card in GCP Agent Registry via `gcloud agent-registry services create|update ... --agent-spec-content="$(uvx lkr-dev-cli tools agents card <agent_id> ... -o -)"` (`card` logs a warning if the payload exceeds Agent Registry's 10,240-byte / 10 KiB limit).
 
 
 ## Optional dependencies

@@ -1018,18 +1018,18 @@ def card_agent_command(
         Literal["oauth2", "bearer"],
         typer.Option("--auth", help="Security scheme"),
     ] = "oauth2",
-    skills_file: Annotated[
+    metadata_file: Annotated[
         str | None,
         typer.Option(
-            "--skills-file",
-            help="Local path or Looker project path (with --project-id) to JSON skill(s)",
+            "--metadata-file",
+            help="Local path or Looker project path (with --project-id) to JSON card/skill metadata",
         ),
     ] = None,
     project_id: Annotated[
         str | None,
         typer.Option(
             "--project-id",
-            help="Looker project ID to read --skills-file from",
+            help="Looker project ID to read --metadata-file from",
         ),
     ] = None,
 ) -> None:
@@ -1038,8 +1038,8 @@ def card_agent_command(
         raise typer.BadParameter("Invalid Looker agent ID.")
     if offline and project_id:
         raise typer.BadParameter("--project-id cannot be used with --offline.")
-    if project_id and not skills_file:
-        raise typer.BadParameter("--project-id requires --skills-file.")
+    if project_id and not metadata_file:
+        raise typer.BadParameter("--project-id requires --metadata-file.")
 
     auth_obj = None if offline else get_auth(ctx)
     sdk = None if auth_obj is None else auth_obj.get_current_sdk()
@@ -1059,8 +1059,52 @@ def card_agent_command(
         logger.error("Could not determine Looker base URL. Pass lkr --base-url <url> ...")
         raise typer.Exit(1)
 
-    resolved_name = (name or get(agent, "name") or f"Looker Agent {agent_id}").strip()
-    resolved_desc = (description or get(agent, "description") or f"Looker CA agent ({agent_id})").strip()
+    card_overrides: dict[str, Any] = {}
+    items: Any = None
+    if metadata_file:
+        if project_id:
+            if sdk is None:
+                logger.error("Looker SDK is not initialized.")
+                raise typer.Exit(1)
+            try:
+                raw_meta = sdk.get_file_content(
+                    project_id=project_id, file_path=metadata_file.lstrip("/")
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to read '{metadata_file}' from Looker project '{project_id}' (pass lkr --dev if on dev branch): {e}"
+                )
+                raise typer.Exit(1) from e
+        else:
+            try:
+                raw_meta = Path(metadata_file).read_text(encoding="utf-8")
+            except OSError as e:
+                raise typer.BadParameter(f"Cannot read --metadata-file: {e}") from e
+        try:
+            parsed = json.loads(raw_meta)
+        except json.JSONDecodeError as e:
+            raise typer.BadParameter(f"Invalid JSON in --metadata-file: {e}") from e
+        if isinstance(parsed, dict) and "skills" in parsed:
+            card_overrides = {
+                k: v for k, v in parsed.items() if k != "skills" and v is not None
+            }
+            items = parsed["skills"]
+        else:
+            items = [parsed] if isinstance(parsed, dict) else parsed
+        if not isinstance(items, list) or not items or not all(isinstance(s, dict) for s in items):
+            raise typer.BadParameter(
+                "--metadata-file must contain a JSON card/skill object or non-empty array of skill objects."
+            )
+
+    resolved_name = str(
+        name or card_overrides.get("name") or get(agent, "name") or f"Looker Agent {agent_id}"
+    ).strip()
+    resolved_desc = str(
+        description
+        or card_overrides.get("description")
+        or get(agent, "description")
+        or f"Looker CA agent ({agent_id})"
+    ).strip()
     src_tags = (str(get(s, k) or "").strip() for s in (get(agent, "sources") or []) for k in ("model", "explore"))
     tags = list(dict.fromkeys(["looker", "conversational-analytics", *(t for t in src_tags if t)]))
     qs = (str(q).strip() for gq in (get(agent, "golden_queries") or []) if get(gq, "is_active") is not False for q in (get(gq, "questions") or []))
@@ -1073,34 +1117,7 @@ def card_agent_command(
         **({"examples": examples} if examples else {}),
     }
 
-    if skills_file:
-        if project_id:
-            if sdk is None:
-                logger.error("Looker SDK is not initialized.")
-                raise typer.Exit(1)
-            try:
-                raw_skills = sdk.get_file_content(
-                    project_id=project_id, file_path=skills_file.lstrip("/")
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to read '{skills_file}' from Looker project '{project_id}' (pass lkr --dev if on dev branch): {e}"
-                )
-                raise typer.Exit(1) from e
-        else:
-            try:
-                raw_skills = Path(skills_file).read_text(encoding="utf-8")
-            except OSError as e:
-                raise typer.BadParameter(f"Cannot read --skills-file: {e}") from e
-        try:
-            parsed = json.loads(raw_skills)
-        except json.JSONDecodeError as e:
-            raise typer.BadParameter(f"Invalid JSON in --skills-file: {e}") from e
-        items = [parsed] if isinstance(parsed, dict) else parsed
-        if not isinstance(items, list) or not items or not all(isinstance(s, dict) for s in items):
-            raise typer.BadParameter(
-                "--skills-file must contain a JSON skill object or non-empty array of skill objects."
-            )
+    if items is not None:
         skills = [
             {**base_skill, **{k: v for k, v in s.items() if v is not None}}
             for s in items
@@ -1124,11 +1141,12 @@ def card_agent_command(
 
     # Omit /chat: /api/4.0/a2a/agents/<id> serves open A2A 0.3.0 JSON-RPC + SSE.
     card: dict[str, Any] = {
+        **card_overrides,
         "protocolVersion": "0.3.0",
         "name": resolved_name,
         "description": resolved_desc,
         "url": f"{origin}/api/4.0/a2a/agents/{agent_id}",
-        "version": "1.0.0",
+        "version": str(card_overrides.get("version") or "1.0.0"),
         "capabilities": {"streaming": True, "pushNotifications": False},
         "defaultInputModes": ["text/plain", "application/json"],
         "defaultOutputModes": [
