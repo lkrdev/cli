@@ -48,6 +48,7 @@ VALID_EXTENSIONS = (
     ".geojson",
     ".md",
     ".gitkeep",
+    ".js",
 )
 
 IGNORED_FILES = (".gitignore", ".DS_Store", "skills-lock.json")
