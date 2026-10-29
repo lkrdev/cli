@@ -302,6 +302,33 @@ def test_push_single_file_option(tmp_path, mock_sdk, mock_auth):
     mock_sdk.delete_file.assert_not_called()
 
 
+def test_push_single_file_js_bundle(tmp_path, mock_sdk, mock_auth):
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+
+    js_file = project_dir / "bundle.js"
+    js_file.write_text("console.log('lookbase');")
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
+        result = runner.invoke(
+            app,
+            [
+                "tools",
+                "lookml",
+                "push",
+                str(project_dir),
+                "--file",
+                "bundle.js",
+            ],
+        )
+        assert result.exit_code == 0
+
+    expected_fc = FileContent(path="bundle.js", content="console.log('lookbase');")
+    mock_sdk.update_file.assert_called_once_with(
+        project_id="test_project", file_content=expected_fc
+    )
+
+
 def test_push_file_as_argument(tmp_path, mock_sdk, mock_auth):
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
