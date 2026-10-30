@@ -47,6 +47,7 @@ export const CodeModePlayground: React.FC<{ host?: ExtensionSDK }> = ({
 
   const runCode = useCallback(
     async (sourceCode: string, sdkInstance?: ExtensionSDK) => {
+      if (running) return;
       const api = window.LkrCodeMode;
       if (!api) {
         setOutput("Error: window.LkrCodeMode is not loaded.");
@@ -69,7 +70,7 @@ export const CodeModePlayground: React.FC<{ host?: ExtensionSDK }> = ({
         setRunning(false);
       }
     },
-    [extensionSDK],
+    [extensionSDK, running],
   );
 
   useEffect(() => {

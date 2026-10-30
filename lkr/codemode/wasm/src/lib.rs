@@ -1008,6 +1008,33 @@ pub struct RunOptions {
     pub vars: BTreeMap<String, Value>,
 }
 
+fn json_to_python_literal(val: &Value) -> String {
+    match val {
+        Value::Null => "None".to_string(),
+        Value::Bool(true) => "True".to_string(),
+        Value::Bool(false) => "False".to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => serde_json::to_string(s).unwrap_or_else(|_| "''".to_string()),
+        Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(json_to_python_literal).collect();
+            format!("[{}]", items.join(", "))
+        }
+        Value::Object(obj) => {
+            let pairs: Vec<String> = obj
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{}: {}",
+                        serde_json::to_string(k).unwrap_or_else(|_| "''".to_string()),
+                        json_to_python_literal(v)
+                    )
+                })
+                .collect();
+            format!("{{{}}}", pairs.join(", "))
+        }
+    }
+}
+
 pub async fn execute_python_code<T: SdkTransport>(
     code: &str,
     opts: &RunOptions,
@@ -1016,9 +1043,8 @@ pub async fn execute_python_code<T: SdkTransport>(
     let mut full_code = String::new();
     for (k, v) in &opts.vars {
         if is_valid_py_ident(k) {
-            if let Ok(serialized) = serde_json::to_string(v) {
-                full_code.push_str(&format!("{k} = {serialized}\n"));
-            }
+            let serialized = json_to_python_literal(v);
+            full_code.push_str(&format!("{k} = {serialized}\n"));
         }
     }
     full_code.push_str(code);
@@ -1487,6 +1513,9 @@ async fn ensure_chatty_connected() -> Result<Value, String> {
         port1.start();
 
         let target_origin = resolve_target_origin();
+        if target_origin == "*" {
+            return Err("Refusing to connect: target origin could not be resolved. Transferring MessagePorts over wildcard target origin is insecure.".to_string());
+        }
         let syn_msg = json_to_js(&json!({ "action": CHATTY_CLIENT_SYN }));
         let transfer = Array::new();
         transfer.push(&port2);
@@ -1829,18 +1858,22 @@ mod tests {
             "target_model".to_string(),
             Value::String("thelook".to_string()),
         );
+        opts.vars.insert("is_active".to_string(), Value::Bool(true));
+        opts.vars.insert("empty_val".to_string(), Value::Null);
 
         let code = r#"
 u = sdk.me()
 rows = run_inline_query("json", {"model": target_model, "view": "orders", "fields": ["orders.count"]})
 hd = host_data()
-return {"email": u["email"], "rows": rows, "host": hd["hostUrl"]}
+return {"email": u["email"], "rows": rows, "host": hd["hostUrl"], "active": is_active, "empty": empty_val}
 "#;
         let out = block_on(execute_python_code(code, &opts, &transport));
         let parsed: Value = serde_json::from_str(&out).expect("valid json output");
         assert_eq!(parsed["email"], "bryan@looker.com");
         assert_eq!(parsed["rows"][0]["orders.count"], 123);
         assert_eq!(parsed["host"], "https://self-signed.looker.com:9999");
+        assert_eq!(parsed["active"], true);
+        assert!(parsed["empty"].is_null());
 
         let recorded = transport.calls.borrow();
         assert_eq!(recorded.len(), 2);

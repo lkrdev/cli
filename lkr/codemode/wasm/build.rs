@@ -131,9 +131,10 @@ fn prop_meta_to_py(p: &PropMeta) -> String {
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed=../swagger.json");
-    let swagger_str =
-        fs::read_to_string("../swagger.json").expect("Failed to read ../swagger.json");
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+    let swagger_path = Path::new(&manifest_dir).join("../swagger.json");
+    println!("cargo:rerun-if-changed={}", swagger_path.display());
+    let swagger_str = fs::read_to_string(&swagger_path).expect("Failed to read ../swagger.json");
     let swagger: Value = serde_json::from_str(&swagger_str).expect("Invalid JSON in swagger.json");
 
     let mut definitions: BTreeMap<String, BTreeMap<String, PropMeta>> = BTreeMap::new();

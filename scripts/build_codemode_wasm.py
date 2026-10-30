@@ -23,7 +23,7 @@ def build_wasm() -> Path:
     env = os.environ.copy()
     cargo_bin = Path.home() / ".cargo" / "bin"
     if cargo_bin.exists():
-        env["PATH"] = f"{cargo_bin}:{env.get('PATH', '')}"
+        env["PATH"] = f"{cargo_bin}{os.pathsep}{env.get('PATH', '')}"
 
     rustflags = env.get("RUSTFLAGS", "")
     if 'getrandom_backend="wasm_js"' not in rustflags:
