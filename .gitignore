@@ -4,6 +4,9 @@ __pycache__
 tmp
 .env
 lkr/schema/rust/target/
+lkr/codemode/wasm/target/
+dist/
+node_modules/
 coverage.xml
 .coverage
 *.profraw

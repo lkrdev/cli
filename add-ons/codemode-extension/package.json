@@ -1,0 +1,29 @@
+{
+  "name": "@lkrdev/codemode-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal Looker Extension playground (pydantic.run style) for Looker Code Mode WASM",
+  "main": "dist/codemode_extension.js",
+  "scripts": {
+    "build": "webpack --mode production",
+    "dev": "webpack serve --server-type https --hot --mode development"
+  },
+  "dependencies": {
+    "@looker/extension-sdk": "^24.18.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.26.0",
+    "@babel/preset-env": "^7.26.0",
+    "@babel/preset-react": "^7.26.3",
+    "@babel/preset-typescript": "^7.26.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "babel-loader": "^9.2.1",
+    "typescript": "^5.7.3",
+    "webpack": "^5.97.1",
+    "webpack-cli": "^5.1.4",
+    "webpack-dev-server": "^5.2.0"
+  }
+}
