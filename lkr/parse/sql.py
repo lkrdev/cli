@@ -821,10 +821,13 @@ def compute_sql_complexity(
     points += 0.5 * len(q.columns)
     points += 1.5 * sum(1 for c in q.columns if c.is_agg)
 
+    raw_sql = (
+        q.raw_sql
+        if isinstance(q, ParsedQuery)
+        else getattr(q, "representative_sql", None)
+    )
     ast_node = expr or (
-        _parse_expr_safe(q.raw_sql, dialect=dialect)
-        if isinstance(q, ParsedQuery) and q.raw_sql
-        else None
+        _parse_expr_safe(raw_sql, dialect=dialect) if raw_sql else None
     )
     nodes = (
         [ast_node]
