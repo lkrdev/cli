@@ -695,6 +695,7 @@ $ lkr parse [OPTIONS] COMMAND [ARGS]...
 **Commands**:
 
 * `sql`: Parse semicolon-delimited SQL queries from...
+* `sql-group`: Parse and group SQL queries by structural...
 * `sql-lookml-compare`: Compare and map SQL queries (--sql /...
 * `lookml-to-api`: Generate Looker API all_lookml_models and...
 * `curation-meta`: Extract LookML field curation candidates...
@@ -717,6 +718,28 @@ $ lkr parse sql [OPTIONS]
 * `-f, --file <path>`: Path to SQL file (semicolon-delimited)
 * `-o, --output <path>`: Optional output .json file path
 * `-d, --dialect <str>`: Optional SQLGlot dialect (e.g. bigquery, snowflake)
+* `--help`: Show this message and exit.
+
+### `lkr parse sql-group`
+
+Parse and group SQL queries by structural similarity, summing frequency and scoring complexity.
+
+**Usage**:
+
+```console
+$ lkr parse sql-group [OPTIONS]
+```
+
+**Options**:
+
+* `-s, --sql <str>`: Inline SQL string (semicolon-delimited)
+* `-f, --file <path>`: Path to SQL file (.sql), JSON (.json), or JSONL (.jsonl) file
+* `-p, --path <path>`: Path to directory of .sql files
+* `-t, --threshold <float range>`: Minimum similarity threshold (0.0 to 1.0) to group queries  [default: 0.7; 0.0&lt;=x&lt;=1.0]
+* `-o, --output <path>`: Optional output .json file path
+* `-d, --dialect <str>`: Optional SQLGlot dialect (e.g. bigquery, snowflake)
+* `--sql-db <str>`: Default database/project for unqualified SQL tables  [env var: LKR_SQL_DB]
+* `--sql-schema <str>`: Default schema/dataset for unqualified SQL tables  [env var: LKR_SQL_SCHEMA]
 * `--help`: Show this message and exit.
 
 ### `lkr parse sql-lookml-compare`

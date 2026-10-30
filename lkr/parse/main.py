@@ -21,7 +21,12 @@ from lkr.parse.lookml_snapshot import (
     run_lookml_snapshot,
 )
 from lkr.parse.lookml_to_api import LookmlToApiResult, parse_lookml_to_api
-from lkr.parse.sql import SqlParseResult, parse_sql
+from lkr.parse.sql import (
+    SqlGroupResult,
+    SqlParseResult,
+    group_sql_queries,
+    parse_sql,
+)
 from lkr.parse.sql_to_lookml import (
     SqlToLookmlResult,
     compact_sql_to_lookml,
@@ -49,6 +54,7 @@ __all__ = [
     "lookml_to_api_command",
     "snapshot_command",
     "sql_command",
+    "sql_group_command",
     "sql_lookml_compare_command",
     "translations_command",
     "user_attributes_command",
@@ -161,6 +167,86 @@ def sql_command(
     """Parse semicolon-delimited SQL queries from --sql or --file into structured JSON."""
     _validate_sql_args(sql, file)
     result = parse_sql(sql=sql, file=file, dialect=dialect)
+    _write_or_echo(result.model_dump_json(indent=2), output)
+    return result
+
+
+@group.command(name="sql-group")
+def sql_group_command(
+    sql: Annotated[
+        str | None,
+        typer.Option("--sql", "-s", help="Inline SQL string (semicolon-delimited)"),
+    ] = None,
+    file: Annotated[
+        Path | None,
+        typer.Option(
+            "--file",
+            "-f",
+            help="Path to SQL file (.sql), JSON (.json), or JSONL (.jsonl) file",
+        ),
+    ] = None,
+    path: Annotated[
+        Path | None,
+        typer.Option("--path", "-p", help="Path to directory of .sql files"),
+    ] = None,
+    threshold: Annotated[
+        float,
+        typer.Option(
+            "--threshold",
+            "-t",
+            min=0.0,
+            max=1.0,
+            help="Minimum similarity threshold (0.0 to 1.0) to group queries",
+        ),
+    ] = 0.7,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Optional output .json file path"),
+    ] = None,
+    dialect: Annotated[
+        str | None,
+        typer.Option(
+            "--dialect",
+            "-d",
+            help="Optional SQLGlot dialect (e.g. bigquery, snowflake)",
+        ),
+    ] = None,
+    sql_db: Annotated[
+        str | None,
+        typer.Option(
+            "--sql-db",
+            envvar="LKR_SQL_DB",
+            help="Default database/project for unqualified SQL tables",
+        ),
+    ] = None,
+    sql_schema: Annotated[
+        str | None,
+        typer.Option(
+            "--sql-schema",
+            envvar="LKR_SQL_SCHEMA",
+            help="Default schema/dataset for unqualified SQL tables",
+        ),
+    ] = None,
+) -> SqlGroupResult:
+    """Parse and group SQL queries by structural similarity, summing frequency and scoring complexity."""
+    if sum(x is not None for x in (sql, file, path)) != 1:
+        logger.error("Specify exactly one of --sql, --file, or --path")
+        raise typer.Exit(1)
+    if file is not None and not file.exists():
+        logger.error(f"SQL file not found: {file}")
+        raise typer.Exit(1)
+    if path is not None and not path.exists():
+        logger.error(f"SQL path not found: {path}")
+        raise typer.Exit(1)
+    result = group_sql_queries(
+        sql=sql,
+        file=file,
+        path=path,
+        threshold=threshold,
+        dialect=dialect,
+        default_db=sql_db,
+        default_schema=sql_schema,
+    )
     _write_or_echo(result.model_dump_json(indent=2), output)
     return result
 
