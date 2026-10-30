@@ -80,3 +80,92 @@ jobs:
 
       - name: uv publish
         run: uv publish
+
+  codemode-wasm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: "write"
+      id-token: "write"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-bindgen-cli
+        run: |
+          curl -fSL https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl.tar.gz \
+            | tar -xz -C ~/.cargo/bin --strip-components=1 wasm-bindgen-0.2.129-x86_64-unknown-linux-musl/wasm-bindgen
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Build Code Mode WASM and Looker Extension bundles
+        run: |
+          make codemode-wasm
+          cd add-ons/codemode-extension && npm install --no-audit --no-fund && npm run build
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Upload to GCS (Tagged Version)
+        uses: google-github-actions/upload-cloud-storage@v2
+        with:
+          path: dist
+          destination: "${{ secrets.CDN_BUCKET_NAME }}/cli/codemode/${{ env.TAG }}"
+          parent: false
+          process_gcloudignore: false
+
+      - name: Upload to GCS (Latest)
+        uses: google-github-actions/upload-cloud-storage@v2
+        with:
+          path: dist
+          destination: "${{ secrets.CDN_BUCKET_NAME }}/cli/codemode/latest"
+          parent: false
+          process_gcloudignore: false
+
+      - name: Invalidate Cloud CDN Cache
+        run: |
+          gcloud compute url-maps invalidate-cdn-cache "${{ secrets.CDN_LOAD_BALANCER_NAME }}" \
+            --path "/cli/codemode/latest/*" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --async
+
+      - name: Upload assets and update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ env.TAG }}" dist/*.js --clobber
+          LINKS="### 🚀 Code Mode WASM CDN Links"$'\n'
+          for ver in "${{ env.TAG }}" latest; do
+            LINKS+=$'\n'"#### \`$ver\`"$'\n'
+            for file in dist/*.js; do
+              filename=$(basename "$file")
+              url="https://cdn.lkr.dev/cli/codemode/$ver/$filename"
+              LINKS+="- **$filename**: [\`$url\`]($url)"$'\n'
+            done
+          done
+          echo "$LINKS" >> $GITHUB_STEP_SUMMARY
+          CURRENT_BODY=$(gh release view "${{ env.TAG }}" --json body --jq .body)
+          NEW_BODY="${CURRENT_BODY}"$'\n\n'"${LINKS}"
+          gh release edit "${{ env.TAG }}" --notes "$NEW_BODY"

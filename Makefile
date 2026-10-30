@@ -1,4 +1,4 @@
-.PHONY: docs test-deps codemode-test codemode-start schema-rs test-rs coverage-py coverage-rs coverage
+.PHONY: docs test-deps codemode-test codemode-start codemode-wasm schema-rs test-rs coverage-py coverage-rs coverage
 
 docs:
 	uv run --frozen --extra all typer lkr/main.py utils docs --output lkr.md
@@ -12,9 +12,14 @@ codemode-test:
 schema-rs:
 	cargo build --release --manifest-path lkr/schema/rust/Cargo.toml && cp lkr/schema/rust/target/release/lib_schema_rs.so lkr/schema/_schema_rs.so
 
+codemode-wasm:
+	uv run python scripts/build_codemode_wasm.py
+
 test-rs:
 	cargo clippy --manifest-path lkr/schema/rust/Cargo.toml -- -D warnings
 	cargo test --no-default-features --manifest-path lkr/schema/rust/Cargo.toml
+	cargo clippy --manifest-path lkr/codemode/wasm/Cargo.toml -- -D warnings
+	cargo test --manifest-path lkr/codemode/wasm/Cargo.toml
 
 coverage-py:
 	uv run --frozen --extra all pytest tests/ --ignore=tests/test_dependency_resolution.py --cov=lkr/schema --cov=scripts/schema --cov-report=term-missing --cov-report=xml:coverage.xml
