@@ -4,6 +4,7 @@ import os
 import re
 
 from lkr.codemode.constant import EXCLUDED_FUNCS
+from lkr.codemode.readme import get_readme
 
 _operation_map = None
 
@@ -88,39 +89,29 @@ def _get_matches(query: str, external_funcs: dict, sdk) -> list:
                 if pattern.search(line):
                     matching_lines.append(line.strip())
                     
-        # Search in parameters (Inputs)
-        hit_in_params = False
-        if method:
-            try:
-                sig = inspect.signature(method)
-                params = list(sig.parameters.keys())
-                if any(pattern.search(p) for p in params):
-                    hit_in_params = True
-            except Exception:  # noqa: BLE001, S110
-                pass
-                
-        # Search in return type fields (Outputs)
-        hit_in_output = False
+        # Search in parameters (Inputs) and return type fields (Outputs)
+        matching_params = []
         output_fields = []
         if method:
             try:
                 sig = inspect.signature(method)
+                matching_params = [p for p in sig.parameters if pattern.search(p)]
                 return_type = sig.return_annotation
                 if return_type and hasattr(return_type, '__annotations__'):
-                    fields = list(return_type.__annotations__.keys())
-                    matching_fields = [f for f in fields if pattern.search(f)]
-                    if matching_fields:
-                        hit_in_output = True
-                        output_fields = matching_fields
+                    output_fields = [
+                        f for f in return_type.__annotations__ if pattern.search(f)
+                    ]
             except Exception:  # noqa: BLE001, S110
                 pass
                 
-        if hit_in_name or matching_lines or hit_in_params or hit_in_output:
+        if hit_in_name or matching_lines or matching_params or output_fields:
+            summary = next((ln.strip() for ln in doc.splitlines() if ln.strip()), "")
             matches.append({
                 'name': name,
+                'summary': summary,
                 'hit_in_name': hit_in_name,
                 'matching_lines': matching_lines,
-                'hit_in_params': hit_in_params,
+                'matching_params': matching_params,
                 'output_fields': output_fields
             })
             
@@ -171,13 +162,19 @@ def _get_type_matches(query: str) -> list:
     return sorted(matches, key=lambda x: x['name'])
 
 
-def search_help(query: str, external_funcs: dict, sdk) -> str:
+def search_help(query: str = "", external_funcs: dict | None = None, sdk=None) -> str:
     """Search for functions and return a summary string with snippets."""
-    func_matches = _get_matches(query, external_funcs, sdk)
+    if not query or not query.strip():
+        return get_readme().strip()
+
+    func_matches = _get_matches(query, external_funcs or {}, sdk)
     type_matches = _get_type_matches(query)
     
     if not func_matches and not type_matches:
-        return f"No matches found for '{query}'."
+        return (
+            f"No matches found for '{query}'. "
+            "Try help('*keyword*'), lookup('func_name'), or lookup_type('TypeName')."
+        )
         
     lines = []
     for m in func_matches:
@@ -186,8 +183,10 @@ def search_help(query: str, external_funcs: dict, sdk) -> str:
             hit_info.append("Name match")
         if m['matching_lines']:
             hit_info.append(f"Doc hit: \"{m['matching_lines'][0]}\"")
-        if m['hit_in_params']:
-            hit_info.append("Input param match")
+        elif m['summary']:
+            hit_info.append(f"\"{m['summary']}\"")
+        if m['matching_params']:
+            hit_info.append(f"Input param match: {', '.join(m['matching_params'][:2])}")
         if m['output_fields']:
             hit_info.append(f"Output field match: {', '.join(m['output_fields'][:2])}")
             
@@ -204,7 +203,11 @@ def search_help(query: str, external_funcs: dict, sdk) -> str:
             
         lines.append(f"- Type: {m['name']} ({' | '.join(hit_info)})")
         
-    return f"Matches found for '{query}':\n" + "\n".join(lines)
+    footer = (
+        "\n\nTip: Use lookup('func_name') or lookup_type('TypeName') for full details, "
+        f"or search_with_lookups('{query}') to expand all matches."
+    )
+    return f"Matches found for '{query}':\n" + "\n".join(lines) + footer
 
 def search_with_lookups(query: str, external_funcs: dict, sdk) -> list:
     """Search for functions and return the array of lookups for matches."""
