@@ -94,11 +94,20 @@ return "Dev mode ran"
     assert result == "Dev mode ran"
 
 def test_help_search():
+    res_empty = run_python_code("return help()")
+    assert "SANDBOX DISCOVERY" in res_empty
+    assert 'lookup("run_inline_query")' in res_empty
+    assert 'lookup_type("WriteQuery")' in res_empty
+
     code_help = """
 return help('dashboard')
 """
     result = run_python_code(code_help)
     assert "Matches found" in result
+    assert "Tip: Use lookup('func_name') or lookup_type('TypeName')" in result
+
+    res_none = run_python_code("return help('zzz_no_such_method_xyz')")
+    assert "Try help('*keyword*'), lookup('func_name'), or lookup_type('TypeName')" in res_none
 
 def test_lookup():
     code_lookup = """

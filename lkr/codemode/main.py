@@ -149,7 +149,7 @@ def run_python_code(
         # Provide helper functions for the LLM to explore the SDK
         external_funcs['dir'] = lambda: list(external_funcs.keys())
         
-        external_funcs['help'] = lambda query: search_help(query, external_funcs, sdk)
+        external_funcs['help'] = lambda query="": search_help(query, external_funcs, sdk)
         external_funcs['lookup'] = lambda name: lookup_function(name, external_funcs, sdk)
         external_funcs['search_with_lookups'] = lambda query: search_with_lookups(query, external_funcs, sdk)
         external_funcs['lookup_type'] = lookup_type
@@ -340,7 +340,7 @@ def cli_help(
     other = [
         ln
         for ln in summary.splitlines()[1:]
-        if f": {pattern_or_method.lower()} (" not in ln.lower()
+        if ln.startswith("- ") and f": {pattern_or_method.lower()} (" not in ln.lower()
     ]
     typer.echo(
         exact.strip()

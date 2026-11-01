@@ -103,6 +103,12 @@ pub fn get_readme() -> &'static str {
     r#"
 Looker Code Mode - Instructions & Examples
 
+SANDBOX DISCOVERY (pass a search term to help(), or inspect a function/type):
+  help("*dashboard*")                # Search SDK functions & types by keyword/wildcard
+  lookup("run_inline_query")         # Inspect a function's docstring, inputs & outputs
+  lookup_type("WriteQuery")          # Inspect a type's fields & nested types
+  search_with_lookups("board_item")  # Search and return full details for all matches
+
 CLI DISCOVERY & EXECUTION (offline discovery requires no Looker auth):
   lkr code-mode help "*dashboard*"           # Search SDK methods & types
   lkr code-mode help run_inline_query        # Full signature, docstring & return type
@@ -240,9 +246,10 @@ fn compile_wildcard_regex(query: &str) -> Regex {
 
 struct FuncMatch {
     name: String,
+    summary: String,
     hit_in_name: bool,
     matching_lines: Vec<String>,
-    hit_in_params: bool,
+    matching_params: Vec<String>,
     output_fields: Vec<String>,
 }
 
@@ -268,21 +275,37 @@ fn get_func_matches(query: &str) -> Vec<FuncMatch> {
                 }
             }
         }
-        let hit_in_params = op.params.iter().any(|p| pattern.is_match(&p.name));
+        let matching_params: Vec<String> = op
+            .params
+            .iter()
+            .filter(|p| pattern.is_match(&p.name))
+            .map(|p| p.name.clone())
+            .collect();
         let output_fields: Vec<String> = op
             .output_fields
             .iter()
             .filter(|f| pattern.is_match(&f.name))
             .map(|f| f.name.clone())
             .collect();
-        let hit_in_output = !output_fields.is_empty();
 
-        if hit_in_name || !matching_lines.is_empty() || hit_in_params || hit_in_output {
+        if hit_in_name
+            || !matching_lines.is_empty()
+            || !matching_params.is_empty()
+            || !output_fields.is_empty()
+        {
+            let summary = op
+                .doc
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .unwrap_or("")
+                .to_string();
             matches.push(FuncMatch {
                 name: name.clone(),
+                summary,
                 hit_in_name,
                 matching_lines,
-                hit_in_params,
+                matching_params,
                 output_fields,
             });
         }
@@ -323,11 +346,17 @@ fn get_type_matches(query: &str) -> Vec<TypeMatch> {
 }
 
 pub fn search_help(query: &str) -> String {
+    if query.trim().is_empty() {
+        return get_readme().trim().to_string();
+    }
+
     let func_matches = get_func_matches(query);
     let type_matches = get_type_matches(query);
 
     if func_matches.is_empty() && type_matches.is_empty() {
-        return format!("No matches found for '{query}'.");
+        return format!(
+            "No matches found for '{query}'. Try help('*keyword*'), lookup('func_name'), or lookup_type('TypeName')."
+        );
     }
 
     let mut lines = Vec::new();
@@ -338,9 +367,12 @@ pub fn search_help(query: &str) -> String {
         }
         if let Some(first_doc) = m.matching_lines.first() {
             hit_info.push(format!("Doc hit: \"{first_doc}\""));
+        } else if !m.summary.is_empty() {
+            hit_info.push(format!("\"{}\"", m.summary));
         }
-        if m.hit_in_params {
-            hit_info.push("Input param match".to_string());
+        if !m.matching_params.is_empty() {
+            let preview: Vec<&str> = m.matching_params.iter().take(2).map(String::as_str).collect();
+            hit_info.push(format!("Input param match: {}", preview.join(", ")));
         }
         if !m.output_fields.is_empty() {
             let preview: Vec<&str> = m.output_fields.iter().take(2).map(String::as_str).collect();
@@ -369,7 +401,10 @@ pub fn search_help(query: &str) -> String {
         lines.push(format!("- Type: {} ({})", m.name, hit_info.join(" | ")));
     }
 
-    format!("Matches found for '{query}':\n{}", lines.join("\n"))
+    format!(
+        "Matches found for '{query}':\n{}\n\nTip: Use lookup('func_name') or lookup_type('TypeName') for full details, or search_with_lookups('{query}') to expand all matches.",
+        lines.join("\n")
+    )
 }
 
 pub fn lookup_type(type_name: &str) -> String {
@@ -532,7 +567,7 @@ pub fn cli_help_output(pattern_or_method: Option<&str>) -> String {
     let other: Vec<&str> = summary
         .lines()
         .skip(1)
-        .filter(|ln| !ln.to_lowercase().contains(&needle))
+        .filter(|ln| ln.starts_with("- ") && !ln.to_lowercase().contains(&needle))
         .collect();
     if other.is_empty() {
         exact.trim().to_string()
@@ -1830,9 +1865,18 @@ mod tests {
         assert!(d.contains(&"run_inline_query".to_string()));
         assert!(d.contains(&"generate_lookml_with_new_files".to_string()));
 
+        let empty_help = search_help("");
+        assert!(empty_help.contains("SANDBOX DISCOVERY"));
+        assert!(empty_help.contains("lookup(\"run_inline_query\")"));
+        assert!(empty_help.contains("lookup_type(\"WriteQuery\")"));
+
         let help_out = search_help("*dashboard*");
         assert!(help_out.contains("Function: search_dashboards"));
         assert!(help_out.contains("Type: Dashboard"));
+        assert!(help_out.contains("Tip: Use lookup('func_name') or lookup_type('TypeName')"));
+
+        let no_match_out = search_help("zzz_no_such_method_xyz");
+        assert!(no_match_out.contains("Try help('*keyword*'), lookup('func_name'), or lookup_type('TypeName')"));
 
         let fn_out = lookup_function("run_lookml_test");
         assert!(fn_out.contains("Function: run_lookml_test"));

@@ -2,6 +2,12 @@ def get_readme() -> str:
     return """
 Looker Code Mode - Instructions & Examples
 
+SANDBOX DISCOVERY (pass a search term to help(), or inspect a function/type):
+  help("*dashboard*")                # Search SDK functions & types by keyword/wildcard
+  lookup("run_inline_query")         # Inspect a function's docstring, inputs & outputs
+  lookup_type("WriteQuery")          # Inspect a type's fields & nested types
+  search_with_lookups("board_item")  # Search and return full details for all matches
+
 CLI DISCOVERY & EXECUTION (offline discovery requires no Looker auth):
   lkr code-mode help "*dashboard*"           # Search SDK methods & types
   lkr code-mode help run_inline_query        # Full signature, docstring & return type
