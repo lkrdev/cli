@@ -586,6 +586,44 @@ class ExtendedLooker40SDK(Looker40SDK):
             ),
         )
 
+    def global_search_v2(
+        self,
+        term: str,
+        curate: bool | None = None,
+        sections: str | None = None,
+        fields: str | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+        created_by_id: str | None = None,
+        created_at_start: str | None = None,
+        created_at_end: str | None = None,
+        last_modified_at_start: str | None = None,
+        last_modified_at_end: str | None = None,
+        certification_status: str | None = None,
+        located_in: str | None = None,
+        prev_page: bool | None = None,
+        score_for_hybrid_keyword_search: float | None = None,
+        semantic_score_threshold: float | None = None,
+        keyword_score_scaler: int | None = None,
+        keyword_score_threshold: float | None = None,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> dict[str, Any]:
+        """Search all Looker content for matching text (GET /global_search_v2)."""
+        params = {
+            k: v
+            for k, v in locals().items()
+            if k not in ("self", "transport_options") and v is not None
+        }
+        return cast(
+            dict[str, Any],
+            self.get(
+                path="/global_search_v2",
+                structure=dict,
+                query_params=cast(Any, params),
+                transport_options=transport_options,
+            ),
+        )
+
 
 
 

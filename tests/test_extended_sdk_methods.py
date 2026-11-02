@@ -354,5 +354,18 @@ def test_gemini_enterprise_agent_methods():
             transport_options=None,
         )
 
+    with patch.object(sdk, "get", return_value={"term": "orders", "total_count": 1}) as mock_get:
+        assert sdk.global_search_v2(term="orders", limit=10, curate=True) == {
+            "term": "orders",
+            "total_count": 1,
+        }
+        mock_get.assert_called_once_with(
+            path="/global_search_v2",
+            structure=dict,
+            query_params={"term": "orders", "curate": True, "limit": 10},
+            transport_options=None,
+        )
+
+
 
 
