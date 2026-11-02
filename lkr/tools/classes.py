@@ -54,7 +54,9 @@ class UserAttributeUpdater(BaseModel):
         else:
             logger.error("No authorization token found")
 
-    def _get_sdk(self):
+    def _get_sdk(self, sdk: Looker40SDK | None = None) -> Looker40SDK | None:
+        if sdk is not None:
+            return sdk
         api_key: LookerApiKey | None = None
         if self.client_id and self.client_secret and self.base_url:
             api_key = LookerApiKey(
@@ -73,20 +75,33 @@ class UserAttributeUpdater(BaseModel):
         if self.looker_user_id:
             return self.looker_user_id
         elif self.email:
-            user = sdk.user_for_credential("email", self.email)
-            return user.id if user else None
+            try:
+                user = sdk.user_for_credential("email", self.email)
+                if user and user.id:
+                    return user.id
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"Credential lookup fallback for '{self.email}': {e}")
+            users = sdk.search_users(email=self.email, fields="id")
+            return users[0].id if users else None
         elif self.external_user_id:
             user = sdk.user_for_credential("embed", self.external_user_id)
             return user.id if user else None
         return None
 
-    def _get_group_id(self, sdk: Looker40SDK) -> str | None:
+    def _get_group_id(
+        self, sdk: Looker40SDK, *, create_if_missing: bool = False
+    ) -> str | None:
         if self.group_id:
             return self.group_id
         elif self.group_name:
             groups = sdk.search_groups(name=self.group_name, fields="id")
             if groups:
                 return groups[0].id
+            if create_if_missing:
+                from looker_sdk.sdk.api40.models import WriteGroup
+
+                created = sdk.create_group(body=WriteGroup(name=self.group_name))
+                return created.id if created else None
         return None
 
     def _get_user_attribute_id(self, sdk: Looker40SDK) -> str | None:
@@ -98,11 +113,69 @@ class UserAttributeUpdater(BaseModel):
             )
             for user_attribute in user_attributes or []:
                 if user_attribute["name"] == self.user_attribute:
-                    return user_attribute["id"]
+                    return str(user_attribute["id"])
         return None
 
-    def delete_user_attribute_value(self):
-        sdk = self._get_sdk()
+    def ensure_attribute(
+        self,
+        sdk: Looker40SDK | None = None,
+        *,
+        label: str | None = None,
+        default_value: str | None = None,
+        attr_type: str = "string",
+    ) -> str:
+        resolved = self._get_sdk(sdk)
+        if not resolved or not self.user_attribute:
+            raise ValueError("SDK and user_attribute are required")
+        attr_id = self._get_user_attribute_id(resolved)
+        if attr_id:
+            curr = resolved.user_attribute(attr_id, "name,label,type,default_value")
+            if curr and (
+                (default_value is not None and curr.default_value != default_value)
+                or (curr.type != attr_type)
+            ):
+                resolved.update_user_attribute(
+                    attr_id,
+                    WriteUserAttribute(
+                        name=curr.name or self.user_attribute,
+                        label=curr.label or label or self.user_attribute,
+                        type=attr_type,
+                        default_value=(
+                            default_value
+                            if default_value is not None
+                            else curr.default_value
+                        ),
+                    ),
+                )
+            return attr_id
+        created = resolved.create_user_attribute(
+            WriteUserAttribute(
+                name=self.user_attribute,
+                label=label or self.user_attribute.replace("_", " ").title(),
+                type=attr_type,
+                default_value=default_value,
+                user_can_view=True,
+                user_can_edit=False,
+                value_is_hidden=False,
+            )
+        )
+        if not created or not created.id:
+            raise ValueError(f"Failed to create user attribute '{self.user_attribute}'")
+        self.user_attribute_id = str(created.id)
+        return self.user_attribute_id
+
+    def delete_attribute(self, sdk: Looker40SDK | None = None) -> bool:
+        resolved = self._get_sdk(sdk)
+        if not resolved:
+            raise ValueError("No SDK found")
+        attr_id = self._get_user_attribute_id(resolved)
+        if not attr_id:
+            return False
+        resolved.delete_user_attribute(attr_id)
+        return True
+
+    def delete_user_attribute_value(self, sdk: Looker40SDK | None = None):
+        sdk = self._get_sdk(sdk)
         if not sdk:
             raise ValueError("No SDK found")
         user_attribute_id = self._get_user_attribute_id(sdk)
@@ -138,11 +211,16 @@ class UserAttributeUpdater(BaseModel):
                 user_attribute_id=user_attribute_id,
             )
 
-    def update_user_attribute_value(self):
-        if not self.value:
+    def update_user_attribute_value(
+        self,
+        sdk: Looker40SDK | None = None,
+        *,
+        create_group_if_missing: bool = False,
+    ):
+        if self.value is None:
             raise ValueError("Value is required to update user attribute")
 
-        sdk = self._get_sdk()
+        sdk = self._get_sdk(sdk)
         if not sdk:
             raise ValueError("No SDK found")
         user_attribute_id = self._get_user_attribute_id(sdk)
@@ -153,11 +231,21 @@ class UserAttributeUpdater(BaseModel):
         if not user_attribute:
             raise ValueError("User attribute not found")
 
-        if user_attribute.type != "string":
-            raise ValueError("User attribute is not a string")
+        if user_attribute.type not in (
+            "string",
+            "advanced_filter_string",
+            "advanced_filter_number",
+            "number",
+            "datetime",
+            "yesno",
+            "zipcode",
+        ):
+            raise ValueError(
+                f"Unsupported user attribute type: {user_attribute.type}"
+            )
 
         if self.update_type == "group":
-            group_id = self._get_group_id(sdk)
+            group_id = self._get_group_id(sdk, create_if_missing=create_group_if_missing)
             if group_id:
                 sdk.update_user_attribute_group_value(
                     group_id=group_id,

@@ -922,9 +922,14 @@ class BigQueryAuditEvent(BaseModel):
             or self.event_type
             or "manual"
         )
-        m = re.search(r"projects/([^/]+)/datasets/([^/]+)/tables/([^/]+)", res_name)
+        m = re.search(
+            r"projects/([^/]+)/datasets/([^/:]+)/tables/([^/:]+)", res_name
+        )
         if m:
             return m.group(1), m.group(2), m.group(3), method
+        m_ds = re.search(r"projects/([^/]+)/datasets/([^/:]+)", res_name)
+        if m_ds:
+            return m_ds.group(1), m_ds.group(2), self.table, method
         return self.dataset, self.schema_, self.table, method
 
 
@@ -993,6 +998,17 @@ def _resolve_matching_tables(
     return matched
 
 
+def _upsert_remote_file(
+    sdk: ExtendedLooker40SDK, project_id: str, file_path: str, content: str
+) -> None:
+    fc = FileContent(path=file_path, content=content)
+    try:
+        sdk.update_file(project_id=project_id, file_content=fc)
+    except Exception:  # noqa: BLE001
+        _ensure_remote_directory(sdk=sdk, project_id=project_id, file_path=file_path)
+        sdk.create_file(project_id=project_id, file_content=fc)
+
+
 def create_lookml_views(
     sdk: ExtendedLooker40SDK,
     project_id: str,
@@ -1009,6 +1025,8 @@ def create_lookml_views(
     allow_update_without_header: bool = False,
     github_token: str | None = None,
     event_json: str | BigQueryAuditEvent | dict[str, Any] | None = None,
+    bq_security: bool = False,
+    gcp_token: str | None = None,
 ) -> dict[str, Any]:
     """Create or update LookML views from any Looker database connection via the Looker API."""
     event_type = "manual"
@@ -1130,10 +1148,105 @@ def create_lookml_views(
         )
         synced_views.append(view_path)
 
+    security_files_changed: list[str] = []
+    security_summary: dict[str, Any] | None = None
+    if bq_security and (targets or not errors):
+        from lkr.tools.bq_security import (
+            compile_bq_security_overlays,
+            discover_bq_security,
+            ensure_model_security_includes,
+            extract_project_bq_tables,
+            resolve_gcp_token,
+            sync_looker_security_attributes,
+        )
+
+        conn_obj = sdk.connection(connection)
+        conn_host = str(_attr(conn_obj, "host", ""))
+        conn_db = str(_attr(conn_obj, "database", ""))
+        conn_user = str(_attr(conn_obj, "username", ""))
+        gcp_project = dataset or conn_host
+        bq_dataset = schema or conn_db
+        if not gcp_project or not bq_dataset:
+            raise ValueError(
+                "Could not resolve BigQuery project and dataset. Pass --dataset <gcp_project> --schema <bq_dataset> or configure connection host/database."
+            )
+        token = resolve_gcp_token(gcp_token)
+        excl_sa = {conn_user.lower()} if "@" in conn_user else set()
+
+        proj_files: dict[str, str] = {}
+        existing_sec_files: set[str] = set()
+        for rf in sdk.all_project_files(project_id=project_id) or []:
+            rf_path = _get_file_id(rf).replace("\\", "/")
+            if rf_path.startswith("security/") and rf_path.endswith(".lkml"):
+                existing_sec_files.add(rf_path)
+            if rf_path.endswith((".lkml", ".lookml")):
+                try:
+                    proj_files[rf_path] = sdk.get_file_content(
+                        project_id=project_id, file_path=rf_path
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.debug(f"Could not read project file '{rf_path}': {e}")
+
+        table_set = {tbl for _, _, tbl in targets if tbl} | extract_project_bq_tables(
+            proj_files, bq_dataset
+        )
+
+        bq_sec_map = discover_bq_security(
+            project_id=gcp_project,
+            dataset_id=bq_dataset,
+            table_ids=sorted(table_set),
+            token=token,
+            excluded_service_accounts=excl_sa,
+        )
+        bundle = compile_bq_security_overlays(
+            project_files=proj_files,
+            bq_tables=bq_sec_map,
+            default_dataset=bq_dataset,
+            model_name=resolved_model,
+        )
+        for w in bundle.warnings:
+            logger.warning(w)
+
+        for sec_path, sec_content in sorted(bundle.files.items()):
+            if proj_files.get(sec_path) != sec_content:
+                _upsert_remote_file(sdk, project_id, sec_path, sec_content)
+                security_files_changed.append(sec_path)
+
+        for stale_sec in sorted(existing_sec_files - set(bundle.files)):
+            try:
+                sdk.delete_file(project_id=project_id, file_path=stale_sec)
+                security_files_changed.append(stale_sec)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"Delete stale security file notice ({stale_sec}): {e}")
+
+        model_candidates = [
+            p
+            for p in proj_files
+            if p == f"{resolved_model}.model.lkml"
+            or p.endswith(f"/{resolved_model}.model.lkml")
+        ] or [p for p in proj_files if p.endswith(".model.lkml")]
+        for m_path in model_candidates:
+            updated_m = ensure_model_security_includes(
+                proj_files[m_path], list(bundle.files)
+            )
+            if updated_m != proj_files[m_path]:
+                _upsert_remote_file(sdk, project_id, m_path, updated_m)
+                security_files_changed.append(m_path)
+
+        attr_res = sync_looker_security_attributes(
+            sdk=sdk, project_id=project_id, desired=bundle.attributes
+        )
+        security_summary = {
+            "files": sorted(bundle.files),
+            "warnings": bundle.warnings,
+            **attr_res,
+        }
+
     status = "up_to_date"
     pr_url: str | None = None
-    if synced_views:
-        commit_msg = f"chore(lookml): auto-upsert {len(synced_views)} view(s)"
+    all_touched = [*synced_views, *security_files_changed]
+    if all_touched:
+        commit_msg = f"chore(lookml): auto-upsert {len(all_touched)} file(s)"
         try:
             sdk.commit(
                 project_id=project_id,
@@ -1164,7 +1277,7 @@ def create_lookml_views(
         else:
             status = "committed"
 
-        for view_path in synced_views:
+        for view_path in all_touched:
             _log_sync_artifact(
                 sdk,
                 {
@@ -1184,13 +1297,16 @@ def create_lookml_views(
     elif errors:
         status = "error_missing_header"
 
-    return {
+    out_res: dict[str, Any] = {
         "status": status,
         "branch": branch_name,
         "synced_views": synced_views,
         "errors": errors,
         "pr_url": pr_url,
     }
+    if security_summary is not None:
+        out_res["security"] = security_summary
+    return out_res
 
 
 @lookml_group.command(name="create")
@@ -1211,11 +1327,11 @@ def create_cmd(
         typer.Option(
             "--dataset",
             "-d",
-            help="Optional database/catalog name for views/{dataset}/{schema} folder path",
+            help="Optional database/catalog (GCP project ID for BigQuery) for views/{dataset}/{schema} folder path",
         ),
     ] = None,
     schema: Annotated[
-        str | None, typer.Option("--schema", "-s", help="Database schema name")
+        str | None, typer.Option("--schema", "-s", help="Database schema / BigQuery dataset name")
     ] = None,
     table: Annotated[
         str | None,
@@ -1264,6 +1380,21 @@ def create_cmd(
             help="Allow overwriting existing .view.lkml files even if they lack the # AUTOGENERATED header",
         ),
     ] = False,
+    bq_security: Annotated[
+        bool,
+        typer.Option(
+            "--bq-security/--no-bq-security",
+            help="Mirror BigQuery ACLs, Table IAM, Row Access Policies, Policy Tags, and Dynamic Masking into LookML and Looker User Attributes",
+        ),
+    ] = False,
+    gcp_token: Annotated[
+        str | None,
+        typer.Option(
+            "--gcp-token",
+            envvar=["GCP_ACCESS_TOKEN", "GOOGLE_OAUTH_ACCESS_TOKEN"],
+            help="GCP OAuth Bearer token for BigQuery/Data Catalog ACL discovery (defaults to GCP_ACCESS_TOKEN or ADC)",
+        ),
+    ] = None,
     github_token: Annotated[
         str | None,
         typer.Option(
@@ -1315,6 +1446,8 @@ def create_cmd(
         "create_pr": create_pr,
         "allow_update_without_header": allow_update_without_header,
         "github_token": github_token,
+        "bq_security": bq_security,
+        "gcp_token": gcp_token,
     }
 
     if port is not None:
@@ -1330,7 +1463,13 @@ def create_cmd(
         uvicorn.run(api, host=host, port=port)
         return
 
-    res = create_lookml_views(**common_kwargs, event_json=event_json)
+    from lkr.tools.bq_security import BqPermissionDeniedError
+
+    try:
+        res = create_lookml_views(**common_kwargs, event_json=event_json)
+    except BqPermissionDeniedError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from None
     if res["synced_views"]:
         typer.echo(
             f"Successfully created/updated {len(res['synced_views'])} view(s) [{res['status']}]:"
@@ -1339,10 +1478,19 @@ def create_cmd(
             typer.echo(f"  - {v}")
         if res["pr_url"]:
             typer.echo(f"PR opened: {res['pr_url']}")
+    if res.get("security"):
+        sec = res["security"]
+        typer.echo(
+            f"Synced BigQuery security overlays ({len(sec['files'])} file(s), "
+            f"{len(sec['synced_attributes'])} attribute(s), "
+            f"{len(sec['deleted_attributes'])} removed)."
+        )
+        for w in sec.get("warnings") or []:
+            typer.echo(f"Warning: {w}", err=True)
     if res["errors"]:
         for err in res["errors"]:
             typer.echo(f"Error: {err['error']}", err=True)
-        if not res["synced_views"]:
+        if not res["synced_views"] and not res.get("security"):
             raise typer.Exit(1)
-    if not res["synced_views"] and not res["errors"]:
+    if not res["synced_views"] and not res.get("security") and not res["errors"]:
         typer.echo("No matching tables found to synchronize.")

@@ -340,8 +340,8 @@ class LookmlJoin(LookmlParserValues):
 
 
 class LookmlAggregateTable(LookmlParserValues):
-    query: dict[str, Any] | list[dict[str, Any]] | None = None
-    materialization: dict[str, Any] | list[dict[str, Any]] | None = None
+    query: dict[str, Any] | list[dict[str, Any] | None] | None = None
+    materialization: dict[str, Any] | list[dict[str, Any] | None] | None = None
 
 
 class LookmlExploreSourceColumn(LookmlParserValues):
@@ -416,7 +416,7 @@ class LookmlDerivedTable(_LookmlBase):
 
 
 class LookmlView(LookmlParserValues):
-    access_filter: dict[str, Any] | list[dict[str, Any]] | None = None
+    access_filter: dict[str, Any] | list[dict[str, Any] | None] | None = None
     derived_table: LookmlDerivedTable | dict[str, Any] | None = None
     description: str | None = None
     dimension_group: dict[str, LookmlDimensionGroup] | None = None
@@ -472,9 +472,9 @@ class LookmlExplore(LookmlParserValues):
     group_label: str | None = None
     hidden: bool | None = None
     label: str | None = None
-    query: dict[str, Any] | list[dict[str, Any]] | None = None
+    query: dict[str, Any] | list[dict[str, Any] | None] | None = None
     view_label: str | None = None
-    access_filter: dict[str, Any] | list[dict[str, Any]] | None = None
+    access_filter: dict[str, Any] | list[dict[str, Any] | None] | None = None
     always_filter: dict[str, Any] | None = None
     conditionally_filter: dict[str, Any] | None = None
     case_sensitive: bool | None = None

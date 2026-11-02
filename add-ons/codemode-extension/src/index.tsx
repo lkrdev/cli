@@ -1,7 +1,9 @@
 import { connectExtensionHost, ExtensionSDK } from "@looker/extension-sdk";
 import React, { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import "../../../dist/codemode.js";
+
+const CODEMODE_CDN_URL =
+  "https://cdn.lkr.dev/cli/codemode/latest/codemode.js";
 
 export interface LkrCodeModeAPI {
   setExtensionSDK: (sdk: ExtensionSDK) => Promise<void>;
@@ -15,6 +17,25 @@ declare global {
   interface Window {
     LkrCodeMode?: LkrCodeModeAPI;
   }
+}
+
+let cdnLoadPromise: Promise<LkrCodeModeAPI> | null = null;
+function ensureCodeModeLoaded(): Promise<LkrCodeModeAPI> {
+  if (window.LkrCodeMode) return Promise.resolve(window.LkrCodeMode);
+  if (cdnLoadPromise) return cdnLoadPromise;
+  cdnLoadPromise = new Promise<LkrCodeModeAPI>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = CODEMODE_CDN_URL;
+    script.async = true;
+    script.onload = () =>
+      window.LkrCodeMode
+        ? resolve(window.LkrCodeMode)
+        : reject(new Error("window.LkrCodeMode missing after loading CDN script"));
+    script.onerror = () =>
+      reject(new Error(`Failed to load ${CODEMODE_CDN_URL}`));
+    document.head.appendChild(script);
+  });
+  return cdnLoadPromise;
 }
 
 const DEFAULT_CODE = `return me()`;
@@ -48,14 +69,10 @@ export const CodeModePlayground: React.FC<{ host?: ExtensionSDK }> = ({
   const runCode = useCallback(
     async (sourceCode: string, sdkInstance?: ExtensionSDK) => {
       if (running) return;
-      const api = window.LkrCodeMode;
-      if (!api) {
-        setOutput("Error: window.LkrCodeMode is not loaded.");
-        return;
-      }
       setRunning(true);
       const t0 = performance.now();
       try {
+        const api = await ensureCodeModeLoaded();
         const res = await api.runPythonCode(sourceCode, {
           extensionSDK: sdkInstance ?? extensionSDK,
         });
@@ -77,7 +94,10 @@ export const CodeModePlayground: React.FC<{ host?: ExtensionSDK }> = ({
     let cancelled = false;
     async function initHost() {
       try {
-        const sdk = host ?? (await connectExtensionHost());
+        const [sdk, api] = await Promise.all([
+          host ?? connectExtensionHost(),
+          ensureCodeModeLoaded(),
+        ]);
         if (cancelled) return;
         setExtensionSDK(sdk);
         const parentUrl =
@@ -86,9 +106,7 @@ export const CodeModePlayground: React.FC<{ host?: ExtensionSDK }> = ({
             ?.hostOrigin ||
           "";
         setHostUrl(String(parentUrl || "connected"));
-        if (window.LkrCodeMode) {
-          await window.LkrCodeMode.setExtensionSDK(sdk);
-        }
+        await api.setExtensionSDK(sdk);
         await runCode(DEFAULT_CODE, sdk);
       } catch {
         if (cancelled) return;
