@@ -11,5 +11,6 @@ application: lkr-codemode {
     raw_api_request: yes
     use_iframes: yes
     use_form_submit: yes
+    external_api_urls: ["https://cdn.lkr.dev"]
   }
 }

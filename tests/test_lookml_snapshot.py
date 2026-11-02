@@ -809,3 +809,85 @@ def test_access_snapshot_tracks_pii_tags_and_refinements(tmp_path: Path):
     assert any("shop.users.email.hidden" in c for c in res2.material_changes)
 
 
+def test_access_snapshot_tracks_liquid_user_attributes_in_sql(tmp_path: Path):
+    proj_dir = tmp_path / "liquid_ua_proj"
+    proj_dir.mkdir(parents=True)
+    view_file = proj_dir / "users.view.lkml"
+    view_file.write_text(
+        "view: users {\n"
+        "  derived_table: {\n"
+        "    sql: SELECT * FROM raw_users WHERE tenant = '{{ _user_attributes[\"tenant_id\"] }}' ;;\n"
+        "  }\n"
+        "  sql_always_where: ${region} = '{{ _user_attributes.user_region }}' ;;\n"
+        "  dimension: secret_metric {\n"
+        "    type: string\n"
+        '    label: "{{ _user_attributes[\'metric_label\'] }}"\n'
+        '    description: "Scoped to {{ _user_attributes[\'dept_desc\'] }}"\n'
+        "    sql: CASE WHEN {{ _user_attributes['department'] }} = 'finance' THEN ${TABLE}.amount ELSE NULL END ;;\n"
+        "    html: <a href=\"/{{ _user_attributes['org_slug'] }}\">{{ value }}</a> ;;\n"
+        "    link: {\n"
+        '      label: "Drill"\n'
+        '      url: "https://example.com/{{ _user_attributes[\'link_tenant\'] }}"\n'
+        "    }\n"
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    model_file = proj_dir / "shop.model.lkml"
+    model_file.write_text(
+        'connection: "bq"\n'
+        'include: "*.view.lkml"\n'
+        "explore: users {\n"
+        "  sql_always_where: ${users.country} = '{{ _user_attributes[\"country_code\"] }}' ;;\n"
+        "  always_filter: {\n"
+        '    filters: [users.secret_metric: "{{ _user_attributes[\'default_dept\'] }}"]\n'
+        "  }\n"
+        "  join: orders {\n"
+        "    sql_on: ${users.id} = ${orders.user_id} AND ${orders.env} = '{{ _user_attributes[\"env\"] }}' ;;\n"
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    res1, _ = run_lookml_snapshot(path=proj_dir, only="access")
+    assert res1.success is True
+    assert res1.written == 1
+
+    access_snap = json.loads(
+        (proj_dir / "__snapshots__" / "access.snap.json.md").read_text(encoding="utf-8")
+    )
+    assert access_snap["fields"]["shop.users.secret_metric"]["user_attributes"] == {
+        "description": ["dept_desc"],
+        "html": ["org_slug"],
+        "label": ["metric_label"],
+        "link": ["link_tenant"],
+        "sql": ["department"],
+    }
+    assert access_snap["views"]["shop.users"]["user_attributes"] == {
+        "derived_table.sql": ["tenant_id"],
+        "sql_always_where": ["user_region"],
+    }
+    assert access_snap["explores"]["shop.users"]["user_attributes"] == {
+        "always_filter": ["default_dept"],
+        "join.orders.sql_on": ["env"],
+        "sql_always_where": ["country_code"],
+    }
+
+    # Changing a user attribute in SQL fails CI and triggers material change review
+    orig_view = view_file.read_text(encoding="utf-8")
+    view_file.write_text(
+        orig_view.replace("_user_attributes['department']", "_user_attributes['team']"),
+        encoding="utf-8",
+    )
+    ci_res, ci_text = run_lookml_snapshot(path=proj_dir, only="access", ci=True)
+    assert ci_res.success is False
+    assert "FAIL access" in ci_text
+    assert "department" in ci_text and "team" in ci_text
+
+    mat_res, _ = run_lookml_snapshot(path=proj_dir, only="access", allow_additions=True)
+    assert mat_res.success is False
+    assert mat_res.requires_review is True
+    assert any(
+        "access.fields.shop.users.secret_metric.user_attributes.sql" in c
+        for c in mat_res.material_changes
+    )

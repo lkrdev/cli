@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import os
 import shutil
 import subprocess
@@ -63,7 +64,8 @@ def build_wasm() -> Path:
 
     glue_js = (BINDGEN_DIR / "lkr_codemode_wasm.js").read_text(encoding="utf-8")
     wasm_bytes = (BINDGEN_DIR / "lkr_codemode_wasm_bg.wasm").read_bytes()
-    wasm_b64 = base64.b64encode(wasm_bytes).decode("ascii")
+    wasm_gz = gzip.compress(wasm_bytes, compresslevel=9)
+    wasm_b64 = base64.b64encode(wasm_gz).decode("ascii")
 
     DIST_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -76,14 +78,32 @@ def build_wasm() -> Path:
 
 {glue_js}
 
-  const bin = atob("{wasm_b64}");
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  try {{ wasm_bindgen.initSync({{ module: bytes }}); }} catch (_) {{}}
+  let initPromise = null;
+  function decodeGzipBytes() {{
+    const bin = atob("{wasm_b64}");
+    const gz = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) gz[i] = bin.charCodeAt(i);
+    return gz;
+  }}
+  if (typeof process !== "undefined" && process.versions && process.versions.node && typeof require === "function") {{
+    try {{
+      wasm_bindgen.initSync({{ module: require("zlib").gunzipSync(decodeGzipBytes()) }});
+      initPromise = Promise.resolve(wasm_bindgen);
+    }} catch (_) {{}}
+  }}
   function initAsync() {{
-    return wasm_bindgen({{ module_or_path: bytes }}).then(function () {{
-      return wasm_bindgen;
-    }});
+    if (initPromise) return initPromise;
+    initPromise = (function () {{
+      const gz = decodeGzipBytes();
+      if (typeof DecompressionStream !== "undefined") {{
+        return new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip")))
+          .arrayBuffer()
+          .then(function (buf) {{ return wasm_bindgen({{ module_or_path: buf }}); }})
+          .then(function () {{ return wasm_bindgen; }});
+      }}
+      return Promise.reject(new Error("DecompressionStream is not supported in this environment."));
+    }})();
+    return initPromise;
   }}
 
   function isExtSdk(x) {{

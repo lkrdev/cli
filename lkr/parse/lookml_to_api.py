@@ -1560,6 +1560,169 @@ def _find_inaccessible_view_ref_errors(
     ]
 
 
+def _extract_access_filter_fields(
+    af_raw: Any, default_alias: str
+) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    items = (
+        af_raw
+        if isinstance(af_raw, list)
+        else list(af_raw.values())
+        if isinstance(af_raw, dict) and "field" not in af_raw
+        else [af_raw]
+    )
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        f_val = item.get("field")
+        ua_val = item.get("user_attribute")
+        if f_val:
+            out.append(
+                (_qualify_field_ref(str(f_val), default_alias), str(ua_val or ""))
+            )
+    return out
+
+
+def _find_security_and_agg_table_errors(
+    explore_name: str,
+    exp_obj: LookmlExplore,
+    exp_chain: list[tuple[str, Any, dict[str, Any]]],
+    base_alias: str,
+    join_entries: list[tuple[str, LookmlJoin, str, LookmlView]],
+    views_by_alias: dict[str, LookmlView],
+    model_obj: LookmlModel,
+) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+
+    # 1. Measure / derived-field grant propagation check
+    for v_al, v_obj in sorted(views_by_alias.items()):
+        dim_grants: dict[str, set[str]] = {}
+        for d_name, d_obj in (v_obj.dimension or {}).items():
+            if d_obj.required_access_grants:
+                dim_grants[d_name] = set(d_obj.required_access_grants)
+        for dg_name, dg_obj in (v_obj.dimension_group or {}).items():
+            if dg_obj.required_access_grants:
+                gset = set(dg_obj.required_access_grants)
+                dim_grants[dg_name] = gset
+                for tf in dg_obj.timeframes or DEFAULT_TIMEFRAMES:
+                    dim_grants[f"{dg_name}_{tf}"] = gset
+
+        for m_name, m_obj in sorted((v_obj.measure or {}).items()):
+            m_grants = set(m_obj.required_access_grants or [])
+            needed: set[str] = set()
+            for ref in _extract_lookml_refs(m_obj.sql):
+                rv, rf = ref.split(".", 1) if "." in ref else (v_al, ref)
+                if rv == v_al and rf in dim_grants:
+                    needed |= dim_grants[rf]
+            missing_g = sorted(needed - m_grants)
+            if missing_g:
+                errors.append(
+                    {
+                        "type": "measure_missing_access_grants",
+                        "field": f"{v_al}.{m_name}",
+                        "fields": missing_g,
+                        "message": (
+                            f"Measure '{v_al}.{m_name}' references restricted field(s) on explore "
+                            f"'{explore_name}' without required_access_grants {missing_g}."
+                        ),
+                    }
+                )
+
+    # 2. Aggregate table compatibility with `access_filter` & `"bq_masked"` Liquid dimensions
+    from lkr.parse.user_attributes import LIQUID_USER_ATTR_RE
+
+    af_pairs = _extract_access_filter_fields(exp_obj.access_filter, base_alias)
+    af_fields = [f for f, _ in af_pairs]
+    for agg_name, agg_obj in sorted((exp_obj.aggregate_table or {}).items()):
+        q_dict: dict[str, Any] = {}
+        for q_src in (
+            agg_obj.query,
+            *(
+                c_agg.query
+                for _fp, c_exp, _pos in exp_chain
+                if (c_agg := (getattr(c_exp, "aggregate_table", None) or {}).get(agg_name))
+            ),
+        ):
+            if isinstance(q_src, list):
+                q_dict.update(next((x for x in q_src if isinstance(x, dict)), {}))
+            elif isinstance(q_src, dict):
+                q_dict.update(q_src)
+        agg_dims = [
+            _qualify_field_ref(str(d), base_alias)
+            for d in (q_dict.get("dimensions") or [])
+        ]
+        for af_f in af_fields:
+            if af_f not in agg_dims:
+                errors.append(
+                    {
+                        "type": "aggregate_table_missing_access_filter",
+                        "field": f"{explore_name}.{agg_name}",
+                        "fields": [af_f],
+                        "message": (
+                            f"Aggregate table '{agg_name}' on explore '{explore_name}' omits "
+                            f"access_filter dimension '{af_f}' from query.dimensions, disabling Aggregate Awareness."
+                        ),
+                    }
+                )
+        for ad in agg_dims:
+            av, afn = ad.split(".", 1)
+            av_obj = views_by_alias.get(av)
+            d_item = (av_obj.dimension or {}).get(afn) if av_obj else None
+            if d_item and "bq_masked" in (d_item.tags or []):
+                errors.append(
+                    {
+                        "type": "aggregate_table_masked_dimension",
+                        "field": f"{explore_name}.{agg_name}",
+                        "fields": [ad],
+                        "message": (
+                            f"Aggregate table '{agg_name}' on explore '{explore_name}' groups by "
+                            f"masked Liquid dimension '{ad}', breaking shared Aggregate Awareness."
+                        ),
+                    }
+                )
+
+    # 3. Unpropagated Join RLS check: if a base explore for joined view `jv_name` has `access_filter`, verify join guard!
+    view_has_base_rls: dict[str, list[str]] = {}
+    for other_exp_name, raw_other in (model_obj.explore or {}).items():
+        o_obj = raw_other[0] if isinstance(raw_other, list) else raw_other
+        if not isinstance(o_obj, LookmlExplore):
+            continue
+        obv = o_obj.from_ or o_obj.view_name or other_exp_name
+        o_afs = _extract_access_filter_fields(o_obj.access_filter, other_exp_name)
+        for o_f, _ in o_afs:
+            oa, ofn = o_f.split(".", 1)
+            if oa == other_exp_name:
+                view_has_base_rls.setdefault(obv, []).append(ofn)
+
+    af_aliases = {f.split(".", 1)[0] for f in af_fields}
+    for j_name, j_obj, jv_name, _jv in join_entries:
+        if jv_name not in view_has_base_rls:
+            continue
+        has_af = j_name in af_aliases
+        has_where = bool(
+            exp_obj.sql_always_where
+            and (f"${{{j_name}." in exp_obj.sql_always_where)
+            and LIQUID_USER_ATTR_RE.search(exp_obj.sql_always_where)
+        )
+        has_on_guard = bool(
+            j_obj.sql_on and LIQUID_USER_ATTR_RE.search(j_obj.sql_on)
+        )
+        if not (has_af or has_where or has_on_guard):
+            errors.append(
+                {
+                    "type": "unpropagated_join_rls",
+                    "field": f"{explore_name}.{j_name}",
+                    "fields": view_has_base_rls[jv_name],
+                    "message": (
+                        f"Explore '{explore_name}' joins row-secured view '{jv_name}' (as '{j_name}') "
+                        "without propagating its access_filter or sql_on RLS guard."
+                    ),
+                }
+            )
+
+    return errors
+
+
 def _build_explore_from_assembled(
     model_name: str,
     model_obj: LookmlModel,
@@ -1863,6 +2026,15 @@ def _build_explore_from_assembled(
             {base_alias, *(exp_obj.join or {})},
             (*all_dims, *all_meas, *all_filts, *all_params),
             api_joins,
+        ),
+        *_find_security_and_agg_table_errors(
+            explore_name,
+            exp_obj,
+            exp_chain,
+            base_alias,
+            join_entries,
+            views_by_alias,
+            model_obj,
         ),
     ]
     active_names = {f.name for f in (*all_dims, *all_meas, *all_filts, *all_params)}

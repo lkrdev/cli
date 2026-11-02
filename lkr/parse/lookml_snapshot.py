@@ -21,6 +21,7 @@ from lkr.parse.lookml import (
     parse_lookml,
 )
 from lkr.parse.lookml_to_api import parse_lookml_to_api
+from lkr.parse.user_attributes import LIQUID_USER_ATTR_RE
 
 VALID_SNAPSHOT_OBJECTS = ("tests", "access", "measures", "connections", "manifest")
 
@@ -70,6 +71,37 @@ def _is_empty_snapshot(data: Any) -> bool:
             or all(isinstance(v, (dict, list)) and not v for v in data.values())
         )
     )
+
+
+def _extract_liquid_attrs(val: Any) -> list[str]:
+    if isinstance(val, BaseModel):
+        val = val.model_dump(by_alias=True, exclude_none=True)
+    if isinstance(val, dict):
+        val = [v for k, v in val.items() if not str(k).startswith("$")]
+    if isinstance(val, (list, tuple)):
+        return sorted({a for x in val for a in _extract_liquid_attrs(x)})
+    return (
+        sorted({(m[1] or m[2]).strip() for m in LIQUID_USER_ATTR_RE.finditer(val)} - {""})
+        if isinstance(val, str)
+        else []
+    )
+
+
+def _scan_obj_attrs(
+    obj: Any, skip: tuple[str, ...] = (), prefix: str = ""
+) -> dict[str, list[str]]:
+    d = (
+        obj.model_dump(by_alias=True, exclude_none=True)
+        if isinstance(obj, BaseModel)
+        else (obj if isinstance(obj, dict) else {})
+    )
+    return {
+        f"{prefix}{k}": attrs
+        for k, v in sorted(d.items())
+        if not k.startswith("$")
+        and k not in skip
+        and (attrs := _extract_liquid_attrs(v))
+    }
 
 
 def _resolve_project_name(project: LookmlProject, path: Path) -> str:
@@ -347,7 +379,14 @@ def extract_access_snapshot(
                         continue
                     req_grants = sorted(exp_obj.required_access_grants or [])
                     acc_filter = exp_obj.access_filter
-                    if req_grants or acc_filter:
+                    exp_user_attrs = _scan_obj_attrs(
+                        exp_obj, skip=("join", "access_filter")
+                    )
+                    for jname, jobj in sorted((exp_obj.join or {}).items()):
+                        exp_user_attrs.update(
+                            _scan_obj_attrs(jobj, prefix=f"join.{jname}.")
+                        )
+                    if req_grants or acc_filter or exp_user_attrs:
                         f_path, line_no = _find_position(
                             positions, model_file_hint, ["explore", exp_name]
                         )
@@ -358,6 +397,11 @@ def extract_access_snapshot(
                             "access_filter": acc_filter,
                             "file": f_path,
                             "line": line_no,
+                            **(
+                                {"user_attributes": exp_user_attrs}
+                                if exp_user_attrs
+                                else {}
+                            ),
                         }
 
         # Views and fields access
@@ -371,7 +415,26 @@ def extract_access_snapshot(
                     view_file_hint = f"{v_name}.view"
                     view_req_grants = sorted(v_obj.required_access_grants or [])
                     view_acc_filter = v_obj.access_filter
-                    if view_req_grants or view_acc_filter:
+                    view_user_attrs = _scan_obj_attrs(
+                        v_obj,
+                        skip=(
+                            "access_filter",
+                            "derived_table",
+                            "dimension",
+                            "dimension_group",
+                            "measure",
+                            "filter",
+                            "parameter",
+                            "set",
+                        ),
+                    )
+                    if v_obj.derived_table:
+                        view_user_attrs.update(
+                            _scan_obj_attrs(
+                                v_obj.derived_table, prefix="derived_table."
+                            )
+                        )
+                    if view_req_grants or view_acc_filter or view_user_attrs:
                         f_path, line_no = _find_position(
                             positions, view_file_hint, ["view", v_name]
                         )
@@ -382,6 +445,11 @@ def extract_access_snapshot(
                             "access_filter": view_acc_filter,
                             "file": f_path,
                             "line": line_no,
+                            **(
+                                {"user_attributes": view_user_attrs}
+                                if view_user_attrs
+                                else {}
+                            ),
                         }
 
                     # Check all field collections
@@ -423,8 +491,14 @@ def extract_access_snapshot(
                                 elif isinstance(raw_av, dict):
                                     fld_allowed_vals = [str(k) for k in raw_av]
                                 fld_allowed_vals.sort()
+                            fld_user_attrs = _scan_obj_attrs(fld_obj)
 
-                            if fld_req_grants or fld_allowed_vals or has_pii_tag:
+                            if (
+                                fld_req_grants
+                                or fld_allowed_vals
+                                or has_pii_tag
+                                or fld_user_attrs
+                            ):
                                 f_path, line_no = _find_position(
                                     positions,
                                     view_file_hint,
@@ -445,6 +519,8 @@ def extract_access_snapshot(
                                 if has_pii_tag:
                                     fld_entry["pii"] = True
                                     fld_entry["hidden"] = bool(fld_obj.hidden)
+                                if fld_user_attrs:
+                                    fld_entry["user_attributes"] = fld_user_attrs
                                 fields_out[f"{model_name}.{v_name}.{fld_name}"] = fld_entry
 
     return {
