@@ -146,7 +146,7 @@ jobs:
 
       - name: Invalidate Cloud CDN Cache
         run: |
-          gcloud compute url-maps invalidate-cdn-cache "${{ secrets.CDN_LOAD_BALANCER_NAME }}" \
+          gcloud compute url-maps invalidate-cdn-cache "${{ secrets.CDN_URL_MAP }}" \
             --path "/cli/codemode/latest/*" \
             --project "${{ secrets.GCP_PROJECT_ID }}" \
             --async
