@@ -878,6 +878,8 @@ def _build_table_rls_plan(
 def _rewrite_rap_sql_for_alias(raw_sql: str) -> str:
     try:
         node = sqlglot.parse_one(raw_sql, read="bigquery")
+        if not node:
+            return raw_sql
     except SqlglotError:
         return raw_sql
 
@@ -1025,6 +1027,8 @@ def _analyze_sql_dt_tables(
     q = sql_res.queries[0]
     try:
         parsed = sqlglot.parse_one(clean_sql, read="bigquery")
+        if not parsed:
+            return set(), set(), {}
     except SqlglotError:
         return set(), set(), {}
 
@@ -2138,9 +2142,10 @@ def sync_looker_security_attributes(
             for gname, gval in resolved_groups.items():
                 try:
                     found = sdk.search_groups(name=gname, fields="id")
-                    if not found or not found[0].id:
+                    group_id = getattr(found[0], "id", None) if found else None
+                    if not group_id:
                         continue
-                    for u in sdk.all_group_users(group_id=str(found[0].id), fields="email") or []:
+                    for u in sdk.all_group_users(group_id=str(group_id), fields="email") or []:
                         u_email = getattr(u, "email", None)
                         if u_email:
                             user_group_vals.setdefault(str(u_email), []).append(gval)

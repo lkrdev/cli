@@ -27,12 +27,18 @@ function ensureCodeModeLoaded(): Promise<LkrCodeModeAPI> {
     const script = document.createElement("script");
     script.src = CODEMODE_CDN_URL;
     script.async = true;
-    script.onload = () =>
-      window.LkrCodeMode
-        ? resolve(window.LkrCodeMode)
-        : reject(new Error("window.LkrCodeMode missing after loading CDN script"));
-    script.onerror = () =>
+    script.onload = () => {
+      if (window.LkrCodeMode) {
+        resolve(window.LkrCodeMode);
+      } else {
+        cdnLoadPromise = null;
+        reject(new Error("window.LkrCodeMode missing after loading CDN script"));
+      }
+    };
+    script.onerror = () => {
+      cdnLoadPromise = null;
       reject(new Error(`Failed to load ${CODEMODE_CDN_URL}`));
+    };
     document.head.appendChild(script);
   });
   return cdnLoadPromise;

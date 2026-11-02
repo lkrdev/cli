@@ -82,7 +82,7 @@ class UserAttributeUpdater(BaseModel):
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"Credential lookup fallback for '{self.email}': {e}")
             users = sdk.search_users(email=self.email, fields="id")
-            return users[0].id if users else None
+            return getattr(users[0], "id", None) if users else None
         elif self.external_user_id:
             user = sdk.user_for_credential("embed", self.external_user_id)
             return user.id if user else None

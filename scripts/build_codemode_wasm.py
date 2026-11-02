@@ -101,7 +101,7 @@ def build_wasm() -> Path:
           .then(function (buf) {{ return wasm_bindgen({{ module_or_path: buf }}); }})
           .then(function () {{ return wasm_bindgen; }});
       }}
-      return wasm_bindgen({{ module_or_path: gz }}).then(function () {{ return wasm_bindgen; }});
+      return Promise.reject(new Error("DecompressionStream is not supported in this environment."));
     }})();
     return initPromise;
   }}
