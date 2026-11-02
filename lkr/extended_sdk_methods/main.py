@@ -609,17 +609,37 @@ class ExtendedLooker40SDK(Looker40SDK):
         transport_options: transport.TransportOptions | None = None,
     ) -> dict[str, Any]:
         """Search all Looker content for matching text (GET /global_search_v2)."""
-        params = {
-            k: v
-            for k, v in locals().items()
-            if k not in ("self", "transport_options") and v is not None
-        }
+        query_params = self._convert_query_params(
+            cast(
+                Any,
+                {
+                    "term": term,
+                    "curate": curate,
+                    "sections": sections,
+                    "fields": fields,
+                    "limit": limit,
+                    "offset": offset,
+                    "created_by_id": created_by_id,
+                    "created_at_start": created_at_start,
+                    "created_at_end": created_at_end,
+                    "last_modified_at_start": last_modified_at_start,
+                    "last_modified_at_end": last_modified_at_end,
+                    "certification_status": certification_status,
+                    "located_in": located_in,
+                    "prev_page": prev_page,
+                    "score_for_hybrid_keyword_search": score_for_hybrid_keyword_search,
+                    "semantic_score_threshold": semantic_score_threshold,
+                    "keyword_score_scaler": keyword_score_scaler,
+                    "keyword_score_threshold": keyword_score_threshold,
+                },
+            )
+        )
         return cast(
             dict[str, Any],
             self.get(
                 path="/global_search_v2",
                 structure=dict,
-                query_params=cast(Any, params),
+                query_params=cast(Any, query_params),
                 transport_options=transport_options,
             ),
         )

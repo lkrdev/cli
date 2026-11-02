@@ -362,7 +362,7 @@ def test_gemini_enterprise_agent_methods():
         mock_get.assert_called_once_with(
             path="/global_search_v2",
             structure=dict,
-            query_params={"term": "orders", "curate": True, "limit": 10},
+            query_params={"term": "orders", "curate": "true", "limit": "10"},
             transport_options=None,
         )
 
