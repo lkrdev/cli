@@ -661,6 +661,26 @@ fn main() {
             return_type: "GitDiagnosticReport".to_string(),
             output_fields: vec![],
         },
+        OperationMeta {
+            name: "decompile_kda_target".to_string(),
+            http_method: "CUSTOM".to_string(),
+            path: "/lookml_models/{lookml_model_name}/explores/{explore_name}".to_string(),
+            doc: "Decompile an Explore URL, Query slug, Look, Dashboard, Merge Result, or Conversation into KDA measures and candidate driver dimensions.".to_string(),
+            params: vec![
+                ParamMeta { name: "target".into(), location: "custom".into(), required: false, type_str: "str | int | None".into() },
+                ParamMeta { name: "model_name".into(), location: "custom".into(), required: false, type_str: "str | None".into() },
+                ParamMeta { name: "explore_name".into(), location: "custom".into(), required: false, type_str: "str | None".into() },
+                ParamMeta { name: "fields".into(), location: "custom".into(), required: false, type_str: "list[str] | None".into() },
+                ParamMeta { name: "filters".into(), location: "custom".into(), required: false, type_str: "dict[str, str] | None".into() },
+                ParamMeta { name: "tile_filter".into(), location: "custom".into(), required: false, type_str: "str | list[str] | None".into() },
+            ],
+            return_type: "dict[str, Any]".to_string(),
+            output_fields: vec![
+                FieldMeta { name: "target_type".into(), type_str: "str".into() },
+                FieldMeta { name: "targets".into(), type_str: "list[dict[str, Any]]".into() },
+                FieldMeta { name: "cross_explore_overlaps".into(), type_str: "list[dict[str, Any]]".into() },
+            ],
+        },
     ];
 
     for name in ["create_developer_copy", "developer_copy"] {

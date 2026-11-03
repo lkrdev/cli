@@ -1070,6 +1070,8 @@ fn json_to_python_literal(val: &Value) -> String {
     }
 }
 
+const KDA_MODULE_RAW: &str = include_str!("../../../extended_sdk_methods/_kda_monty.py");
+
 pub async fn execute_python_code<T: SdkTransport>(
     code: &str,
     opts: &RunOptions,
@@ -1083,7 +1085,14 @@ pub async fn execute_python_code<T: SdkTransport>(
         }
     }
     full_code.push_str(code);
-    let rewritten = rewrite_sdk_attributes(&full_code);
+    let mut rewritten = rewrite_sdk_attributes(&full_code);
+    if rewritten.contains("decompile_kda_target") || rewritten.contains("run_key_driver_analysis") {
+        let preamble = KDA_MODULE_RAW
+            .split_once("# --- MONTY_KDA_PREAMBLE ---")
+            .map(|(_, s)| s.trim_start())
+            .unwrap_or(KDA_MODULE_RAW);
+        rewritten = format!("{preamble}\n{rewritten}");
+    }
 
     let runner = match MontyRun::new(rewritten, "main.py", vec![], CompileOptions::default()) {
         Ok(r) => r,
@@ -1109,6 +1118,7 @@ pub async fn execute_python_code<T: SdkTransport>(
                 let res = if let Some(builtin) = MontyObject::builtin_function_from_name(&name) {
                     NameLookupResult::Value(builtin)
                 } else if meta.operations.contains_key(&name)
+                    || name == "_raw_run_key_driver_analysis"
                     || EXCLUDED_FUNCS.contains(&name.as_str())
                     || meta.definitions.contains_key(&name)
                 {
@@ -1186,7 +1196,12 @@ pub async fn execute_python_code<T: SdkTransport>(
                         ))
                     }
                     other => {
-                        if let Some(op) = meta.operations.get(other) {
+                        let op_name = if other == "_raw_run_key_driver_analysis" {
+                            "run_key_driver_analysis"
+                        } else {
+                            other
+                        };
+                        if let Some(op) = meta.operations.get(op_name) {
                             match execute_sdk_operation(transport, op, &pos_args, &kw_args).await {
                                 Ok(val) => ExtFunctionResult::Return(json_to_monty(&val)),
                                 Err(err_msg) => ExtFunctionResult::Error(MontyException::new(
@@ -1820,15 +1835,59 @@ mod tests {
                         "email": "bryan@looker.com",
                         "personal_folder_id": "10"
                     })),
-                    ("POST", "/queries/run/json") => Ok(json!([
-                        { "orders.count": 123 }
-                    ])),
+                    ("POST", "/queries/run/json") => {
+                        let is_kda = body
+                            .as_ref()
+                            .and_then(|b| b.get("fields"))
+                            .and_then(|f| f.as_array())
+                            .map(|arr| arr.iter().any(|v| v.as_str() == Some("order_items.total_gross_margin")))
+                            .unwrap_or(false);
+                        if is_kda {
+                            Ok(json!([
+                                { "order_items.created_year": "2024", "order_items.status": "Complete", "order_items.total_gross_margin": 100.0 },
+                                { "order_items.created_year": "2024", "order_items.status": "Returned", "order_items.total_gross_margin": 50.0 },
+                                { "order_items.created_year": "2025", "order_items.status": "Complete", "order_items.total_gross_margin": 180.0 },
+                                { "order_items.created_year": "2025", "order_items.status": "Returned", "order_items.total_gross_margin": 40.0 }
+                            ]))
+                        } else {
+                            Ok(json!([
+                                { "orders.count": 123 }
+                            ]))
+                        }
+                    }
                     ("PATCH", "/session") => Ok(json!({
                         "workspace_id": "dev"
                     })),
                     ("GET", "/projects/my_proj/files") => Ok(json!([
                         { "id": "model.lkml", "path": "model.lkml" }
                     ])),
+                    ("GET", "/lookml_models/thelook/explores/order_items") => Ok(json!({
+                        "view_name": "order_items",
+                        "joins": [
+                            { "name": "inventory_items", "type": "left_outer", "relationship": "many_to_one" },
+                            { "name": "discounts", "type": "inner", "relationship": "many_to_one" }
+                        ],
+                        "sets": [
+                            { "name": "order_items.detail", "value": ["order_items.status", "users.country"] }
+                        ],
+                        "fields": {
+                            "dimensions": [
+                                { "name": "order_items.created_date", "view": "order_items", "type": "date_date", "is_timeframe": true, "can_filter": true },
+                                { "name": "order_items.status", "view": "order_items", "type": "string", "can_filter": true },
+                                { "name": "users.country", "view": "users", "type": "string", "can_filter": true },
+                                { "name": "order_items.is_returned", "view": "order_items", "type": "yesno", "can_filter": true },
+                                { "name": "order_items.sale_price", "view": "order_items", "type": "number", "is_numeric": true, "sql": "${TABLE}.sale_price", "can_filter": true },
+                                { "name": "inventory_items.cost", "view": "inventory_items", "type": "number", "is_numeric": true, "sql": "${TABLE}.cost", "can_filter": true },
+                                { "name": "order_items.gross_margin", "view": "order_items", "type": "number", "is_numeric": true, "sql": "${sale_price} - ${inventory_items.cost}", "can_filter": true },
+                                { "name": "order_items.item_gross_margin_percentage_tier", "view": "order_items", "type": "tier", "sql": "100.0 * ${gross_margin}/NULLIF(${sale_price}, 0)", "can_filter": true }
+                            ],
+                            "measures": [
+                                { "name": "order_items.total_gross_margin", "view": "order_items", "type": "sum", "sql": "${gross_margin}" },
+                                { "name": "order_items.total_sale_price", "view": "order_items", "type": "sum", "sql": "${sale_price}" }
+                            ]
+                        }
+                    })),
+                    ("POST", "/internal/kda/analyze") => Err("Looker API error (422): undefined method 'status' for #<Java::ComLookerInsightsKda::KdaResponse::Success>".to_string()),
                     _ => Ok(json!({ "ok_path": p, "method": method })),
                 }
             })
@@ -1949,5 +2008,39 @@ return {"email": u["email"], "rows": rows, "host": hd["hostUrl"], "active": is_a
         ));
         let parsed: Value = serde_json::from_str(&out_ok).unwrap();
         assert_eq!(parsed["workspace_id"], "dev");
+    }
+
+    #[test]
+    fn test_kda_decompiler_and_422_fallback_in_wasm() {
+        let transport = MockTransport::default();
+        let opts = RunOptions::default();
+        let code = r#"
+dec = decompile_kda_target(
+    model_name="thelook",
+    explore_name="order_items",
+    fields=["order_items.total_gross_margin"],
+    filters={"order_items.created_date": "yesterday", "users.country": "USA"},
+)
+kda = run_key_driver_analysis({
+    "data_source": dec["targets"][0]["data_source"],
+    "contribution_metric": "order_items.total_gross_margin",
+    "dimensions": ["order_items.status"],
+    "base_filters": {"order_items.created_date": "yesterday"},
+    "baseline_filters": {"order_items.created_year": "2024"},
+    "breach_filters": {"order_items.created_year": "2025"},
+})
+return {"dec": dec, "kda": kda}
+"#;
+        let out = block_on(execute_python_code(code, &opts, &transport));
+        let parsed: Value = serde_json::from_str(&out).expect("valid json output from kda wasm");
+        let tgt = &parsed["dec"]["targets"][0];
+        assert_eq!(tgt["data_source"]["model_name"], "thelook");
+        assert_eq!(tgt["data_source"]["explore_name"], "order_items");
+        assert_eq!(tgt["base_filters"]["users.country"], "USA");
+        assert_eq!(tgt["colliding_time_filters"]["order_items.created_date"], "yesterday");
+        let m = &tgt["measures"]["order_items.total_gross_margin"];
+        assert_eq!(m["unmodeled_components"][0]["dimension"], "inventory_items.cost");
+        assert_eq!(parsed["kda"]["status"], "SUCCESS");
+        assert!(!parsed["kda"]["drivers"].as_array().unwrap().is_empty());
     }
 }
