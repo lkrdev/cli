@@ -191,17 +191,18 @@ def _table_col(sql, view):
 
 def _resolve_query_id_or_slug(qid):
     s = str(qid).strip()
-    try:
-        q = query(s) if s.isdigit() else query_for_slug(s)
-        if q and q.get("model") and q.get("view"):
-            return q
-    except Exception:  # noqa: BLE001, S110
-        pass
+    if s.isdigit():
+        try:
+            q = query(s)
+            if q and q.get("model") and q.get("view"):
+                return q
+        except Exception:  # noqa: BLE001, S110
+            pass
     return query_for_slug(s)
 
 
 def _expand_merge_query(mid, title_prefix="", filterables=None, df_vals=None):
-    mq = merge_query(str(mid))
+    mq = merge_query(str(mid)) or {}
     targets = []
     flts_list = filterables or []
     d_vals = df_vals or {}
@@ -326,7 +327,7 @@ def _resolve_raw_targets(
             if "/" in base_s
             else base_s
         )
-        d = dashboard(did)
+        d = dashboard(did) or {}
         df_vals = {
             df["name"]: df.get("default_value")
             for df in (d.get("dashboard_filters") or [])
@@ -497,6 +498,7 @@ def _resolve_raw_targets(
 
 
 def _decompile_single_target(tgt, exp):
+    exp = exp or {}
     model_name, explore_name = tgt["model"], tgt["explore"]
     base_view = exp.get("view_name") or explore_name
     flds = exp.get("fields") or {}
@@ -1121,10 +1123,10 @@ def _kda_fallback_422(
             if any(r.get(d) is None for d in kept_dims):
                 dropped += 1
                 continue
-            vals = [
-                str(r.get(d)) if str(r.get(d)) in allowed[d] else "__OTHER__"
-                for d in kept_dims
-            ]
+            vals = []
+            for d in kept_dims:
+                val_str = str(r.get(d))
+                vals.append(val_str if val_str in allowed[d] else "__OTHER__")
             m = float(r.get(contribution_metric) or 0.0)
             out.append((vals, m))
             tot += m
@@ -1137,24 +1139,34 @@ def _kda_fallback_422(
 
     overall_diff = tot_test - tot_ctrl
     n = len(kept_dims)
+    full_agg = {}
+    for vals, m in test_cohort:
+        k = tuple(vals)
+        cur = full_agg.get(k)
+        if cur is None:
+            full_agg[k] = [m, 0.0]
+        else:
+            cur[0] += m
+    for vals, m in ctrl_cohort:
+        k = tuple(vals)
+        cur = full_agg.get(k)
+        if cur is None:
+            full_agg[k] = [0.0, m]
+        else:
+            cur[1] += m
+
     raw_insights = []
     for mask in range(1 << n):
         idxs = [i for i in range(n) if (mask >> i) & 1]
         agg = {}
-        for vals, m in test_cohort:
-            k = tuple(vals[i] for i in idxs)
+        for full_k, (mt, mc) in full_agg.items():
+            k = tuple(full_k[i] for i in idxs)
             cur = agg.get(k)
             if cur is None:
-                agg[k] = [m, 0.0]
+                agg[k] = [mt, mc]
             else:
-                cur[0] += m
-        for vals, m in ctrl_cohort:
-            k = tuple(vals[i] for i in idxs)
-            cur = agg.get(k)
-            if cur is None:
-                agg[k] = [0.0, m]
-            else:
-                cur[1] += m
+                cur[0] += mt
+                cur[1] += mc
         for k, (mt, mc) in agg.items():
             if sum(1 for v in k if v == "__OTHER__") > 1:
                 continue

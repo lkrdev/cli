@@ -1088,8 +1088,8 @@ pub async fn execute_python_code<T: SdkTransport>(
     let mut rewritten = rewrite_sdk_attributes(&full_code);
     if rewritten.contains("decompile_kda_target") || rewritten.contains("run_key_driver_analysis") {
         let preamble = KDA_MODULE_RAW
-            .split_once("# --- MONTY_KDA_PREAMBLE ---\n")
-            .map(|(_, s)| s)
+            .split_once("# --- MONTY_KDA_PREAMBLE ---")
+            .map(|(_, s)| s.trim_start())
             .unwrap_or(KDA_MODULE_RAW);
         rewritten = format!("{preamble}\n{rewritten}");
     }
