@@ -3,6 +3,15 @@ from typing import Any, cast
 from looker_sdk.rtl import transport
 from looker_sdk.sdk.api40.methods import Looker40SDK
 
+from lkr.extended_sdk_methods._kda_monty import (
+    _bind_sdk as _bind_kda_sdk,
+)
+from lkr.extended_sdk_methods._kda_monty import (
+    decompile_kda_target as _decompile_kda_target,
+)
+from lkr.extended_sdk_methods._kda_monty import (
+    run_key_driver_analysis as _run_key_driver_analysis,
+)
 from lkr.extended_sdk_methods.classes import (
     Directory,
     FileContent,
@@ -643,6 +652,50 @@ class ExtendedLooker40SDK(Looker40SDK):
                 transport_options=transport_options,
             ),
         )
+
+    def decompile_kda_target(
+        self,
+        target: str | int | None = None,
+        model_name: str | None = None,
+        explore_name: str | None = None,
+        fields: list[str] | None = None,
+        filters: dict[str, str] | None = None,
+        tile_filter: str | list[str] | None = None,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> dict[str, Any]:
+        """Decompile an Explore URL, Query slug, Look, Dashboard, Merge Result, or Conversation into KDA measures and candidate driver dimensions.
+
+        Pure metadata inspection using lookml_model_explore: never executes SQL or KDA queries.
+        Resolves query slugs to model_name + explore_name (Fix #1), supports 32-char CA
+        Conversation UUIDs (Fix #3), ranks entity/drill dimensions ahead of yesno/tier while
+        isolating conditional left_outer joins (Fix #4), and emits unmodeled_components warnings
+        with dynamic_field_hint when a leaf numeric dimension lacks a modeled SUM measure.
+        """
+        _bind_kda_sdk(self, transport_options)
+        return cast(
+            dict[str, Any],
+            _decompile_kda_target(
+                target=target,
+                model_name=model_name,
+                explore_name=explore_name,
+                fields=fields,
+                filters=filters,
+                tile_filter=tile_filter,
+            ),
+        )
+
+    def run_key_driver_analysis(  # type: ignore[override]
+        self,
+        body: Any,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> Any:
+        """Analyze Key Drivers with automatic API 4.0 query slug resolution, colliding timeframe filter stripping, and Looker 26.20-26.22 HTTP 422 fallback."""
+        _bind_kda_sdk(self, transport_options)
+        return _run_key_driver_analysis(
+            body=self._prepare_body(body),
+            transport_options=transport_options,
+        )
+
 
 
 
