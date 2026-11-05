@@ -218,7 +218,7 @@ rows = json.loads(run_inline_query(result_format="json", body=body))
 
 ### 4. Grouping-Dimension & Entity-Timestamp Filter Hygiene
 
-- **Align date filters with the entity named in the prompt:** When an Explore joins multiple entities that each have their own `created_*` dimension group (such as `orders.created_*`, `order_items.created_*`, `users.created_*`, `inventory_items.created_*`), filter and group on the timestamp belonging to the entity named in the prompt (e.g., *"orders created after..."* $\rightarrow$ `orders.created_date`, whereas *"order items created after..."* $\rightarrow$ `order_items.created_date`).
+- **Align date filters with the entity named in the prompt:** When an Explore joins multiple entities that each have their own `created_*` dimension group (such as `orders.created_*`, `order_items.created_*`, `users.created_*`, `inventory_items.created_*`), filter and group on the timestamp belonging to the entity named in the prompt (e.g., *"orders created after..."* → `orders.created_date`, whereas *"order items created after..."* → `order_items.created_date`).
 - **Never turn `GROUP BY` bucket descriptions into `filters`:** When a prompt names example categories or tier labels in parentheses to describe a breakdown (e.g., *"break down by loyalty tier (Bronze, Silver, Gold)"* or *"by age tier (Under 30, 30-50, 50+)"*), project that dimension in `body["fields"]` (`GROUP BY`) without adding it to `body["filters"]`. Only filter on a grouping dimension when the prompt explicitly asks to restrict rows (`"only"`, `"where"`, `"for"`, `"excluding"`).
 - **Never add speculative `"-NULL"` filters:** Only add `"view.field": "-NULL"` when the user or prompt explicitly asks to exclude nulls/missing values.
 
