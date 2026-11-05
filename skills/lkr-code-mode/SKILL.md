@@ -340,11 +340,14 @@ Before writing a Looker query, inspect the model's Explore topology with `lkr sc
 
 1. **Check `base_view` grain & `joins` before picking an Explore:**
    - Looker Explores execute `LEFT JOIN` outward from `base_view`. Querying `users.count` from `order_items` (`many_to_one` join `order_items.user_id = users.id`) only counts users who have placed an order. If the question includes zero-activity entities (e.g., all users or all inventory items), pick an Explore whose `base_view` is that entity or merge two Explores.
-2. **Reuse modeled fields before `dynamic_fields`:**
+2. **Reuse modeled fields before `dynamic_fields` & align date fields to the named entity:**
    - Check the candidate Explore's dimensions and measures first. Only create a Custom Dimension, Custom Measure, or Table Calculation when no modeled field already computes the bucket, filtered metric, or ratio.
+   - When an Explore joins multiple timestamped entities (e.g., `order_items`, `orders`, `users`, `inventory_items`), bind both the `GROUP BY` time dimension and `filters` date predicate to the entity named in the prompt (e.g., *"orders created..."* / *"Order Created Year"* → `orders.created_date` & `orders.created_year`; *"order items created..."* → `order_items.created_date` & `order_items.created_year_utc`; *"customer signup..."* → `users.created_date` & `users.cohort_signup_year`).
 3. **Single-Explore (`WriteQuery`) vs. Multi-Explore (`source_queries`):**
-   - **Single-Explore**: Use a single `WriteQuery` (`model`, `view`, `fields`, `filters`, `sorts`, `limit`) whenever one Explore holds all required views at a compatible grain.
-   - **Merged Results (`source_queries`)**: Use a multi-query merge payload when metrics live in disjoint Explores (e.g., `order_items` + `inventory_items` or `events`), or when a question combines an entity-level ranking with a separate fact table at the same shared dimension grain (`candidate_merge_keys`):
+   - **Single-Explore**: Use a single `WriteQuery` (`model`, `view`, `fields`, `filters`, `sorts`, `limit`) whenever one Explore holds all required views at a compatible grain (Looker's Symmetric Aggregates accurately compute measures like `orders.avg_items_per_order` or `orders.distinct_users` across `many_to_one` / `one_to_many` joins inside `order_items` or `users`).
+   - **Never split into `source_queries` if a secondary Explore lacks a requested `GROUP BY` dimension:** If the question groups by dimensions (D_1, D_2, D_3, D_4) and a single Explore exposes all 4 dimensions plus all requested metrics, keep it as a single `WriteQuery`. Splitting a metric into a second Explore that only exposes (D_1, D_2, D_3) aggregates that metric at a coarser grain and repeats identical values across D_4.
+   - **Shared filter consistency across `source_queries`:** When a question applies a population or time filter (e.g., cohort signup year, date window, or segment filter) and requires `source_queries`, apply that filter to **every** sub-query whose Explore exposes that dimension so all sub-queries measure the same cohort.
+   - **Merged Results (`source_queries`)**: Use a multi-query merge payload when metrics live in disjoint Explores (e.g., `order_items` + `inventory_items` or `events`), or when a question combines an entity-level ranking (e.g., zero-order accounts in `users` or unsold items in `products`) with a separate fact table at the same shared dimension grain (`candidate_merge_keys`):
      ```json
      {
        "source_queries": [
@@ -371,7 +374,10 @@ Before writing a Looker query, inspect the model's Explore topology with `lkr sc
        "limit": "10"
      }
      ```
-   - Validate offline with `lkr schema validate --model <model> --explore-file <explores.json> --query '<json>'` (or `validate_merge_query(payload, model, explores_map)`) and execute via `execute_looker_query(spec)` (`sdk.execute_looker_query(spec)`).
+   - Validate offline with `lkr schema validate --model <model> --explore-file <explores.json> --query '<json>'` (or `validate_merge_query(payload, model, explores_map)`) and execute via `execute_looker_query(spec)` (`sdk.execute_looker_query(spec)` or `lkr.schema.execute_looker_query(sdk, spec, model=..., explores_data=..., candidate_explores=...)`).
+   - **`execute_looker_query(spec)` Execution Modes & Extended Sandbox Globals:**
+     - Single queries delegate to `run_inline_query("json", body)`. Multi-query `source_queries` fetch sub-query SQL via `run_inline_query("sql", qb)` (stripping trailing `LIMIT` on `-1` and ignoring source-query `table_calculations`), compile a warehouse SQL CTE join (`WITH cte_0 AS (...), cte_1 AS (...)`), execute via `create_sql_query` + `run_sql_query(slug, "json")` (or via `model: f"sql__{slug}"`, `view: "sql_runner_query"` with rewritten `${sql_runner_query.<alias>}` expressions when top-level `table_calculations` are present), and fall back to an in-memory Python hash join if SQL Runner is unavailable.
+     - Additional sandbox & `ExtendedLooker40SDK` globals: `global_search_v2(term=..., sections=..., limit=...)` (`GET /global_search_v2`), `decompile_kda_target(target=..., model_name=..., explore_name=..., fields=..., filters=...)`, and `run_key_driver_analysis(body=...)`.
    - **`POST /api/4.0/merge_queries` (`create_merge_query`) & `total` Propagation Rules:**
      - `create_merge_query` accepts arbitrary `vis_config` dictionaries (including Highcharts `advanced_vis_config` overrides not exposed in the `/merge` UI), `column_limit`, and `total`.
      - For in-memory merges (`HTMergeQuery#compute_totals_from_source_query_totals`), Looker only populates `totals_data` if `total: true` is set on **both** the top-level `MergeQuery` and **every** constituent `source_query` (`validate_merge_query` and `execute_looker_query` propagate `total: True` automatically when `total: True` or a `:total` table calculation is present).
