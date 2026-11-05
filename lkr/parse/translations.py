@@ -2,7 +2,6 @@ import json
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -10,10 +9,12 @@ from lkr.logger import logger
 from lkr.parse.lookml import (
     LookmlAllowedValue,
     LookmlExplore,
+    LookmlFieldProperties,
     LookmlFile,
     LookmlJoin,
     LookmlLocalizationSettings,
     LookmlManifest,
+    LookmlPositions,
     LookmlProject,
     LookmlView,
     parse_lookml,
@@ -72,7 +73,9 @@ def _extract_liquid_localization_keys(text: str | None) -> list[str]:
     return LIQUID_LOCALIZATION_REGEX.findall(text)
 
 
-def _is_field_hidden(field: Any, view_fields_hidden_by_default: bool | None) -> bool:
+def _is_field_hidden(
+    field: LookmlFieldProperties, view_fields_hidden_by_default: bool | None
+) -> bool:
     if getattr(field, "hidden", None) is True:
         return True
     return bool(
@@ -82,7 +85,7 @@ def _is_field_hidden(field: Any, view_fields_hidden_by_default: bool | None) -> 
 
 
 def _find_position(
-    positions: Any,
+    positions: LookmlPositions | dict[str, object] | None,
     obj_type: str,
     parent_name: str | None,
     item_name: str,
@@ -222,9 +225,9 @@ def _find_position(
     return None, 1
 
 
-def discover_strings_files(root: Path) -> dict[str, tuple[str, dict[str, Any]]]:
+def discover_strings_files(root: Path) -> dict[str, tuple[str, dict[str, object]]]:
     """Find and parse all *.strings.json files under root."""
-    found: dict[str, tuple[str, dict[str, Any]]] = {}
+    found: dict[str, tuple[str, dict[str, object]]] = {}
     for f in sorted(root.rglob("*.strings.json")):
         if (
             not f.is_file()

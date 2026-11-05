@@ -33,7 +33,7 @@ group = typer.Typer(name="auth", help="Authentication commands for LookML Reposi
 
 
 @group.callback()
-def callback(ctx: typer.Context):
+def callback(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand in ("whoami", "add-access-token"):
         return
     if ctx.obj["ctx_lkr"].use_sdk == "api_key" and (
@@ -44,7 +44,7 @@ def callback(ctx: typer.Context):
 
 
 @group.command(name="add-access-token")
-def add_access_token(ctx: typer.Context):
+def add_access_token(ctx: typer.Context) -> None:
     """Mint an access token via API key and save it to the database"""
     ctx_lkr = ctx.obj["ctx_lkr"]
     if not ctx_lkr.api_key:
@@ -101,14 +101,14 @@ def login(
             help="Do not automatically open a local browser; copy the authorization code from https://www.lkr.dev/oauth/callback/",
         ),
     ] = False,
-):
+) -> None:
     """
     Login to Looker instance using OAuth2 or switch to an existing authenticated instance
     """
     auth = get_auth(ctx)
     all_instances = auth.list_auth()
 
-    def do_switch(instance_name: str):
+    def do_switch(instance_name: str) -> None:
         auth.set_current_instance(instance_name)
         sdk = auth.get_current_sdk()
         if not sdk:
@@ -174,7 +174,7 @@ def login(
                 "Instance name must be set before adding auth."
             )
 
-            def auth_callback(token: AuthToken | AccessToken):
+            def auth_callback(token: AuthToken | AccessToken) -> None:
                 auth.add_auth(instance_name, origin, token, use_production)
 
             oauth = OAuth2PKCE(
@@ -234,7 +234,7 @@ def logout(
         bool,
         typer.Option("--all", help="Logout from all instances"),
     ] = False,
-):
+) -> None:
     """
     Logout and clear saved credentials
     """
@@ -266,7 +266,7 @@ def logout(
 
 
 @group.command()
-def whoami(ctx: typer.Context):
+def whoami(ctx: typer.Context) -> None:
     """
     Check current authentication
     """
@@ -292,7 +292,7 @@ def whoami(ctx: typer.Context):
 
 
 @group.command()
-def list(ctx: typer.Context):
+def list(ctx: typer.Context) -> None:
     """
     List all authenticated Looker instances
     """

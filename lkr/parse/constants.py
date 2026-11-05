@@ -1,4 +1,23 @@
-from typing import Any
+from typing import TypedDict
+
+
+class BuiltinMapLayerSpec(TypedDict):
+    extents_json_url: str | None
+    feature_key: str | None
+    format: str | None
+    max_zoom_level: int | None
+    min_zoom_level: int | None
+    name: str | None
+    projection: str | None
+    property_key: str | None
+    property_label_key: str | None
+    url: str | None
+
+
+class TimeframeIntervalSpec(TypedDict):
+    name: str
+    count: int
+
 
 VALUE_FORMAT_MAP: dict[str, str] = {
     "usd": "$#,##0.00",
@@ -29,7 +48,7 @@ DISTANCE_UNIT_FORMATS: dict[str, str] = {
     "yards": '#,##0.00" yd"',
 }
 
-BUILTIN_MAP_LAYERS: dict[str, dict[str, Any]] = {
+BUILTIN_MAP_LAYERS: dict[str, BuiltinMapLayerSpec] = {
     "countries": {
         "extents_json_url": None,
         "feature_key": "world",
@@ -120,22 +139,25 @@ DEFAULT_ENUMS: dict[str, list[dict[str, str]]] = {
     "yesno": [{"label": "Yes", "value": "Yes"}, {"label": "No", "value": "No"}],
 }
 
-TIMEFRAME_INTERVALS: dict[str, dict[str, Any]] = {
+TIMEFRAME_INTERVALS: dict[str, TimeframeIntervalSpec] = {
     "date": {"name": "day", "count": 1},
     "date_date": {"name": "day", "count": 1},
     "date_fiscal_quarter": {"name": "month", "count": 3},
     "date_fiscal_year": {"name": "year", "count": 1},
     "date_hour": {"name": "hour", "count": 1},
-    **{f"date_hour{n}": {"name": "hour", "count": n} for n in (2, 3, 4, 6, 8, 12)},
+    **{
+        f"date_hour{n}": TimeframeIntervalSpec(name="hour", count=n)
+        for n in (2, 3, 4, 6, 8, 12)
+    },
     "date_microsecond": {"name": "microsecond", "count": 1},
     "date_millisecond": {"name": "millisecond", "count": 1},
     **{
-        f"date_millisecond{n}": {"name": "millisecond", "count": n}
+        f"date_millisecond{n}": TimeframeIntervalSpec(name="millisecond", count=n)
         for n in (2, 4, 5, 8, 10, 20, 25, 40, 50, 100, 125, 200, 250, 500)
     },
     "date_minute": {"name": "minute", "count": 1},
     **{
-        f"date_minute{n}": {"name": "minute", "count": n}
+        f"date_minute{n}": TimeframeIntervalSpec(name="minute", count=n)
         for n in (2, 3, 4, 5, 6, 10, 12, 15, 20, 30)
     },
     "date_month": {"name": "month", "count": 1},
@@ -256,4 +278,6 @@ __all__ = [
     "VALUE_FORMAT_MAP",
     "_DAYS",
     "_MONTHS",
+    "BuiltinMapLayerSpec",
+    "TimeframeIntervalSpec",
 ]

@@ -217,8 +217,11 @@ return "\\n".join(res)
 
 
 def test_extended_sdk_methods_present():
-    code = """
-methods = ['all_project_files', 'get_file_content', 'create_file', 'update_file', 'delete_file', 'create_project_directory', 'delete_project_directory', 'generate_lookml', 'generate_lookml_with_new_files', 'commit', 'create_developer_copy', 'developer_copy']
+    ext_methods = [
+        k for k, v in ExtendedLooker40SDK.__dict__.items() if not k.startswith("_") and callable(v)
+    ]
+    code = f"""
+methods = {ext_methods!r}
 for m in methods:
     if m not in dir():
         return "Missing " + m

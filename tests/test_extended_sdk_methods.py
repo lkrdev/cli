@@ -366,6 +366,133 @@ def test_gemini_enterprise_agent_methods():
             transport_options=None,
         )
 
+    with patch.object(sdk, "run_inline_query", return_value='[{"orders.count": 42}]') as mock_riq:
+        rows = sdk.execute_looker_query(
+            {"model": "thelook", "view": "orders", "fields": ["orders.count"]}
+        )
+        assert rows == [{"orders.count": 42}]
+        mock_riq.assert_called_once_with(
+            "json",
+            {"model": "thelook", "view": "orders", "fields": ["orders.count"]},
+        )
 
 
+def test_extended_sdk_monty_sandbox_parity_and_execution():
+    """Enforce that every ExtendedLooker40SDK method is registered and runnable in the Monty sandbox."""
+    import ast
+    import json
+    from pathlib import Path
+
+    import pydantic_monty
+
+    repo_root = Path(__file__).resolve().parent.parent
+    main_py = (repo_root / "lkr/extended_sdk_methods/main.py").read_text(encoding="utf-8")
+    monty_py = (repo_root / "lkr/extended_sdk_methods/_kda_monty.py").read_text(encoding="utf-8")
+    build_rs = (repo_root / "lkr/codemode/wasm/build.rs").read_text(encoding="utf-8")
+    lib_rs = (repo_root / "lkr/codemode/wasm/src/lib.rs").read_text(encoding="utf-8")
+    swagger = json.loads((repo_root / "lkr/codemode/swagger.json").read_text(encoding="utf-8"))
+    swagger_ops = {
+        op["operationId"]
+        for p in swagger["paths"].values()
+        for op in p.values()
+        if isinstance(op, dict) and "operationId" in op
+    }
+
+    # 1. No forbidden stdlib imports in lkr/extended_sdk_methods/main.py
+    forbidden_imports = {"concurrent", "threading", "asyncio", "subprocess", "re", "copy", "json"}
+    main_tree = ast.parse(main_py)
+    for node in ast.walk(main_tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert alias.name.split(".")[0] not in forbidden_imports, (
+                    f"Forbidden import '{alias.name}' in main.py; multi-step logic must live in _kda_monty.py"
+                )
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            assert node.module.split(".")[0] not in forbidden_imports, (
+                f"Forbidden import from '{node.module}' in main.py; multi-step logic must live in _kda_monty.py"
+            )
+
+    # 2. Preamble in _kda_monty.py must have zero imports and define all delegated Monty methods
+    _, preamble = monty_py.split("# --- MONTY_KDA_PREAMBLE ---", 1)
+    preamble_tree = ast.parse(preamble)
+    preamble_imports = [
+        n for n in ast.walk(preamble_tree) if isinstance(n, (ast.Import, ast.ImportFrom))
+    ]
+    assert not preamble_imports, "No import statements allowed after # --- MONTY_KDA_PREAMBLE ---"
+    preamble_funcs = {
+        n.name for n in preamble_tree.body if isinstance(n, ast.FunctionDef) and not n.name.startswith("_")
+    }
+
+    # 3. Every public method on ExtendedLooker40SDK must be registered in build.rs (or swagger.json),
+    #    and any method delegating to _kda_monty.py must be injected by wasm/src/lib.rs
+    ext_methods = [
+        k for k, v in ExtendedLooker40SDK.__dict__.items() if not k.startswith("_") and callable(v)
+    ]
+    for m_name in ext_methods:
+        assert m_name in swagger_ops or f'"{m_name}"' in build_rs, (
+            f"ExtendedLooker40SDK.{m_name} is missing from lkr/codemode/wasm/build.rs"
+        )
+        if m_name in preamble_funcs:
+            assert f'rewritten.contains("{m_name}")' in lib_rs, (
+                f"Monty method '{m_name}' must be checked in lkr/codemode/wasm/src/lib.rs preamble injection"
+            )
+
+    # 4. Execute execute_looker_query directly inside pydantic_monty.Monty() across all modes
+    external_lookup = {
+        "run_inline_query": lambda fmt, body: (
+            "SELECT products.category AS products_category, SUM(sale_price) AS order_items_total_sale_price FROM orders GROUP BY 1 LIMIT 100000"
+            if fmt == "sql" and body.get("view") == "order_items"
+            else (
+                "SELECT products.category AS products_category, COUNT(*) AS inventory_items_count FROM inv GROUP BY 1"
+                if fmt == "sql"
+                else (
+                    [
+                        {
+                            "sql_runner_query.products_category": "Accessories",
+                            "sql_runner_query.order_items_total_sale_price": 300.0,
+                            "sql_runner_query.inventory_items_count": 50,
+                            "rev_per_unit": 6.0,
+                        }
+                    ]
+                    if body.get("model") == "sql__slug_m"
+                    else [{"products.category": "Accessories", "order_items.total_sale_price": 300.0}]
+                )
+            )
+        ),
+        "create_sql_query": lambda body=None: {"slug": "slug_m"},
+        "run_sql_query": lambda slug=None, result_format="json": [
+            {
+                "products_category": "Accessories",
+                "order_items_total_sale_price": 300.0,
+                "inventory_items_count": 50,
+            }
+        ],
+        "lookml_model_explore": lambda m, e, fields=None: {"connection_name": "bq"},
+    }
+
+    with pydantic_monty.Monty() as m, m.checkout() as session:
+        res = session.feed_run(
+            preamble
+            + """
+single = execute_looker_query({"model": "thelook", "view": "order_items", "fields": ["products.category"]})
+merged = execute_looker_query({
+    "source_queries": [
+        {"query": {"model": "thelook", "view": "order_items", "fields": ["products.category", "order_items.total_sale_price"], "limit": "-1"}},
+        {"query": {"model": "thelook", "view": "inventory_items", "fields": ["products.category", "inventory_items.count"]}},
+    ],
+    "table_calculations": [{"name": "rev_per_unit", "expression": "${order_items.total_sale_price} / ${inventory_items.count:total}"}],
+})
+return {"single": single, "merged": merged}
+""",
+            external_lookup=external_lookup,
+        )
+        assert res["single"] == [{"products.category": "Accessories", "order_items.total_sale_price": 300.0}]
+        assert res["merged"] == [
+            {
+                "products.category": "Accessories",
+                "order_items.total_sale_price": 300.0,
+                "inventory_items.count": 50,
+                "rev_per_unit": 6.0,
+            }
+        ]
 

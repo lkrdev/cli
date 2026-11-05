@@ -12,8 +12,10 @@ import threading
 import time
 import urllib.parse
 import webbrowser
-from typing import TypedDict, cast
+from typing import Self, TypedDict, cast
 from urllib.parse import parse_qs
+
+from looker_sdk.rtl.auth_token import AuthToken
 
 from lkr.custom_types import NewTokenCallback
 from lkr.logger import logger
@@ -91,18 +93,18 @@ def kill_process_on_port(port: int, retries: int = 5, delay: float = 1) -> None:
 
 
 class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
-    def _send_cors_headers(self):
+    def _send_cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "*")
         self.send_header("Access-Control-Allow-Private-Network", "true")
 
-    def do_OPTIONS(self):
+    def do_OPTIONS(self) -> None:
         self.send_response(204)
         self._send_cors_headers()
         self.end_headers()
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         """Handle the callback from OAuth authorization"""
         parsed_url = urllib.parse.urlparse(self.path)
         logger.debug(f"OAuthCallbackHandler received GET request for path: {self.path}")
@@ -161,14 +163,16 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
 
         server.done_event.set()
 
-    def log_message(self, format, *args):
+    def log_message(self, format: str, *args: object) -> None:
         """Suppress logging of requests"""
 
 
 class OAuthCallbackServer(socketserver.TCPServer):
     allow_reuse_address = os.name != "nt"
 
-    def __init__(self, server_address, expected_state: str | None = None):
+    def __init__(
+        self, server_address: tuple[str, int], expected_state: str | None = None
+    ) -> None:
         super().__init__(server_address, OAuthCallbackHandler)
         self.auth_code: str | None = None
         self.expected_state = expected_state
@@ -188,7 +192,7 @@ class OAuth2PKCE:
         port: int | None = None,
         no_browser: bool = False,
         redirect_uri: str | None = None,
-    ):
+    ) -> None:
         from lkr.auth_service import DbOAuthSession
 
         self.auth_code: str | None = None
@@ -202,7 +206,7 @@ class OAuth2PKCE:
         self.no_browser: bool = no_browser
         self.redirect_uri: str | None = redirect_uri
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """Clean up the server and its thread."""
         if self.server:
             self.server.shutdown()
@@ -283,7 +287,7 @@ class OAuth2PKCE:
 
         stdin_lines: list[str] = []
 
-        def _read_stdin():
+        def _read_stdin() -> None:
             try:
                 line = sys.stdin.readline()
                 if line and line.strip():
@@ -343,7 +347,7 @@ class OAuth2PKCE:
             code_verifier=self.auth_session.code_verifier,
         )
 
-    def exchange_code_for_token(self):
+    def exchange_code_for_token(self) -> AuthToken:
         """
         Exchange the authorization code for access and refresh tokens.
 
@@ -368,11 +372,16 @@ class OAuth2PKCE:
         self.cleanup()
         return self.auth_session.token
 
-    def __del__(self):
+    def __del__(self) -> None:
         self.cleanup()
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: object,
+    ) -> None:
         self.cleanup()

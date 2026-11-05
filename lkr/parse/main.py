@@ -1,13 +1,14 @@
 import json
 import sys
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 import typer
 
 from lkr.auth_service import get_auth
 from lkr.logger import logger
 from lkr.parse.curation import (
+    CurationMetadataResult,
     build_api_result_from_lookml,
     extract_curation_metadata,
 )
@@ -697,7 +698,7 @@ def sql_lookml_compare_command(
     except ValueError as e:
         logger.error(str(e))
         raise typer.Exit(1)
-    def _dump_compact(v: Any, ind: int = 0) -> str:
+    def _dump_compact(v: object, ind: int = 0) -> str:
         pad = " " * (ind + 1)
         if isinstance(v, dict) and any(isinstance(x, dict) or (isinstance(x, (list, tuple)) and any(isinstance(i, dict) for i in x)) for x in v.values()):
             return "{\n" + ",\n".join(f"{pad}{json.dumps(k)}: {_dump_compact(val, ind + 1)}" for k, val in v.items()) + f"\n{' ' * ind}}}"
@@ -780,13 +781,15 @@ def lookml_to_api_command(
     _write_or_echo(result.model_dump_json(indent=2, by_alias=True), output)
     if validate:
 
-        def _err_key(err: dict[str, Any]) -> tuple[Any, ...]:
+        def _err_key(err: dict[str, object]) -> tuple[object, ...]:
+            flds = err.get("fields")
+            fns = err.get("functions")
             return (
                 err.get("type"),
                 err.get("field"),
                 err.get("alias"),
-                tuple(err.get("fields") or ()),
-                tuple(err.get("functions") or ()),
+                tuple(flds) if isinstance(flds, (list, tuple)) else (),
+                tuple(fns) if isinstance(fns, (list, tuple)) else (),
             )
 
         base_keys = (
@@ -864,7 +867,7 @@ def curation_meta_command(
         Path | None,
         typer.Option("--output", "-o", help="Optional output .json file path"),
     ] = None,
-) -> dict[str, Any]:
+) -> CurationMetadataResult:
     """Extract LookML field curation candidates and Monty sandbox inputs offline."""
     if api_json is not None:
         if any(x is not None for x in (path, file, lookml)):
@@ -874,7 +877,7 @@ def curation_meta_command(
             logger.error(f"API JSON file not found: {api_json}")
             raise typer.Exit(1)
         try:
-            payload: dict[str, Any] | LookmlToApiResult = json.loads(
+            payload: dict[str, object] | LookmlToApiResult = json.loads(
                 sys.stdin.read()
                 if api_json == "-"
                 else Path(api_json).read_text(encoding="utf-8")

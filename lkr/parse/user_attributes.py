@@ -1,8 +1,9 @@
 import json
 import re
+from collections.abc import Mapping, Sequence
 from io import StringIO
 from pathlib import Path
-from typing import Any
+from typing import Protocol, TypedDict
 
 import typer
 from pydantic import BaseModel, Field
@@ -12,6 +13,17 @@ from rich.table import Table
 from lkr.classes import LkrCtxObj
 from lkr.logger import logger
 from lkr.parse.lookml import LookmlProject, parse_lookml
+
+
+class _UserAttributesSdk(Protocol):
+    def all_user_attributes(self) -> Sequence[object]: ...
+
+
+class _DashboardParseItem(TypedDict):
+    props: dict[str, str]
+    matches: list[tuple[str, str, str | None, int]]
+    in_subfilters: bool
+    subfilters_indent: int
 
 __all__ = [
     "LookmlUserAttributesResult",
@@ -45,20 +57,33 @@ class LookmlUserAttributesResult(BaseModel):
     missing_attributes: list[str] | None = None
 
 
-def _first_str(val: Any) -> str | None:
+def _first_str(val: object) -> str | None:
     if isinstance(val, list):
         return str(val[0]) if val else None
     return str(val) if val is not None else None
 
 
-def _line_from_pos(pos: Any) -> int | None:
+def _line_from_pos(pos: object) -> int | None:
     p = pos.get("$p") if isinstance(pos, dict) else None
-    return int(p[0]) + 1 if p and len(p) >= 1 else None
+    return (
+        int(p[0]) + 1
+        if isinstance(p, (list, tuple))
+        and len(p) >= 1
+        and isinstance(p[0], (int, float, str))
+        else None
+    )
+
+
+def _sub_pos(pos: object, *keys: str) -> dict[str, object]:
+    curr = pos
+    for k in keys:
+        curr = curr.get(k) if isinstance(curr, dict) else None
+    return curr if isinstance(curr, dict) else {}
 
 
 def _resolve_file_pos(
-    entry: dict[str, Any], positions_dict: dict[str, Any]
-) -> dict[str, Any]:
+    entry: Mapping[str, object], positions_dict: Mapping[str, object]
+) -> dict[str, object]:
     rel, ftype = _first_str(entry.get("file_rel")), _first_str(entry.get("file_type"))
     cand = f"{rel}.{ftype}" if rel and ftype else None
     for key in (
@@ -67,14 +92,18 @@ def _resolve_file_pos(
         _first_str(entry.get("file_path")),
     ):
         if key and key in positions_dict:
-            return positions_dict[key]
-    return next(iter(positions_dict.values())) if len(positions_dict) == 1 else {}
+            found = positions_dict[key]
+            return found if isinstance(found, dict) else {}
+    if len(positions_dict) == 1:
+        first = next(iter(positions_dict.values()))
+        return first if isinstance(first, dict) else {}
+    return {}
 
 
 def _scan_liquid(
-    text: Any,
+    text: object,
     prop_name: str,
-    prop_pos: Any = None,
+    prop_pos: object = None,
     file_path: str | None = None,
     source_type: str = "liquid",
     base_line: int | None = None,
@@ -110,8 +139,8 @@ def _scan_liquid(
 
 
 def _scan_props(
-    data: dict[str, Any],
-    pos: Any,
+    data: Mapping[str, object],
+    pos: object,
     props: tuple[str, ...],
     file_path: str | None,
     prefix: str = "",
@@ -140,8 +169,8 @@ def _scan_props(
 
 
 def _scan_filters_block(
-    filters_val: Any,
-    filters_pos: Any,
+    filters_val: object,
+    filters_pos: object,
     prop_prefix: str,
     file_path: str | None,
     model: str | None = None,
@@ -181,8 +210,8 @@ def _scan_filters_block(
 
 
 def _extract_access_filters(
-    afs_raw: Any,
-    af_pos: Any,
+    afs_raw: object,
+    af_pos: object,
     fpath: str | None,
     model: str | None = None,
     explore: str | None = None,
@@ -222,7 +251,7 @@ def _extract_access_filters(
 
 
 def _extract_from_file_entries(
-    file_dict: dict[str, Any], positions_dict: dict[str, Any]
+    file_dict: Mapping[str, object], positions_dict: Mapping[str, object]
 ) -> list[UserAttributeRef]:
     refs: list[UserAttributeRef] = []
     for cat in ("model", "explore", "view"):
@@ -248,9 +277,9 @@ def _extract_from_file_entries(
                         if isinstance(avals, str)
                         else ([str(v) for v in avals] if isinstance(avals, list) else None)
                     )
-                    gpos = fpos.get("access_grant", {}).get(gname, {})
+                    gpos = _sub_pos(fpos, "access_grant", gname)
                     line = _line_from_pos(
-                        gpos.get("user_attribute") if isinstance(gpos, dict) else None
+                        gpos.get("user_attribute")
                     ) or _line_from_pos(gpos)
                     refs.append(
                         UserAttributeRef(
@@ -273,11 +302,7 @@ def _extract_from_file_entries(
                         if isinstance(edata_or_list, list)
                         else [edata_or_list]
                     )
-                    epos_cand = (
-                        fpos.get("explore", {}).get(ename_raw, {})
-                        if isinstance(fpos, dict)
-                        else {}
-                    )
+                    epos_cand = _sub_pos(fpos, "explore").get(ename_raw, {})
                     ename = ename_raw.lstrip("+")
                     for e_idx, edata in enumerate(elist):
                         if not isinstance(edata, dict):
@@ -304,7 +329,7 @@ def _extract_from_file_entries(
                                 refs.extend(
                                     _scan_filters_block(
                                         fbd["filters"],
-                                        epos_d.get(fb, {}).get("filters", {}),
+                                        _sub_pos(epos_d, fb).get("filters", {}),
                                         f"{fb}.filters",
                                         fpath,
                                         model=mname,
@@ -318,9 +343,9 @@ def _extract_from_file_entries(
                                     refs.extend(
                                         _scan_filters_block(
                                             qd["filters"],
-                                            epos_d.get("query", {})
-                                            .get(qn, {})
-                                            .get("filters", {}),
+                                            _sub_pos(epos_d, "query", qn).get(
+                                                "filters", {}
+                                            ),
                                             f"query.{qn}.filters",
                                             fpath,
                                             model=mname,
@@ -349,7 +374,7 @@ def _extract_from_file_entries(
                                     refs.extend(
                                         _scan_props(
                                             jdata,
-                                            epos_d.get("join", {}).get(jname, {}),
+                                            _sub_pos(epos_d, "join", jname),
                                             ("sql_on", "sql_where", "sql", "sql_table_name"),
                                             fpath,
                                             model=mname,
@@ -368,11 +393,7 @@ def _extract_from_file_entries(
                         else [vdata_or_list]
                     )
                     vname = vname_raw.lstrip("+")
-                    vpos_cand = (
-                        fpos.get("view", {}).get(vname_raw, {})
-                        if isinstance(fpos, dict)
-                        else {}
-                    )
+                    vpos_cand = _sub_pos(fpos, "view").get(vname_raw, {})
                     for v_idx, vdata in enumerate(vlist):
                         if not isinstance(vdata, dict):
                             continue
@@ -420,13 +441,9 @@ def _extract_from_file_entries(
                             if isinstance(es_map, dict):
                                 for es_name, es_data in es_map.items():
                                     if isinstance(es_data, dict) and "filters" in es_data:
-                                        es_pos = (
-                                            dt_pos.get("explore_source", {})
-                                            .get(es_name, {})
-                                            .get("filters", {})
-                                            if isinstance(dt_pos, dict)
-                                            else {}
-                                        )
+                                        es_pos = _sub_pos(
+                                            dt_pos, "explore_source", es_name
+                                        ).get("filters", {})
                                         refs.extend(
                                             _scan_filters_block(
                                                 es_data["filters"],
@@ -451,7 +468,7 @@ def _extract_from_file_entries(
                             for fname, fdata in fdict.items():
                                 if not isinstance(fdata, dict):
                                     continue
-                                fpos_d = vpos_d.get(fcat, {}).get(fname, {})
+                                fpos_d = _sub_pos(vpos_d, fcat, fname)
                                 refs.extend(
                                     _scan_props(
                                         fdata,
@@ -475,9 +492,7 @@ def _extract_from_file_entries(
                                     refs.extend(
                                         _scan_filters_block(
                                             fdata["filters"],
-                                            fpos_d.get("filters")
-                                            if isinstance(fpos_d, dict)
-                                            else {},
+                                            fpos_d.get("filters", {}),
                                             "filters",
                                             fpath,
                                             model=mname,
@@ -497,7 +512,7 @@ def _extract_from_lookml_dashboard(
     dash_explore: str | None = None
     section: str | None = None
     section_indent = 0
-    current_item: dict[str, Any] | None = None
+    current_item: _DashboardParseItem | None = None
 
     def _flush_item() -> None:
         nonlocal current_item
@@ -610,7 +625,7 @@ def _extract_from_lookml_dashboard(
 
 
 def _extract_from_dashboard_filter_dict(
-    fdict: dict[str, Any],
+    fdict: Mapping[str, object],
     file_path: str | None = None,
     dash_name: str | None = None,
     default_model: str | None = None,
@@ -661,7 +676,7 @@ def _extract_from_dashboard_filter_dict(
 
 
 def _extract_from_dashboard_data(
-    data: Any,
+    data: object,
     file_path: str | None = None,
     dash_name: str | None = None,
     default_model: str | None = None,
@@ -680,7 +695,7 @@ def _extract_from_dashboard_data(
         return refs
 
     def _scan_fmap(
-        fmap: dict[str, Any], m: str | None, e: str | None, d: str | None
+        fmap: Mapping[str, object], m: str | None, e: str | None, d: str | None
     ) -> None:
         for fk, fv in fmap.items():
             refs.extend(
@@ -747,11 +762,11 @@ def _extract_from_dashboard_data(
                 if not isinstance(el, dict):
                     continue
                 q_raw = el.get("query")
-                q_obj: dict[str, Any] = q_raw if isinstance(q_raw, dict) else {}
+                q_obj: dict[str, object] = q_raw if isinstance(q_raw, dict) else {}
                 rm_raw = el.get("result_maker")
-                rm_obj: dict[str, Any] = rm_raw if isinstance(rm_raw, dict) else {}
+                rm_obj: dict[str, object] = rm_raw if isinstance(rm_raw, dict) else {}
                 rm_q_raw = rm_obj.get("query")
-                rm_q: dict[str, Any] = rm_q_raw if isinstance(rm_q_raw, dict) else {}
+                rm_q: dict[str, object] = rm_q_raw if isinstance(rm_q_raw, dict) else {}
 
                 el_model = (
                     _first_str(
@@ -818,7 +833,8 @@ def _extract_from_dashboard_data(
 
 
 def _extract_from_dashboard_json(
-    payload: str | dict[str, Any] | list[Any], file_path: str | None = None
+    payload: str | Mapping[str, object] | Sequence[object],
+    file_path: str | None = None,
 ) -> list[UserAttributeRef]:
     if isinstance(payload, str):
         try:
@@ -845,9 +861,9 @@ def parse_user_attributes(
     file: Path | str | None = None,
     lookml: str | None = None,
     dashboard_file: Path | str | None = None,
-    dashboard_json: str | dict[str, Any] | list[Any] | None = None,
+    dashboard_json: str | Mapping[str, object] | Sequence[object] | None = None,
     validate: bool = False,
-    sdk: Any | None = None,
+    sdk: _UserAttributesSdk | None = None,
     ctx: typer.Context | LkrCtxObj | None = None,
     *,
     manifest: Path | str | None = None,

@@ -1,11 +1,18 @@
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import TypedDict
 
 import typer
 from pydantic import BaseModel
 
 from lkr.auth_service import get_auth
 from lkr.logger import logger
+
+
+class _RoleInfo(TypedDict):
+    target_perms: set[str]
+    has_access_data: bool
+    models: set[str]
+    all_models: bool
 
 TARGET_PERMISSIONS = frozenset([
     "download_with_limit",
@@ -50,7 +57,7 @@ def schedule_download_deprecation(
     roles = sdk.all_roles(fields="id,name,permission_set,model_set")
     
     # Pre-process roles for faster lookup
-    role_map: dict[str, Any] = {}
+    role_map: dict[str, _RoleInfo] = {}
     for role in roles:
         target_perms_in_role = set()
         has_access_data = False

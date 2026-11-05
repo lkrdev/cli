@@ -1,6 +1,4 @@
-from typing import Any
-
-COMMON_DYNAMIC_FIELD_PROPERTIES: dict[str, Any] = {
+COMMON_DYNAMIC_FIELD_PROPERTIES: dict[str, object] = {
     "category": {
         "type": "string",
         "enum": ["dimension", "measure", "table_calculation"],
@@ -16,7 +14,7 @@ COMMON_DYNAMIC_FIELD_PROPERTIES: dict[str, Any] = {
 }
 
 
-def build_custom_dimension_schema() -> dict[str, Any]:
+def build_custom_dimension_schema() -> dict[str, object]:
     """Build JSON Schema for a Looker CustomDimension dynamic field (`dimension_like`).
     Supports both formula custom dimensions (`expression`) and custom groupings/bins (`calculation_type` + `args`).
     """
@@ -40,7 +38,7 @@ def build_custom_dimension_schema() -> dict[str, Any]:
 
 def build_custom_measure_schema(
     selectable_field_names: list[str],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build JSON Schema for a Looker CustomMeasure dynamic field (valid in fields, not pivots)."""
     return {
         "title": "CustomMeasure",
@@ -68,7 +66,7 @@ def build_custom_measure_schema(
     }
 
 
-def build_table_calculation_schema() -> dict[str, Any]:
+def build_table_calculation_schema() -> dict[str, object]:
     """Build JSON Schema for a Looker TableCalculation dynamic field (valid in fields, not pivots).
     Supports both formula table calculations (`expression`) and shortcut calculations (`calculation_type` + `args`).
     """
@@ -94,7 +92,7 @@ def build_table_calculation_schema() -> dict[str, Any]:
 
 def build_dynamic_fields_schema(
     selectable_field_names: list[str],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build JSON Schema for `body.dynamic_fields`."""
     return {
         "type": "array",

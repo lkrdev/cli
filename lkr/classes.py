@@ -11,7 +11,7 @@ class LookerApiKey(BaseModel):
     verify_ssl: bool = True
 
     @classmethod
-    def from_env(cls):
+    def from_env(cls) -> "LookerApiKey | None":
         try:
             verify_ssl_str = os.environ.get("LOOKERSDK_VERIFY_SSL", "true").lower()
             verify_ssl = verify_ssl_str not in ("false", "0", "f")
@@ -38,7 +38,9 @@ class LkrCtxObj(BaseModel):
             return "oauth"
         return "api_key" if self.api_key else "oauth"
 
-    def __init__(self, api_key: LookerApiKey | None = None, *args, **kwargs):
+    def __init__(
+        self, api_key: LookerApiKey | None = None, *args: object, **kwargs: object
+    ) -> None:
         super().__init__(*args, api_key=api_key, **kwargs)
         self.api_key = self.api_key or LookerApiKey.from_env()
         if not self.base_url and self.api_key:

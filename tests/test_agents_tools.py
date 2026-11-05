@@ -335,7 +335,7 @@ def test_agents_list_stops_immediately_on_missing_ge_config(
 
 
 def test_dedupe_agent_publications_unit():
-    recs = [
+    recs: list[dict[str, object]] = [
         {
             "agent_id": "a1",
             "ge_gcp_project_number": "123",

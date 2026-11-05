@@ -2,13 +2,33 @@ import inspect
 import json
 import os
 import re
+from collections.abc import Mapping
+from typing import TypedDict
 
 from lkr.codemode.constant import EXCLUDED_FUNCS
 from lkr.codemode.readme import get_readme
 
-_operation_map = None
 
-def _get_operation_map():
+class _FuncMatch(TypedDict):
+    name: str
+    summary: str
+    hit_in_name: bool
+    matching_lines: list[str]
+    matching_params: list[str]
+    output_fields: list[str]
+
+
+class _TypeMatch(TypedDict):
+    name: str
+    hit_in_name: bool
+    matching_props: list[str]
+    matching_desc: list[str]
+
+
+_operation_map: dict[str, dict[str, str]] | None = None
+
+
+def _get_operation_map() -> dict[str, dict[str, str]]:
     global _operation_map
     if _operation_map is not None:
         return _operation_map
@@ -41,7 +61,7 @@ def _get_operation_map():
         
     return _operation_map
 
-def _get_enhanced_doc(name: str, method) -> str:
+def _get_enhanced_doc(name: str, method: object) -> str:
     doc = method.__doc__ or ""
     op_map = _get_operation_map()
     if name in op_map:
@@ -61,7 +81,9 @@ def _get_enhanced_doc(name: str, method) -> str:
     return doc
 
 
-def _get_matches(query: str, external_funcs: dict, sdk) -> list:
+def _get_matches(
+    query: str, external_funcs: Mapping[str, object], sdk: object
+) -> list[_FuncMatch]:
     """Helper to get matching functions with hit details."""
     escaped_query = re.escape(query).replace(r'\*', '.*').replace(r'\?', '.')
     try:
@@ -69,7 +91,7 @@ def _get_matches(query: str, external_funcs: dict, sdk) -> list:
     except re.error:
         pattern = re.compile(re.escape(query), re.IGNORECASE)
 
-    matches = []
+    matches: list[_FuncMatch] = []
     for name in external_funcs:
         if name in EXCLUDED_FUNCS:
             continue
@@ -117,7 +139,7 @@ def _get_matches(query: str, external_funcs: dict, sdk) -> list:
             
     return matches
 
-def _get_type_matches(query: str) -> list:
+def _get_type_matches(query: str) -> list[_TypeMatch]:
     escaped_query = re.escape(query).replace(r'\*', '.*').replace(r'\?', '.')
     try:
         pattern = re.compile(escaped_query, re.IGNORECASE)
@@ -127,12 +149,13 @@ def _get_type_matches(query: str) -> list:
     try:
         from lkr.codemode.type import _get_ext_definitions, _get_swagger_data
         swagger = _get_swagger_data()
-        definitions = dict(swagger.get('definitions', {}))
+        raw_defs = swagger.get('definitions', {})
+        definitions: dict[str, object] = dict(raw_defs) if isinstance(raw_defs, Mapping) else {}
         definitions.update(_get_ext_definitions())
     except Exception:  # noqa: BLE001
         return []
 
-    matches = []
+    matches: list[_TypeMatch] = []
     for type_name, def_obj in definitions.items():
         if not isinstance(def_obj, dict):
             continue
@@ -162,7 +185,11 @@ def _get_type_matches(query: str) -> list:
     return sorted(matches, key=lambda x: x['name'])
 
 
-def search_help(query: str = "", external_funcs: dict | None = None, sdk=None) -> str:
+def search_help(
+    query: str = "",
+    external_funcs: Mapping[str, object] | None = None,
+    sdk: object = None,
+) -> str:
     """Search for functions and return a summary string with snippets."""
     if not query or not query.strip():
         return get_readme().strip()
@@ -209,7 +236,9 @@ def search_help(query: str = "", external_funcs: dict | None = None, sdk=None) -
     )
     return f"Matches found for '{query}':\n" + "\n".join(lines) + footer
 
-def search_with_lookups(query: str, external_funcs: dict, sdk) -> list:
+def search_with_lookups(
+    query: str, external_funcs: Mapping[str, object], sdk: object
+) -> list[str]:
     """Search for functions and return the array of lookups for matches."""
     func_matches = _get_matches(query, external_funcs, sdk)
     type_matches = _get_type_matches(query)
@@ -225,7 +254,9 @@ def search_with_lookups(query: str, external_funcs: dict, sdk) -> list:
             pass
     return results
 
-def lookup_function(name: str, external_funcs: dict, sdk) -> str:
+def lookup_function(
+    name: str, external_funcs: Mapping[str, object], sdk: object
+) -> str:
     """Look up the exact name of a function or type and return its docstring, inputs, and outputs."""
     if name not in external_funcs:
         # Check if it's a type name
@@ -244,7 +275,7 @@ def lookup_function(name: str, external_funcs: dict, sdk) -> str:
     method = getattr(sdk, name)
     doc = _get_enhanced_doc(name, method) or "No docstring available."
     
-    def _get_type_str(t):
+    def _get_type_str(t: object) -> str:
         if t == inspect._empty:
             return "Any"
         return re.sub(

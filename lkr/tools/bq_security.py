@@ -4,12 +4,13 @@ import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal, cast
 from urllib.parse import quote
 
 import requests
 import sqlglot
 from looker_sdk.sdk.api40 import models as models40
+from looker_sdk.sdk.api40.methods import Looker40SDK
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
 
@@ -217,7 +218,7 @@ def resolve_gcp_token(explicit_token: str | None = None) -> str:
     )
 
 
-def _extract_denied_permission(payload: Any, raw_text: str) -> tuple[str | None, str | None, str]:
+def _extract_denied_permission(payload: object, raw_text: str) -> tuple[str | None, str | None, str]:
     msg = raw_text.strip()
     perm: str | None = None
     resource: str | None = None
@@ -225,13 +226,14 @@ def _extract_denied_permission(payload: Any, raw_text: str) -> tuple[str | None,
         err = payload.get("error")
         if isinstance(err, dict):
             msg = str(err.get("message") or msg)
-            for det in err.get("details") or []:
+            raw_details = err.get("details")
+            for det in raw_details if isinstance(raw_details, list) else []:
                 if not isinstance(det, dict):
                     continue
                 meta = det.get("metadata")
                 if isinstance(meta, dict):
-                    perm = perm or meta.get("permission")
-                    resource = resource or meta.get("resource")
+                    perm = perm or (str(meta["permission"]) if meta.get("permission") else None)
+                    resource = resource or (str(meta["resource"]) if meta.get("resource") else None)
     if not perm:
         m = re.search(
             r"Permission ['\"\[]?([a-zA-Z0-9_.]+)['\"\]]? denied",
@@ -247,9 +249,9 @@ def _gcp_request(
     url: str,
     token: str,
     *,
-    json_body: dict[str, Any] | None = None,
+    json_body: dict[str, str] | None = None,
     session: requests.Session | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     http = session or requests
     resp = http.request(
         method,
@@ -278,7 +280,7 @@ def _gcp_request(
         raise RuntimeError(
             f"GCP API error ({resp.status_code}) on {method} {url}: {resp.text[:500]}"
         )
-    return resp.json() if resp.text.strip() else {}
+    return cast(dict[str, object], resp.json()) if resp.text.strip() else {}
 
 
 def _parse_member_Into_principals(
@@ -305,20 +307,22 @@ def _parse_member_Into_principals(
 
 
 def _extract_iam_principals(
-    iam_policy: dict[str, Any],
+    iam_policy: dict[str, object],
     allowed_roles: frozenset[str],
     excluded_service_accounts: set[str],
 ) -> tuple[BqPrincipals, bool]:
     """Return (human principals, saw_any_explicit_human_binding)."""
     out = BqPrincipals()
     saw_human = False
-    for binding in iam_policy.get("bindings") or []:
+    raw_bindings = iam_policy.get("bindings")
+    for binding in raw_bindings if isinstance(raw_bindings, list) else []:
         if not isinstance(binding, dict):
             continue
         role = str(binding.get("role") or "")
         if role not in allowed_roles:
             continue
-        for member in binding.get("members") or []:
+        raw_members = binding.get("members")
+        for member in raw_members if isinstance(raw_members, list) else []:
             m_str = str(member)
             if not m_str.startswith(("serviceAccount:", "deleted:")):
                 saw_human = True
@@ -327,7 +331,7 @@ def _extract_iam_principals(
 
 
 def _flatten_bq_fields(
-    fields: list[dict[str, Any]],
+    fields: list[dict[str, object]],
     prefix_dot: str = "",
     prefix_lkml: str = "",
 ) -> list[tuple[str, str, str, str | None, list[str]]]:
@@ -342,13 +346,16 @@ def _flatten_bq_fields(
         bq_type = str(f.get("type") or "STRING").upper()
         subfields = f.get("fields")
         if bq_type in ("RECORD", "STRUCT") and isinstance(subfields, list) and subfields:
-            out.extend(_flatten_bq_fields(subfields, dot_path, lkml_col))
+            out.extend(_flatten_bq_fields(cast(list[dict[str, object]], subfields), dot_path, lkml_col))
             continue
-        pt_names = ((f.get("policyTags") or {}).get("names")) or []
+        raw_pt = f.get("policyTags")
+        raw_pt_names = raw_pt.get("names") if isinstance(raw_pt, dict) else None
+        pt_names = raw_pt_names if isinstance(raw_pt_names, list) else []
         pt = str(pt_names[0]) if pt_names else None
+        raw_dps = f.get("dataPolicies")
         dp_list = [
             str(dp.get("name"))
-            for dp in (f.get("dataPolicies") or [])
+            for dp in (raw_dps if isinstance(raw_dps, list) else [])
             if isinstance(dp, dict) and dp.get("name")
         ]
         out.append((dot_path, lkml_col, bq_type, pt, dp_list))
@@ -375,7 +382,8 @@ def discover_bq_security(
 
     ds_readers = BqPrincipals()
     has_custom_ds_acl = False
-    for acc in ds_meta.get("access") or []:
+    raw_access = ds_meta.get("access")
+    for acc in raw_access if isinstance(raw_access, list) else []:
         if not isinstance(acc, dict):
             continue
         role = str(acc.get("role") or "")
@@ -435,7 +443,9 @@ def discover_bq_security(
         has_custom_iam = (saw_tbl_human or has_custom_ds_acl) and not effective_readers.public
 
         cols: dict[str, BqColumnSecurity] = {}
-        schema_fields = ((tbl_meta.get("schema") or {}).get("fields")) or []
+        raw_schema = tbl_meta.get("schema")
+        raw_fields = raw_schema.get("fields") if isinstance(raw_schema, dict) else None
+        schema_fields = cast(list[dict[str, object]], raw_fields) if isinstance(raw_fields, list) else []
         for dot_path, lkml_col, bq_type, pt, _dp_list in _flatten_bq_fields(schema_fields):
             if pt:
                 all_policy_tags.add(pt)
@@ -450,15 +460,18 @@ def discover_bq_security(
             "GET", f"{tbl_url}/rowAccessPolicies", token, session=session
         )
         raps: list[BqRowPolicy] = []
-        for rap in rap_resp.get("rowAccessPolicies") or []:
+        raw_raps = rap_resp.get("rowAccessPolicies")
+        for rap in raw_raps if isinstance(raw_raps, list) else []:
             if not isinstance(rap, dict):
                 continue
-            ref = rap.get("rowAccessPolicyReference") or {}
+            raw_ref = rap.get("rowAccessPolicyReference")
+            ref = raw_ref if isinstance(raw_ref, dict) else {}
             pid = str(ref.get("policyId") or "")
             pred = str(rap.get("filterPredicate") or "FALSE")
             grantees = BqPrincipals()
             saw_non_sa = False
-            for g in rap.get("grantees") or []:
+            raw_grantees = rap.get("grantees")
+            for g in raw_grantees if isinstance(raw_grantees, list) else []:
                 g_str = str(g)
                 if not g_str.startswith(("serviceAccount:", "iamMember:serviceAccount:", "deleted:")):
                     saw_non_sa = True
@@ -536,7 +549,8 @@ def discover_bq_security(
         wanted_keys = {
             k for pt in all_policy_tags if (k := _normalize_policy_tag_key(pt)) is not None
         }
-        for dp in dp_resp.get("dataPolicies") or []:
+        raw_policies = dp_resp.get("dataPolicies")
+        for dp in raw_policies if isinstance(raw_policies, list) else []:
             if not isinstance(dp, dict):
                 continue
             if dp.get("dataPolicyType") != "DATA_MASKING_POLICY":
@@ -545,8 +559,9 @@ def discover_bq_security(
             t_key = _normalize_policy_tag_key(dp_tag)
             if not t_key or t_key not in wanted_keys:
                 continue
+            raw_dmp = dp.get("dataMaskingPolicy")
             expr = str(
-                ((dp.get("dataMaskingPolicy") or {}).get("predefinedExpression")) or ""
+                (raw_dmp.get("predefinedExpression") if isinstance(raw_dmp, dict) else None) or ""
             )
             dp_name = str(dp.get("name") or "")
             if not expr or not dp_name:
@@ -1267,11 +1282,11 @@ def compile_bq_security_overlays(
                 grants=grants,
                 warnings=warnings,
             )
-        elif dt_es:
+        elif isinstance(dt_es, (dict, LookmlExploreSource)) and dt_es:
             _apply_ndt_security(
                 v_name=v_name,
                 v_obj=v_obj,
-                dt_es=dt_es,
+                dt_es=cast(dict[str, LookmlExploreSource] | LookmlExploreSource, dt_es),
                 assembled_models=assembled_models,
                 exp_base=exp_base,
                 exp_ref=exp_ref,
@@ -1598,8 +1613,8 @@ def _apply_ndt_security(
     v_obj: LookmlView,
     dt_es: dict[str, LookmlExploreSource] | LookmlExploreSource,
     assembled_models: dict[str, LookmlModel],
-    exp_base: dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    exp_ref: dict[str, list[tuple[str, Any, dict[str, Any]]]],
+    exp_base: dict[str, list[tuple[str, LookmlExplore, dict[str, object]]]],
+    exp_ref: dict[str, list[tuple[str, LookmlExplore, dict[str, object]]]],
     all_views: dict[str, LookmlView],
     phys_view_table: dict[str, tuple[str, str]],
     by_ds_tbl: dict[tuple[str, str], BqTableSecurity],
@@ -1849,8 +1864,8 @@ def _compile_explore_refinements(
     *,
     assembled_models: dict[str, LookmlModel],
     model_filter: str | None,
-    exp_base: dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    exp_ref: dict[str, list[tuple[str, Any, dict[str, Any]]]],
+    exp_base: dict[str, list[tuple[str, LookmlExplore, dict[str, object]]]],
+    exp_ref: dict[str, list[tuple[str, LookmlExplore, dict[str, object]]]],
     all_views: dict[str, LookmlView],
     phys_view_table: dict[str, tuple[str, str]],
     rls_plans: dict[tuple[str, str], _TableRlsPlan],
@@ -1989,9 +2004,10 @@ def _compile_explore_refinements(
                         if isinstance(q_raw, dict)
                         else {}
                     )
+                    raw_dims = q_dict.get("dimensions")
                     cur_dims = [
                         _qualify_field_ref(str(d), jgraph.base_alias)
-                        for d in (q_dict.get("dimensions") or [])
+                        for d in (raw_dims if isinstance(raw_dims, list) else [])
                     ]
                     for d in cur_dims:
                         dv, df = d.split(".", 1)
@@ -2075,13 +2091,13 @@ def ensure_model_security_includes(model_content: str, security_files: list[str]
 
 
 def sync_looker_security_attributes(
-    sdk: Any,
+    sdk: Looker40SDK,
     project_id: str,
     desired: dict[str, DesiredAttributeSpec],
-) -> dict[str, Any]:
+) -> dict[str, list[str]]:
     """Reconcile Looker User Attributes, Groups, and Multi-Group RAP Unions via `UserAttributeUpdater`."""
     state_key = _slug(f"state_{project_id}")
-    prev_state: dict[str, dict[str, Any]] = {}
+    prev_state: dict[str, dict[str, object]] = {}
     try:
         arts = sdk.artifact(namespace=SECURITY_ARTIFACT_NAMESPACE, key=state_key)
         item = arts[0] if isinstance(arts, list) and arts else arts
@@ -2112,7 +2128,7 @@ def sync_looker_security_attributes(
 
     created_or_updated: list[str] = []
     deleted_attrs: list[str] = []
-    next_state: dict[str, dict[str, Any]] = {}
+    next_state: dict[str, dict[str, object]] = {}
 
     # 1. Delete attributes whose BQ policies were completely removed
     for old_attr in sorted(set(prev_state) - set(desired)):
@@ -2179,8 +2195,18 @@ def sync_looker_security_attributes(
         created_or_updated.append(attr_name)
 
         old_entry = prev_state.get(attr_name) or {}
-        old_groups: dict[str, str] = old_entry.get("groups") or {}
-        old_users: dict[str, str] = old_entry.get("users") or {}
+        raw_old_groups = old_entry.get("groups")
+        old_groups: dict[str, str] = (
+            cast(dict[str, str], raw_old_groups)
+            if isinstance(raw_old_groups, dict)
+            else {}
+        )
+        raw_old_users = old_entry.get("users")
+        old_users: dict[str, str] = (
+            cast(dict[str, str], raw_old_users)
+            if isinstance(raw_old_users, dict)
+            else {}
+        )
 
         for stale_g in sorted(set(old_groups) - set(resolved_groups)):
             try:

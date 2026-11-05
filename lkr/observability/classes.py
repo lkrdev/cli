@@ -1,6 +1,6 @@
 from collections.abc import MutableMapping
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Annotated
 from urllib.parse import urljoin
 
 import typer
@@ -20,7 +20,7 @@ DEFAULT_PERMISSIONS = [
 ]
 
 
-def now():
+def now() -> datetime:
     return datetime.now(UTC)
 
 
@@ -76,7 +76,7 @@ class LogEvent(BaseModel):
     time_since_start: float = Field(
         default=0, description="The time since the session started"
     )
-    payload: dict[str, Any]
+    payload: dict[str, object]
     session_id: str
     last_event_type: str | None = None
     last_event_at: datetime | None = None
@@ -111,7 +111,7 @@ class ObservabilityCtxObj(BaseModel):
         port: int,
         host: str,
         timeout: int | None = None,
-    ):
+    ) -> None:
         from lkr.auth_service import get_auth
 
         auth = get_auth(ctx)
@@ -127,7 +127,9 @@ class ObservabilityCtxObj(BaseModel):
         if event_prefix:
             self.event_prefix = event_prefix
 
-    def log_event(self, event: dict[str, Any], event_type: str, session_id: str):
+    def log_event(
+        self, event: dict[str, object], event_type: str, session_id: str
+    ) -> None:
         if session_id not in self.events:
             self.events[session_id] = []
             self.start_at[session_id] = now()
@@ -158,12 +160,12 @@ class ObservabilityCtxObj(BaseModel):
 
         self.events[session_id].append(e)
 
-    def get_events(self, session_id: str):
+    def get_events(self, session_id: str) -> list[dict[str, object]]:
         events = self.events.pop(session_id, [])
         return [e.model_dump(mode="json") for e in events]
 
 
 class IframeRequestEvent(BaseModel):
     event_type: str
-    event_data: dict[str, Any]
+    event_data: dict[str, object]
     timestamp: datetime

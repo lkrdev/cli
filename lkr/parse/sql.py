@@ -1,6 +1,7 @@
 from collections import defaultdict
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Literal, NamedTuple
+from typing import Literal, NamedTuple
 
 import sqlglot
 from pydantic import BaseModel, Field
@@ -26,6 +27,8 @@ __all__ = [
     "parse_sql",
     "query_similarity",
 ]
+
+type SqlSchema = Mapping[str, Mapping[str, Mapping[str, Mapping[str, str]]]]
 
 ComplexityLabel = Literal[
     "trivial",
@@ -260,7 +263,7 @@ def _col_spec_from_proj(proj: exp.Expr, dialect: str | None = None) -> ColumnSpe
 def _optimize_stars(
     expr: exp.Expr,
     dialect: str | None = None,
-    schema: dict[str, Any] | None = None,
+    schema: SqlSchema | None = None,
     default_db: str | None = None,
     default_schema: str | None = None,
 ) -> exp.Expr:
@@ -286,7 +289,10 @@ def _optimize_stars(
         for cat, dbs in (schema or {}).items()
     }
 
-    def _run(base_expr: exp.Expr, active_schema: dict[str, Any] | None) -> tuple[exp.Expr, exp.Expr]:
+    def _run(
+        base_expr: exp.Expr,
+        active_schema: Mapping[str, object] | None,
+    ) -> tuple[exp.Expr, exp.Expr]:
         e = base_expr.copy()
         for tbl in e.find_all(exp.Table):
             if tbl.name and tbl.name.lower() not in cte_names:
@@ -304,16 +310,19 @@ def _optimize_stars(
                     "db",
                     exp.to_identifier((t_ref.db or "").lower() or "__default_db__"),
                 )
+        schema_arg: dict[str, object] | None = (
+            dict(active_schema) if active_schema else None
+        )
         q = qualify(
             e,
-            schema=active_schema or None,
+            schema=schema_arg,
             infer_schema=True,
             allow_partial_qualification=True,
             validate_qualify_columns=False,
             quote_identifiers=False,
             identify=False,
         )
-        p = pushdown_projections(q, schema=active_schema or None)
+        p = pushdown_projections(q, schema=schema_arg)
         for node in (q, p):
             for tbl in node.find_all(exp.Table):
                 if tbl.catalog == "__default_cat__":
@@ -407,7 +416,7 @@ def _extract_query(
     expr: exp.Expr,
     raw_sql: str,
     dialect: str | None = None,
-    schema: dict[str, Any] | None = None,
+    schema: SqlSchema | None = None,
     default_db: str | None = None,
     default_schema: str | None = None,
 ) -> ParsedQuery:
@@ -685,7 +694,7 @@ def parse_sql(
     sql: str | None = None,
     file: Path | str | None = None,
     dialect: str | None = None,
-    schema: dict[str, Any] | None = None,
+    schema: SqlSchema | None = None,
     default_db: str | None = None,
     default_schema: str | None = None,
 ) -> SqlParseResult:
@@ -879,7 +888,7 @@ class _QueryFeatures(NamedTuple):
     group_by: frozenset[str]
     where_cols: frozenset[str]
     where_skeletons: frozenset[str]
-    template_key: tuple[Any, ...]
+    template_key: tuple[object, ...]
 
 
 def _build_alias_map(
@@ -1117,7 +1126,7 @@ def _extract_features(
     )
 
 
-def _jaccard(a: frozenset[Any], b: frozenset[Any]) -> float:
+def _jaccard(a: frozenset[object], b: frozenset[object]) -> float:
     if not a and not b:
         return 1.0
     if not a or not b:
@@ -1203,7 +1212,7 @@ def _load_queries_for_grouping(
     path: Path | str | None = None,
     queries: list[ParsedQuery] | None = None,
     dialect: str | None = None,
-    schema: dict[str, Any] | None = None,
+    schema: SqlSchema | None = None,
     default_db: str | None = None,
     default_schema: str | None = None,
 ) -> list[ParsedQuery]:
@@ -1259,7 +1268,7 @@ def _load_queries_for_grouping(
     f_path = Path(file)
     suffix = f_path.suffix.lower()
 
-    def _from_item(item: Any) -> list[ParsedQuery]:
+    def _from_item(item: object) -> list[ParsedQuery]:
         if isinstance(item, str):
             return parse_sql(
                 sql=item,
@@ -1514,7 +1523,7 @@ def group_sql_queries(
     queries: list[ParsedQuery] | None = None,
     threshold: float = 0.7,
     dialect: str | None = None,
-    schema: dict[str, Any] | None = None,
+    schema: SqlSchema | None = None,
     default_db: str | None = None,
     default_schema: str | None = None,
 ) -> SqlGroupResult:
@@ -1537,8 +1546,8 @@ def group_sql_queries(
     features_by_idx: dict[int, _QueryFeatures] = {}
 
     # Step 1: O(N) feature extraction & exact template bucketing
-    buckets: dict[tuple[Any, ...], list[int]] = defaultdict(list)
-    bucket_features: dict[tuple[Any, ...], _QueryFeatures] = {}
+    buckets: dict[tuple[object, ...], list[int]] = defaultdict(list)
+    bucket_features: dict[tuple[object, ...], _QueryFeatures] = {}
 
     for idx, q in enumerate(raw_queries):
         if q.error is not None or not q.tables:
@@ -1566,7 +1575,7 @@ def group_sql_queries(
 
     # Step 2: Inverted index over existing cluster medoids by exact (catalog, db, name) table
     # ponytail: greedy medoid clustering over unique templates; upgrade to full hierarchical linkage if >10k distinct templates per table
-    clusters: list[tuple[tuple[Any, ...], list[tuple[Any, ...]]]] = []
+    clusters: list[tuple[tuple[object, ...], list[tuple[object, ...]]]] = []
     table_to_clusters: dict[tuple[str, str, str], list[int]] = defaultdict(list)
 
     for tk in sorted_tkeys:

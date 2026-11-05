@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal, NotRequired, Protocol, TypedDict
 
 import sqlglot
+from looker_sdk.sdk.api40.models import WriteQuery
 from sqlglot import exp
 
 from lkr.logger import logger
@@ -21,6 +23,7 @@ from lkr.parse.lookml import (
     LookmlDimension,
     LookmlDimensionGroup,
     LookmlExplore,
+    LookmlFieldProperties,
     LookmlModel,
     LookmlProject,
     LookmlView,
@@ -65,14 +68,61 @@ _FIELD_REF_RE = re.compile(
 )
 
 
+class LookerCompareSdk(Protocol):
+    def connection_tables(
+        self,
+        *,
+        connection_name: str,
+        database: str | None = None,
+        schema_name: str | None = None,
+    ) -> Sequence[object] | None: ...
+
+    def connection_columns(
+        self,
+        *,
+        connection_name: str,
+        database: str | None = None,
+        schema_name: str | None = None,
+        table_names: str | None = None,
+    ) -> Sequence[object] | None: ...
+
+    def run_inline_query(
+        self,
+        *,
+        result_format: str,
+        body: WriteQuery,
+    ) -> str | bytes: ...
+
+
+class _ExploreTableInfo(TypedDict):
+    table: str
+    catalog: str | None
+    schema: str | None
+    name: str
+    connection: str | None
+    columns: set[str]
+    primary_keys: set[str]
+    view_alias: NotRequired[str]
+
+
+class _AggregatedTableInfo(TypedDict):
+    table: str
+    catalog: str | None
+    schema: str | None
+    name: str
+    connection: str | None
+    explores: set[str]
+    columns: set[str]
+
+
 class CatalogTable:
     def __init__(
         self,
         name: str,
         schema: str | None = None,
         catalog: str | None = None,
-        columns: dict[str, str] | list[str] | list[dict[str, Any]] | None = None,
-    ):
+        columns: dict[str, str] | list[str] | list[dict[str, object]] | None = None,
+    ) -> None:
         self.name = name.strip("`\"'[] ")
         self.schema = schema.strip("`\"'[] ") if schema else None
         self.catalog = catalog.strip("`\"'[] ") if catalog else None
@@ -124,7 +174,7 @@ class CatalogTable:
 
 
 class DatabaseCatalog:
-    def __init__(self, tables: list[CatalogTable] | None = None):
+    def __init__(self, tables: list[CatalogTable] | None = None) -> None:
         self.tables: list[CatalogTable] = tables or []
 
     def add_table(self, table: CatalogTable) -> None:
@@ -264,7 +314,7 @@ def load_db_schema_file(path: Path | str) -> DatabaseCatalog:
 
 
 def fetch_sdk_database_catalog(
-    sdk: Any,
+    sdk: LookerCompareSdk,
     connections_and_schemas: list[tuple[str, str | None, str | None]],
     fetch_columns: bool = False,
 ) -> DatabaseCatalog:
@@ -387,7 +437,7 @@ def _extract_view_fields_columns(
     primary_keys: set[str] = set()
 
     # Collect all fields
-    fields: list[tuple[str, Any]] = []
+    fields: list[tuple[str, LookmlFieldProperties]] = []
     for d_name, d_obj in (view_obj.dimension or {}).items():
         fields.append((d_name, d_obj))
     for dg_name, dg_obj in (view_obj.dimension_group or {}).items():
@@ -407,7 +457,7 @@ def _extract_view_fields_columns(
                 getattr(f_obj, "sql_start", None),
                 getattr(f_obj, "sql_end", None),
             )
-            if s
+            if isinstance(s, str) and s
         ]
 
         found_cols: list[str] = []
@@ -456,14 +506,14 @@ def _extract_explore_via_ast(
     explore_name: str,
     explore_obj: LookmlExplore,
     proj: LookmlProject,
-    view_base_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    view_ref_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    exp_base_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    exp_ref_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
+    view_base_decls: dict[str, list[tuple[str, LookmlView, dict[str, object]]]],
+    view_ref_decls: dict[str, list[tuple[str, LookmlView, dict[str, object]]]],
+    exp_base_decls: dict[str, list[tuple[str, LookmlExplore, dict[str, object]]]],
+    exp_ref_decls: dict[str, list[tuple[str, LookmlExplore, dict[str, object]]]],
     model_views: dict[str, LookmlView],
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, _ExploreTableInfo]:
     """Compile physical tables and columns for an explore statically from LookML AST."""
-    tables: dict[str, dict[str, Any]] = {}
+    tables: dict[str, _ExploreTableInfo] = {}
     exp_chain = _build_chain(explore_name, exp_base_decls, exp_ref_decls)
     base_view_name, base_alias, _, _ = _resolve_explore_base(
         explore_name, explore_obj, exp_chain, model_views
@@ -526,7 +576,7 @@ def _extract_explore_via_ast(
             # Foreign key exists on base view table
             fk_col = j_fk.strip("`\"'[] ")
             for t_data in tables.values():
-                if t_data["view_alias"] == base_alias:
+                if t_data.get("view_alias") == base_alias:
                     t_data["columns"].add(fk_col)
             # Joined view uses its primary key
             j_cols.update(j_pks)
@@ -544,7 +594,7 @@ def _extract_explore_via_ast(
                 if f_ref:
                     if v_ref == base_alias:
                         for t_data in tables.values():
-                            if t_data["view_alias"] == base_alias:
+                            if t_data.get("view_alias") == base_alias:
                                 t_data["columns"].add(f_ref)
                     elif v_ref == j_alias:
                         j_cols.add(f_ref)
@@ -575,14 +625,12 @@ def _extract_explore_via_ast(
 
 
 def _extract_explore_via_sdk_sql(
-    sdk: Any,
+    sdk: LookerCompareSdk,
     model_name: str,
     explore_name: str,
     connection_name: str | None,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, _ExploreTableInfo]:
     """Compile explore SQL using Looker SDK and parse physical tables and columns via SQLGlot."""
-    from looker_sdk.sdk.api40.models import WriteQuery
-
     body = WriteQuery(
         model=model_name,
         view=explore_name,
@@ -638,7 +686,7 @@ def _extract_explore_via_sdk_sql(
                 single_key = next(iter(table_refs_by_key))
                 cols_by_key[single_key].add(c_name)
 
-    out: dict[str, dict[str, Any]] = {}
+    out: dict[str, _ExploreTableInfo] = {}
     for t_key, t_ref in table_refs_by_key.items():
         out[t_key] = {
             "table": t_key,
@@ -664,7 +712,7 @@ def parse_lookml_database_compare(
     validate: bool = False,
     validate_columns: bool = False,
     db_schema_file: Path | str | None = None,
-    sdk: Any | None = None,
+    sdk: LookerCompareSdk | None = None,
     project: LookmlProject | None = None,
     manifest: Path | str | None = None,
     constants: dict[str, str] | None = None,
@@ -705,7 +753,7 @@ def parse_lookml_database_compare(
     view_base_decls, view_ref_decls = _collect_declarations(proj, "view", LookmlView)
     exp_base_decls, exp_ref_decls = _collect_declarations(proj, "explore", LookmlExplore)
 
-    table_data_map: dict[str, dict[str, Any]] = {}
+    table_data_map: dict[str, _AggregatedTableInfo] = {}
     compile_errors: list[CompileErrorInfo] = []
     referenced_schemas: set[str | None] = set()
     connections_and_schemas: list[tuple[str, str | None, str | None]] = []
@@ -729,7 +777,7 @@ def parse_lookml_database_compare(
                     continue
 
                 full_exp_name = f"{m_name}.{e_name}"
-                exp_tables: dict[str, dict[str, Any]] | None = None
+                exp_tables: dict[str, _ExploreTableInfo] | None = None
 
                 # Try SDK SQL compilation first if SDK is available
                 if sdk is not None:

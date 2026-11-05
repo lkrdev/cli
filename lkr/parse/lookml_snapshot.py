@@ -5,8 +5,9 @@ import fnmatch
 import json
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal, NotRequired, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,6 +16,7 @@ from lkr.parse.lookml import (
     LookmlExplore,
     LookmlFieldProperties,
     LookmlManifest,
+    LookmlPositions,
     LookmlProject,
     LookmlTest,
     LookmlView,
@@ -24,6 +26,134 @@ from lkr.parse.lookml_to_api import parse_lookml_to_api
 from lkr.parse.user_attributes import LIQUID_USER_ATTR_RE
 
 VALID_SNAPSHOT_OBJECTS = ("tests", "access", "measures", "connections", "manifest")
+
+
+class TestColumnSnapshot(TypedDict):
+    field: str | None
+
+
+class TestDerivedColumnSnapshot(TypedDict):
+    sql: str | None
+
+
+class TestExploreSourceSnapshot(TypedDict):
+    explore: str
+    column: dict[str, TestColumnSnapshot]
+    derived_column: dict[str, TestDerivedColumnSnapshot] | None
+    expression_custom_filter: str | None
+    limit: int | str | None
+    timezone: str | None
+    filters: NotRequired[dict[str, str]]
+
+
+class TestAssertSnapshot(TypedDict):
+    expression: str | None
+
+
+TestSnapshotEntry = TypedDict(
+    "TestSnapshotEntry",
+    {
+        "name": str,
+        "model": str,
+        "file": str,
+        "line": int,
+        "explore_source": dict[str, TestExploreSourceSnapshot],
+        "assert": dict[str, TestAssertSnapshot],
+    },
+)
+
+
+class AccessGrantSnapshotEntry(TypedDict):
+    model: str
+    name: str
+    user_attribute: str | None
+    allowed_values: list[str]
+    file: str
+    line: int
+
+
+class ExploreAccessSnapshotEntry(TypedDict):
+    model: str
+    explore: str
+    required_access_grants: list[str]
+    access_filter: object
+    file: str
+    line: int
+    user_attributes: NotRequired[dict[str, list[str]]]
+
+
+class ViewAccessSnapshotEntry(TypedDict):
+    model: str
+    view: str
+    required_access_grants: list[str]
+    access_filter: object
+    file: str
+    line: int
+    user_attributes: NotRequired[dict[str, list[str]]]
+
+
+class FieldAccessSnapshotEntry(TypedDict):
+    model: str
+    view: str
+    field: str
+    field_type: str
+    required_access_grants: list[str]
+    allowed_values: list[str] | None
+    file: str
+    line: int
+    pii: NotRequired[bool]
+    hidden: NotRequired[bool]
+    user_attributes: NotRequired[dict[str, list[str]]]
+
+
+class AccessSnapshot(TypedDict):
+    access_grants: dict[str, AccessGrantSnapshotEntry]
+    explores: dict[str, ExploreAccessSnapshotEntry]
+    views: dict[str, ViewAccessSnapshotEntry]
+    fields: dict[str, FieldAccessSnapshotEntry]
+
+
+class MeasureSnapshotEntry(TypedDict):
+    explore_label: str
+    view_label: str
+    label: str
+    group_label: NotRequired[str]
+    group_item_label: NotRequired[str]
+
+
+class ConnectionSnapshotEntry(TypedDict):
+    model: str
+    connection: str | None
+    file: str
+    line: int
+
+
+class ManifestConstantSnapshotEntry(TypedDict):
+    name: str
+    value: str | None
+    file: str
+    line: int
+    export: NotRequired[str]
+
+
+class ManifestSnapshot(TypedDict):
+    present: bool
+    project_name: str | None
+    timezone: NotRequired[str | None]
+    includes: NotRequired[list[str]]
+    constants: NotRequired[dict[str, ManifestConstantSnapshotEntry]]
+    file: NotRequired[str]
+    line: NotRequired[int]
+
+
+type SnapshotPayload = (
+    dict[str, TestSnapshotEntry]
+    | AccessSnapshot
+    | dict[str, MeasureSnapshotEntry]
+    | dict[str, ConnectionSnapshotEntry]
+    | ManifestSnapshot
+    | dict[str, object]
+)
 
 
 class LookmlSnapshotResult(BaseModel):
@@ -41,7 +171,7 @@ class LookmlSnapshotResult(BaseModel):
     material_change_files: list[str] = Field(default_factory=list)
     required_reviewers: list[str] = Field(default_factory=list)
     diffs: list[str] = Field(default_factory=list)
-    snapshots: dict[str, Any] = Field(default_factory=dict)
+    snapshots: dict[str, object] = Field(default_factory=dict)
     message: str | None = None
 
 
@@ -53,8 +183,8 @@ def normalize_sql(sql: str | None) -> str | None:
 
 
 def strip_positions(
-    val: Any, keys: tuple[str, ...] = ("line", "position", "$p")
-) -> Any:
+    val: object, keys: tuple[str, ...] = ("line", "position", "$p")
+) -> object:
     """Recursively strip line and position fields for semantic equality comparisons."""
     if isinstance(val, dict):
         return {k: strip_positions(v, keys) for k, v in val.items() if k not in keys}
@@ -63,7 +193,7 @@ def strip_positions(
     return val
 
 
-def _is_empty_snapshot(data: Any) -> bool:
+def _is_empty_snapshot(data: object) -> bool:
     return not data or (
         isinstance(data, dict)
         and (
@@ -73,7 +203,7 @@ def _is_empty_snapshot(data: Any) -> bool:
     )
 
 
-def _extract_liquid_attrs(val: Any) -> list[str]:
+def _extract_liquid_attrs(val: object) -> list[str]:
     if isinstance(val, BaseModel):
         val = val.model_dump(by_alias=True, exclude_none=True)
     if isinstance(val, dict):
@@ -88,7 +218,7 @@ def _extract_liquid_attrs(val: Any) -> list[str]:
 
 
 def _scan_obj_attrs(
-    obj: Any, skip: tuple[str, ...] = (), prefix: str = ""
+    obj: object, skip: tuple[str, ...] = (), prefix: str = ""
 ) -> dict[str, list[str]]:
     d = (
         obj.model_dump(by_alias=True, exclude_none=True)
@@ -115,7 +245,7 @@ def _resolve_project_name(project: LookmlProject, path: Path) -> str:
 
 
 def _find_position(
-    positions: Any,
+    positions: LookmlPositions | None,
     file_key: str | None,
     keys: list[str | int],
 ) -> tuple[str, int]:
@@ -175,7 +305,7 @@ def _find_position(
     return (matched_file, matched_line)
 
 
-def _extract_explore_source_filters(raw_filters: Any) -> dict[str, str]:
+def _extract_explore_source_filters(raw_filters: object) -> dict[str, str]:
     out: dict[str, str] = {}
     items = (
         raw_filters
@@ -201,9 +331,9 @@ def _build_test_entry(
     t: LookmlTest,
     model_name: str,
     file_hint: str,
-    positions: Any,
-) -> dict[str, Any]:
-    exp_sources: dict[str, Any] = {}
+    positions: LookmlPositions | None,
+) -> TestSnapshotEntry:
+    exp_sources: dict[str, TestExploreSourceSnapshot] = {}
     explore_source_val = t.explore_source
     if isinstance(explore_source_val, dict):
         explore_source_dict = explore_source_val
@@ -214,19 +344,19 @@ def _build_test_entry(
         explore_source_dict = {}
 
     for exp_name, exp_src in sorted(explore_source_dict.items()):
-        col_dict: dict[str, Any] = {}
+        col_dict: dict[str, TestColumnSnapshot] = {}
         if getattr(exp_src, "column", None) and exp_src.column:
             for c_name, c_obj in sorted(exp_src.column.items()):
                 col_dict[c_name] = {"field": getattr(c_obj, "field", None)}
 
-        derived_col_dict: dict[str, Any] = {}
+        derived_col_dict: dict[str, TestDerivedColumnSnapshot] = {}
         if getattr(exp_src, "derived_column", None) and exp_src.derived_column:
             for dc_name, dc_obj in sorted(exp_src.derived_column.items()):
                 derived_col_dict[dc_name] = {
                     "sql": normalize_sql(getattr(dc_obj, "sql", None))
                 }
 
-        exp_entry: dict[str, Any] = {
+        exp_entry: TestExploreSourceSnapshot = {
             "explore": exp_name,
             "column": col_dict,
             "derived_column": derived_col_dict if derived_col_dict else None,
@@ -242,7 +372,7 @@ def _build_test_entry(
             exp_entry["filters"] = filters_dict
         exp_sources[exp_name] = exp_entry
 
-    assert_dict: dict[str, Any] = {}
+    assert_dict: dict[str, TestAssertSnapshot] = {}
     if isinstance(t.assert_, dict):
         for a_name, a_obj in sorted(t.assert_.items()):
             assert_dict[a_name] = {
@@ -269,14 +399,14 @@ def _build_test_entry(
 def extract_tests_snapshot(
     project: LookmlProject,
     model_filter: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, TestSnapshotEntry]:
     """Extract and normalize all LookML data tests."""
-    tests_out: dict[str, Any] = {}
+    tests_out: dict[str, TestSnapshotEntry] = {}
     positions = project.positions
     seen_tests: set[str] = set()
 
     def _add_tests(
-        raw_tests: dict[str, Any] | None, model_name: str, file_hint: str
+        raw_tests: Mapping[str, object] | None, model_name: str, file_hint: str
     ) -> None:
         for test_name, test_val in sorted((raw_tests or {}).items()):
             tests_list = test_val if isinstance(test_val, list) else [test_val]
@@ -317,12 +447,12 @@ def extract_tests_snapshot(
 def extract_access_snapshot(
     project: LookmlProject,
     model_filter: str | None = None,
-) -> dict[str, Any]:
+) -> AccessSnapshot:
     """Extract and normalize access grants, explore/view/field access controls."""
-    grants_out: dict[str, Any] = {}
-    explores_out: dict[str, Any] = {}
-    views_out: dict[str, Any] = {}
-    fields_out: dict[str, Any] = {}
+    grants_out: dict[str, AccessGrantSnapshotEntry] = {}
+    explores_out: dict[str, ExploreAccessSnapshotEntry] = {}
+    views_out: dict[str, ViewAccessSnapshotEntry] = {}
+    fields_out: dict[str, FieldAccessSnapshotEntry] = {}
 
     if not project.model:
         return {
@@ -350,16 +480,22 @@ def extract_access_snapshot(
                 f_path, line_no = _find_position(
                     positions, model_file_hint, ["access_grant", grant_name]
                 )
-                allowed_vals = []
-                user_attr = None
+                allowed_vals: list[str] = []
+                user_attr: str | None = None
                 if isinstance(grant_val, dict):
-                    user_attr = grant_val.get("user_attribute")
+                    raw_ua = grant_val.get("user_attribute")
+                    user_attr = str(raw_ua) if raw_ua is not None else None
                     raw_av = grant_val.get("allowed_values") or []
-                    allowed_vals = sorted(raw_av if isinstance(raw_av, list) else [str(raw_av)])
+                    allowed_vals = sorted(
+                        [str(x) for x in raw_av] if isinstance(raw_av, list) else [str(raw_av)]
+                    )
                 elif hasattr(grant_val, "user_attribute"):
-                    user_attr = getattr(grant_val, "user_attribute", None)
+                    raw_ua = getattr(grant_val, "user_attribute", None)
+                    user_attr = str(raw_ua) if raw_ua is not None else None
                     raw_av = getattr(grant_val, "allowed_values", []) or []
-                    allowed_vals = sorted(raw_av if isinstance(raw_av, list) else [str(raw_av)])
+                    allowed_vals = sorted(
+                        [str(x) for x in raw_av] if isinstance(raw_av, list) else [str(raw_av)]
+                    )
 
                 grants_out[f"{model_name}.{grant_name}"] = {
                     "model": model_name,
@@ -390,19 +526,17 @@ def extract_access_snapshot(
                         f_path, line_no = _find_position(
                             positions, model_file_hint, ["explore", exp_name]
                         )
-                        explores_out[f"{model_name}.{exp_name}"] = {
+                        exp_access_entry: ExploreAccessSnapshotEntry = {
                             "model": model_name,
                             "explore": exp_name,
                             "required_access_grants": req_grants,
                             "access_filter": acc_filter,
                             "file": f_path,
                             "line": line_no,
-                            **(
-                                {"user_attributes": exp_user_attrs}
-                                if exp_user_attrs
-                                else {}
-                            ),
                         }
+                        if exp_user_attrs:
+                            exp_access_entry["user_attributes"] = exp_user_attrs
+                        explores_out[f"{model_name}.{exp_name}"] = exp_access_entry
 
         # Views and fields access
         if model_obj.view:
@@ -438,19 +572,17 @@ def extract_access_snapshot(
                         f_path, line_no = _find_position(
                             positions, view_file_hint, ["view", v_name]
                         )
-                        views_out[f"{model_name}.{v_name}"] = {
+                        view_access_entry: ViewAccessSnapshotEntry = {
                             "model": model_name,
                             "view": v_name,
                             "required_access_grants": view_req_grants,
                             "access_filter": view_acc_filter,
                             "file": f_path,
                             "line": line_no,
-                            **(
-                                {"user_attributes": view_user_attrs}
-                                if view_user_attrs
-                                else {}
-                            ),
                         }
+                        if view_user_attrs:
+                            view_access_entry["user_attributes"] = view_user_attrs
+                        views_out[f"{model_name}.{v_name}"] = view_access_entry
 
                     # Check all field collections
                     for field_type in (
@@ -480,14 +612,14 @@ def extract_access_snapshot(
                                 continue
                             fld_req_grants = sorted(fld_obj.required_access_grants or [])
                             has_pii_tag = "pii" in (fld_obj.tags or [])
-                            fld_allowed_vals = []
-                            if hasattr(fld_obj, "allowed_value") and fld_obj.allowed_value:
-                                raw_av = fld_obj.allowed_value
+                            fld_allowed_vals: list[str] = []
+                            raw_av = getattr(fld_obj, "allowed_value", None)
+                            if raw_av:
                                 if isinstance(raw_av, list):
                                     for av in raw_av:
                                         val_str = getattr(av, "value", None) or (av.get("value") if isinstance(av, dict) else str(av))
                                         if val_str is not None:
-                                            fld_allowed_vals.append(val_str)
+                                            fld_allowed_vals.append(str(val_str))
                                 elif isinstance(raw_av, dict):
                                     fld_allowed_vals = [str(k) for k in raw_av]
                                 fld_allowed_vals.sort()
@@ -504,7 +636,7 @@ def extract_access_snapshot(
                                     view_file_hint,
                                     ["view", v_name, field_type, fld_name],
                                 )
-                                fld_entry: dict[str, Any] = {
+                                fld_entry: FieldAccessSnapshotEntry = {
                                     "model": model_name,
                                     "view": v_name,
                                     "field": fld_name,
@@ -534,9 +666,9 @@ def extract_access_snapshot(
 def _extract_measures_with_sources(
     project: LookmlProject,
     model_filter: str | None = None,
-) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
+) -> tuple[dict[str, MeasureSnapshotEntry], dict[str, str]]:
     """Extract Explore-indexed measure picker labels via `lookml-to-api --exclude-hidden` and source files."""
-    measures_out: dict[str, dict[str, str]] = {}
+    measures_out: dict[str, MeasureSnapshotEntry] = {}
     source_files: dict[str, str] = {}
     api = parse_lookml_to_api(
         project=project, model=model_filter, exclude_hidden=True
@@ -550,7 +682,7 @@ def _extract_measures_with_sources(
             key = f"{exp.model_name}.{exp.name}.{f.name}"
             if f.source_file:
                 source_files[key] = f.source_file
-            entry: dict[str, str] = {
+            entry: MeasureSnapshotEntry = {
                 "explore_label": exp_lbl,
                 "view_label": f.view_label,
                 "label": f.label_short,
@@ -570,7 +702,7 @@ def _extract_measures_with_sources(
 def extract_measures_snapshot(
     project: LookmlProject,
     model_filter: str | None = None,
-) -> dict[str, dict[str, str]]:
+) -> dict[str, MeasureSnapshotEntry]:
     """Extract Explore-level measure picker labels (`explore_label`, `view_label`, `group_label`, `group_item_label`, `label`)."""
     measures_out, _ = _extract_measures_with_sources(project, model_filter=model_filter)
     return measures_out
@@ -579,9 +711,9 @@ def extract_measures_snapshot(
 def extract_connections_snapshot(
     project: LookmlProject,
     model_filter: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, ConnectionSnapshotEntry]:
     """Extract and normalize model database connection bindings."""
-    connections_out: dict[str, Any] = {}
+    connections_out: dict[str, ConnectionSnapshotEntry] = {}
     if not project.model:
         return connections_out
 
@@ -605,7 +737,7 @@ def extract_connections_snapshot(
 
 def extract_manifest_snapshot(
     project: LookmlProject,
-) -> dict[str, Any]:
+) -> ManifestSnapshot:
     """Extract and normalize project manifest, constants, and extensions."""
     manifest_obj = project.manifest
     positions = project.positions
@@ -618,18 +750,19 @@ def extract_manifest_snapshot(
 
     f_path, line_no = _find_position(positions, "manifest", ["project_name"])
 
-    constants_out: dict[str, Any] = {}
+    constants_out: dict[str, ManifestConstantSnapshotEntry] = {}
     if isinstance(manifest_obj.constant, dict):
         for c_name, c_obj in sorted(manifest_obj.constant.items()):
             cf_path, c_line = _find_position(positions, "manifest", ["constant", c_name])
-            c_entry: dict[str, Any] = {
+            c_entry: ManifestConstantSnapshotEntry = {
                 "name": c_name,
                 "value": getattr(c_obj, "value", None),
                 "file": cf_path,
                 "line": c_line,
             }
-            if getattr(c_obj, "export", None) is not None:
-                c_entry["export"] = getattr(c_obj, "export", None)
+            c_export = getattr(c_obj, "export", None)
+            if c_export is not None:
+                c_entry["export"] = str(c_export)
             constants_out[c_name] = c_entry
 
     includes = sorted(manifest_obj.includes or [])
@@ -649,7 +782,7 @@ def extract_snapshot_for_object(
     obj_name: str,
     project: LookmlProject,
     model_filter: str | None = None,
-) -> dict[str, Any]:
+) -> SnapshotPayload:
     if obj_name == "tests":
         return extract_tests_snapshot(project, model_filter=model_filter)
     if obj_name == "access":
@@ -666,8 +799,8 @@ def extract_snapshot_for_object(
 def format_jest_diff(
     object_name: str,
     snap_path: Path,
-    saved_data: dict[str, Any],
-    current_data: dict[str, Any],
+    saved_data: object,
+    current_data: object,
 ) -> str:
     """Format a Jest-style - Snapshot / + Received console diff with file/line reference."""
     # Find mismatched keys and their location
@@ -677,14 +810,19 @@ def format_jest_diff(
     # Attempt to locate specific mismatch file and line recursively
     if isinstance(current_data, dict):
 
-        def find_mismatch(curr: Any, saved: Any) -> tuple[str | None, int | None]:
+        def find_mismatch(curr: object, saved: object) -> tuple[str | None, int | None]:
             if isinstance(curr, dict):
                 if (
                     "file" in curr
                     and "line" in curr
                     and strip_positions(saved) != strip_positions(curr)
                 ):
-                    return curr.get("file"), curr.get("line")
+                    f_val = curr.get("file")
+                    l_val = curr.get("line")
+                    return (
+                        f_val if isinstance(f_val, str) else None,
+                        l_val if isinstance(l_val, int) else None,
+                    )
                 for k, v in curr.items():
                     saved_v = saved.get(k) if isinstance(saved, dict) else None
                     f, l = find_mismatch(v, saved_v)
@@ -808,8 +946,8 @@ def resolve_codeowners(root_path: Path, files: list[str]) -> list[str]:
 
 def find_material_changes(
     obj_name: str,
-    saved_data: Any,
-    current_data: Any,
+    saved_data: object,
+    current_data: object,
     files_out: list[str] | None = None,
 ) -> list[str]:
     """Return human-readable descriptions of material (non-additive) changes between saved and current snapshot data."""
@@ -827,36 +965,43 @@ def find_material_changes(
         and isinstance(current, dict)
     ):
         for k in sorted(set(saved) | set(current)):
-            f_ref = (saved.get(k) or current.get(k) or {}).get("file")
+            s_entry = saved.get(k)
+            c_entry = current.get(k)
+            s_dict = s_entry if isinstance(s_entry, dict) else {}
+            c_dict = c_entry if isinstance(c_entry, dict) else {}
+            raw_f = s_dict.get("file") or c_dict.get("file")
+            f_ref = raw_f if isinstance(raw_f, str) else None
             if k not in current:
                 changes.append(
-                    f"connections.{k}: removed (was {saved[k].get('connection')!r})"
+                    f"connections.{k}: removed (was {s_dict.get('connection')!r})"
                 )
                 _record_file(f_ref)
             elif k not in saved:
                 changes.append(
-                    f"connections.{k}: added ({current[k].get('connection')!r})"
+                    f"connections.{k}: added ({c_dict.get('connection')!r})"
                 )
                 _record_file(f_ref)
             elif strip_positions(saved[k], _META_KEYS) != strip_positions(
                 current[k], _META_KEYS
             ):
                 changes.append(
-                    f"connections.{k}.connection: changed from {saved[k].get('connection')!r} to {current[k].get('connection')!r}"
+                    f"connections.{k}.connection: changed from {s_dict.get('connection')!r} to {c_dict.get('connection')!r}"
                 )
                 _record_file(f_ref)
         return changes
 
     def _walk(
-        s: Any, c: Any, path: str, cur_file: str | None = None
+        s: object, c: object, path: str, cur_file: str | None = None
     ) -> None:
         if strip_positions(s, _META_KEYS) == strip_positions(c, _META_KEYS) or (
             s is None and isinstance(c, (dict, list))
         ):
             return
+        s_file = s.get("file") if isinstance(s, dict) else None
+        c_file = c.get("file") if isinstance(c, dict) else None
         f_here = (
-            (s.get("file") if isinstance(s, dict) else None)
-            or (c.get("file") if isinstance(c, dict) else None)
+            (s_file if isinstance(s_file, str) else None)
+            or (c_file if isinstance(c_file, str) else None)
             or cur_file
         )
         if isinstance(s, dict):
@@ -871,8 +1016,9 @@ def find_material_changes(
                     continue
                 sub = f"{path}.{k}"
                 if k not in c:
+                    sv_file = sv.get("file") if isinstance(sv, dict) else None
                     f_sub = (
-                        sv.get("file") if isinstance(sv, dict) else None
+                        sv_file if isinstance(sv_file, str) else None
                     ) or f_here
                     changes.append(
                         f"{sub}: removed (was {strip_positions(sv, _META_KEYS)!r})"
@@ -947,7 +1093,7 @@ def run_lookml_snapshot(
     proj_name = _resolve_project_name(project, resolved_path)
     snapshot_dir = resolved_path / "__snapshots__"
 
-    def _sync_snap(target: Path, read_target: Path, data: Any) -> bool:
+    def _sync_snap(target: Path, read_target: Path, data: object) -> bool:
         if not _is_empty_snapshot(data):
             snapshot_dir.mkdir(parents=True, exist_ok=True)
             target.write_text(
@@ -968,7 +1114,7 @@ def run_lookml_snapshot(
     diff_reports: list[str] = []
     material_changes: list[str] = []
     material_change_files: list[str] = []
-    snapshots_out: dict[str, Any] = {}
+    snapshots_out: dict[str, object] = {}
 
     for obj_name in target_objects:
         snap_file = snapshot_dir / f"{obj_name}.snap.json.md"
@@ -983,12 +1129,12 @@ def run_lookml_snapshot(
             if snap_file.exists()
             else next((p for p in fallback_snaps if p.exists()), snap_file)
         )
-        current_data = extract_snapshot_for_object(
+        current_data: SnapshotPayload = extract_snapshot_for_object(
             obj_name, project, model_filter=model
         )
         snapshots_out[obj_name] = current_data
 
-        saved_data: dict[str, Any] | None = None
+        saved_data: SnapshotPayload | None = None
         if base_project is not None:
             saved_data = extract_snapshot_for_object(
                 obj_name, base_project, model_filter=model
@@ -1026,30 +1172,31 @@ def run_lookml_snapshot(
                 saved_data = {}
 
         if model:
-            existing = saved_data
+            existing: object = saved_data
             if existing is None and read_snap_file.exists():
                 try:
                     existing = json.loads(read_snap_file.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, OSError) as e:
                     logger.debug(f"Could not merge snapshot for model {model}: {e}")
-            if isinstance(existing, dict):
-                merged = {
+            if isinstance(existing, dict) and isinstance(current_data, dict):
+                merged: dict[str, object] = {
                     k: v
                     for k, v in existing.items()
                     if k != model and not k.startswith(f"{model}.")
                 }
                 for k, v in current_data.items():
+                    ex_k = existing.get(k)
                     if (
                         k != model
                         and not k.startswith(f"{model}.")
                         and isinstance(v, dict)
-                        and isinstance(existing.get(k), dict)
+                        and isinstance(ex_k, dict)
                     ):
                         merged[k] = {
                             **{
                                 sk: sv
-                                for sk, sv in existing[k].items()
-                                if not sk.startswith(f"{model}.")
+                                for sk, sv in ex_k.items()
+                                if not str(sk).startswith(f"{model}.")
                             },
                             **v,
                         }
@@ -1110,7 +1257,7 @@ def run_lookml_snapshot(
                         else {}
                     )
                     for k, sv in sorted(saved_data.items()):
-                        if k not in current_data or current_data[k] != sv:
+                        if k not in current_data or current_data.get(k) != sv:
                             src = curr_sources.get(k) or base_sources.get(k)
                             if src and src not in material_change_files:
                                 material_change_files.append(src)

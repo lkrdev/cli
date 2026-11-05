@@ -1,59 +1,56 @@
 import re
 from dataclasses import dataclass
-from typing import Any
 
 
 @dataclass(frozen=True)
 class VisibleExploreFields:
-    dimensions: list[dict[str, Any]]
-    measures: list[dict[str, Any]]
-    filters: list[dict[str, Any]]
-    parameters: list[dict[str, Any]]
+    dimensions: list[dict[str, object]]
+    measures: list[dict[str, object]]
+    filters: list[dict[str, object]]
+    parameters: list[dict[str, object]]
 
     @property
     def dimension_names(self) -> list[str]:
-        return [f["name"] for f in self.dimensions]
+        return [str(f["name"]) for f in self.dimensions]
 
     @property
     def measure_names(self) -> list[str]:
-        return [f["name"] for f in self.measures]
+        return [str(f["name"]) for f in self.measures]
 
     @property
     def selectable_field_names(self) -> list[str]:
         return self.dimension_names + self.measure_names
 
 
-def is_visible_field(field: dict[str, Any]) -> bool:
+def is_visible_field(field: dict[str, object]) -> bool:
     """Return True if a LookML explore field has a name and is not hidden."""
     return bool(field.get("name")) and not bool(field.get("hidden"))
 
 
 def extract_visible_explore_fields(
-    explore_data: dict[str, Any],
+    explore_data: dict[str, object],
 ) -> VisibleExploreFields:
     """Extract non-hidden dimensions, measures, filters, and parameters from explore JSON."""
-    fields_obj = explore_data.get("fields") or {}
+    raw_fields = explore_data.get("fields")
+    fields_obj = raw_fields if isinstance(raw_fields, dict) else {}
+
+    def _items(key: str) -> list[dict[str, object]]:
+        val = fields_obj.get(key)
+        return (
+            [f for f in val if isinstance(f, dict) and is_visible_field(f)]
+            if isinstance(val, list)
+            else []
+        )
+
     return VisibleExploreFields(
-        dimensions=[
-            f
-            for f in (fields_obj.get("dimensions") or [])
-            if is_visible_field(f)
-        ],
-        measures=[
-            f for f in (fields_obj.get("measures") or []) if is_visible_field(f)
-        ],
-        filters=[
-            f for f in (fields_obj.get("filters") or []) if is_visible_field(f)
-        ],
-        parameters=[
-            f
-            for f in (fields_obj.get("parameters") or [])
-            if is_visible_field(f)
-        ],
+        dimensions=_items("dimensions"),
+        measures=_items("measures"),
+        filters=_items("filters"),
+        parameters=_items("parameters"),
     )
 
 
-def _string_enum_array(names: list[str], description: str) -> dict[str, Any]:
+def _string_enum_array(names: list[str], description: str) -> dict[str, object]:
     return {
         "type": "array",
         "items": {"type": "string", "enum": names},
@@ -63,7 +60,7 @@ def _string_enum_array(names: list[str], description: str) -> dict[str, Any]:
 
 def build_fields_schema(
     dimension_names: list[str], measure_names: list[str]
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build JSON Schema for `body.fields` (dimensions, measures, or dynamic_fields .name)."""
     return _string_enum_array(
         dimension_names + measure_names,
@@ -71,7 +68,7 @@ def build_fields_schema(
     )
 
 
-def build_pivots_schema(dimension_names: list[str]) -> dict[str, Any]:
+def build_pivots_schema(dimension_names: list[str]) -> dict[str, object]:
     """Build JSON Schema for `body.pivots` (dimensions or dimension_like dynamic_fields .name; no measures or table calcs)."""
     return _string_enum_array(
         dimension_names,
@@ -80,7 +77,7 @@ def build_pivots_schema(dimension_names: list[str]) -> dict[str, Any]:
     )
 
 
-def build_fill_fields_schema(dimension_names: list[str]) -> dict[str, Any]:
+def build_fill_fields_schema(dimension_names: list[str]) -> dict[str, object]:
     """Build JSON Schema for `body.fill_fields` (constrained to dimensions or dimension_like dynamic_fields .name)."""
     return _string_enum_array(
         dimension_names,
@@ -88,7 +85,7 @@ def build_fill_fields_schema(dimension_names: list[str]) -> dict[str, Any]:
     )
 
 
-def build_subtotals_schema(dimension_names: list[str]) -> dict[str, Any]:
+def build_subtotals_schema(dimension_names: list[str]) -> dict[str, object]:
     """Build JSON Schema for `body.subtotals` (grouping dimensions on which to run subtotals)."""
     return _string_enum_array(
         dimension_names,
@@ -96,7 +93,7 @@ def build_subtotals_schema(dimension_names: list[str]) -> dict[str, Any]:
     )
 
 
-def build_sorts_schema(selectable_field_names: list[str]) -> dict[str, Any]:
+def build_sorts_schema(selectable_field_names: list[str]) -> dict[str, object]:
     """Build JSON Schema for `body.sorts` constrained by a regex derived from selectable fields.
     Supports `<field>`, `<field> asc|desc`, `<field> <pivot_idx>`, `<field> asc|desc <pivot_idx>`, or `__UNSORTED__`.
     """

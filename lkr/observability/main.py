@@ -52,7 +52,7 @@ def get_embed_sdk_obj(
     user_timezone: str = Query(default=None),
     user_attributes: str = Query(default="{}"),
     secret_id: str = Query(default=None),
-):
+) -> EmbedSDKObj | None:
     try:
         user_attributes_dict = json.loads(user_attributes)
     except json.JSONDecodeError as e:
@@ -80,14 +80,14 @@ def get_embed_sdk_obj(
 
 
 @app.post("/log_event")
-def log_event(body: IframeRequestEvent, session_id: str = Query(...)):
+def log_event(body: IframeRequestEvent, session_id: str = Query(...)) -> None:
     observability_ctx.log_event(
         body.model_dump(mode="json"), body.event_type, session_id
     )
 
 
 @app.get("/settings")
-def settings():
+def settings() -> JSONResponse:
     if not observability_ctx.sdk:
         raise HTTPException(status_code=500, detail="No SDK found")
     else:
@@ -131,12 +131,12 @@ def settings():
                 )
 
 
-@app.get("/health")
+@app.get("/health", response_model=None)
 def health_check(
     request: Request,
     params: EmbedSDKObj | None = Depends(get_embed_sdk_obj),  # noqa: B008
     open: bool = Query(default=False),
-):
+) -> RedirectResponse | list[dict[str, object]] | None:
     """
     Launch a headless browser, open the embed container, and wait for the completion indicator.
     Returns health status and timing info.
@@ -212,8 +212,10 @@ def health_check(
             session_id,
         )
         settings = observability_ctx.sdk.get_setting("embed_config")
-        if observability_ctx.origin not in get(
-            settings, ["embed_config", "domain_allowlist"], []
+        allowlist = get(settings, ["embed_config", "domain_allowlist"], [])
+        if (
+            not isinstance(allowlist, list)
+            or observability_ctx.origin not in allowlist
         ):
             observability_ctx.log_event(
                 {
@@ -240,7 +242,7 @@ def health_check(
 
 
 @app.get("/", response_class=HTMLResponse)
-def root():
+def root() -> HTMLResponse:
     """Serve the embed_container.html file as the root HTML page."""
     html_path = os.path.join(os.path.dirname(__file__), "embed_container.html")
     with open(html_path, "r", encoding="utf-8") as f:
@@ -262,7 +264,7 @@ def embed(
     event_prefix: Annotated[
         str, typer.Option(help="Event prefix", envvar="EVENT_PREFIX")
     ] = "lkr-observability",
-):
+) -> None:
     """Start the observability FastAPI server."""
     observability_ctx.initialize(
         ctx, port=port, host=host, timeout=timeout, event_prefix=event_prefix

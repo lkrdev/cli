@@ -5,17 +5,24 @@ import sys
 import types
 import urllib.parse
 from datetime import UTC, datetime, timedelta
-from typing import Union
+from typing import Self, Union, cast
 
 import requests
 import typer
 from looker_sdk.error import SDKError
 from looker_sdk.rtl import serialize
-from looker_sdk.rtl.api_settings import ApiSettings, SettingsConfig
+from looker_sdk.rtl.api_settings import ApiSettings, PApiSettings, SettingsConfig
 from looker_sdk.rtl.auth_session import AuthSession, CryptoHash, OAuthSession
 from looker_sdk.rtl.auth_token import AccessToken, AuthToken
 from looker_sdk.rtl.requests_transport import RequestsTransport
-from looker_sdk.rtl.transport import LOOKER_API_ID, HttpMethod
+from looker_sdk.rtl.transport import (
+    LOOKER_API_ID,
+    HttpMethod,
+    PTransportSettings,
+    Response,
+    Transport,
+    TransportOptions,
+)
 from pydantic import BaseModel, Field, computed_field
 
 from lkr.classes import LkrCtxObj, LookerApiKey
@@ -64,10 +71,11 @@ def get_auth(
     if isinstance(ctx, LkrCtxObj):
         lkr_ctx = ctx
     else:
-        lkr_ctx: LkrCtxObj | None = get(ctx, ["obj", "ctx_lkr"])
-        if not lkr_ctx:
+        raw_ctx = get(ctx, ["obj", "ctx_lkr"])
+        if not isinstance(raw_ctx, LkrCtxObj):
             logger.error("No Looker context found")
             raise typer.Exit(1)
+        lkr_ctx = raw_ctx
     if lkr_ctx.use_sdk == "api_key" and lkr_ctx.api_key:
         if (sql_auth := SqlLiteAuth(lkr_ctx))._get_access_token_auth():
             return sql_auth
@@ -77,7 +85,7 @@ def get_auth(
 
 
 class ApiKeyApiSettings(ApiSettings):
-    def __init__(self, api_key: LookerApiKey):
+    def __init__(self, api_key: LookerApiKey) -> None:
         self.api_key = api_key
         super().__init__()
         self.agent_tag = "lkr-cli-api-key"
@@ -97,7 +105,7 @@ class OAuthApiSettings(ApiSettings):
         base_url: str,
         port: int = 8000,
         redirect_uri: str | None = None,
-    ):
+    ) -> None:
         self.base_url = base_url
         self.port = port
         self.redirect_uri = (
@@ -117,16 +125,26 @@ class OAuthApiSettings(ApiSettings):
 
 
 class ApiKeyAuthSession(AuthSession):
-    def __init__(self, *args, use_production: bool, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        settings: PApiSettings,
+        transport: Transport,
+        deserialize: serialize.TDeserialize,
+        api_version: str,
+        *,
+        use_production: bool,
+    ) -> None:
+        super().__init__(settings, transport, deserialize, api_version)
         self.use_production = use_production
 
-    def _login(self, *args, **kwargs):
-        super()._login(*args, **kwargs)
+    def _login(
+        self, transport_options: TransportOptions | None = None
+    ) -> None:
+        super()._login(transport_options or {})
         if not self.use_production:
             self._switch_to_dev_mode()
 
-    def _switch_to_dev_mode(self):
+    def _switch_to_dev_mode(self) -> Response:
         logger.debug("Switching to dev mode")
         config = self.settings.read_config()
         if "base_url" in config:
@@ -149,28 +167,47 @@ class ApiKeyAuthSession(AuthSession):
 class DbOAuthSession(OAuthSession):
     def __init__(
         self,
-        *args,
+        *,
+        settings: PApiSettings,
+        transport: Transport,
+        deserialize: serialize.TDeserialize,
+        serialize: serialize.TSerialize,
+        crypto: CryptoHash,
+        version: str,
         use_production: bool,
         new_token_callback: NewTokenCallback,
-        **kwargs,
-    ):
-        super().__init__(*args, **kwargs)
+    ) -> None:
+        super().__init__(
+            settings=settings,
+            transport=transport,
+            deserialize=deserialize,
+            serialize=serialize,
+            crypto=crypto,
+            version=version,
+        )
         self.new_token_callback = new_token_callback
         self.use_production = use_production
 
-    def _login(self, *args, **kwargs):
+    def _login(
+        self, transport_options: TransportOptions | None = None
+    ) -> None:
         if not self.token.refresh_token:
             raise SDKError("Access token has expired, run lkr auth add-access-token")
         prev_refresh_token = self.token.refresh_token
-        super()._login(*args, **kwargs)
+        super()._login(transport_options or {})
         self.token.refresh_token = self.token.refresh_token or prev_refresh_token
         if not self.use_production:
             self._switch_to_dev_mode()
 
         self.new_token_callback(self.token)
 
-    def redeem_auth_code(self, *args, **kwargs):
-        super().redeem_auth_code(*args, **kwargs)
+    def redeem_auth_code(
+        self,
+        auth_code: str,
+        code_verifier: str | None = None,
+        transport_options: TransportOptions | None = None,
+    ) -> None:
+        super().redeem_auth_code(auth_code, code_verifier, transport_options)
         if not self.use_production:
             try:
                 self._switch_to_dev_mode()
@@ -179,7 +216,7 @@ class DbOAuthSession(OAuthSession):
                 raise typer.Exit(1)
         self.new_token_callback(self.token)
 
-    def _switch_to_dev_mode(self):
+    def _switch_to_dev_mode(self) -> Response:
         logger.debug("Switching to dev mode")
         config = self.settings.read_config()
         if "base_url" in config:
@@ -213,8 +250,8 @@ def get_auth_session(
     auth = DbOAuthSession(
         settings=settings,
         transport=transport,
-        deserialize=serialize.deserialize40,
-        serialize=serialize.serialize40,
+        deserialize=cast(serialize.TDeserialize, serialize.deserialize40),
+        serialize=cast(serialize.TSerialize, serialize.serialize40),
         crypto=CryptoHash(),
         version=LOOKER_API_VERSION,
         new_token_callback=new_token_callback,
@@ -235,7 +272,7 @@ def init_api_key_sdk(api_key: LookerApiKey, use_production: bool) -> Looker40SDK
         auth=ApiKeyAuthSession(
             settings,
             transport,
-            serialize.deserialize40,
+            cast(serialize.TDeserialize, serialize.deserialize40),
             LOOKER_API_VERSION,
             use_production=use_production,
         ),
@@ -247,10 +284,15 @@ def init_api_key_sdk(api_key: LookerApiKey, use_production: bool) -> Looker40SDK
 
 
 # monkey patch to remove the LOOKER_API_ID header when exchanging the code for a token
-def monkey_patch_prepare_request(session: requests.Session):
+def monkey_patch_prepare_request(session: requests.Session) -> None:
     original_prepare_request = session.prepare_request
 
-    def prepare_request(self, request, *args, **kwargs):
+    def prepare_request(
+        self: requests.Session,
+        request: requests.Request,
+        *args: object,
+        **kwargs: object,
+    ) -> requests.PreparedRequest:
         x = original_prepare_request(request, *args, **kwargs)
         if (
             x.headers.get(LOOKER_API_ID)
@@ -264,8 +306,10 @@ def monkey_patch_prepare_request(session: requests.Session):
 
 
 class MonkeyPatchTransport(RequestsTransport):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self, settings: PTransportSettings, session: requests.Session
+    ) -> None:
+        super().__init__(settings, session)
         monkey_patch_prepare_request(self.session)
 
 
@@ -388,7 +432,7 @@ class CurrentAuth(BaseModel):
         new_token: AccessToken | AuthToken | None = None,
         commit: bool = True,
         keep_current: bool = False,
-    ):
+    ) -> None:
         expires_at = (
             datetime.now(UTC)
             + timedelta(seconds=(new_token.expires_in or 0) if new_token else 0)
@@ -441,7 +485,7 @@ class CurrentAuth(BaseModel):
 
 
 class SqlLiteAuth:
-    def __init__(self, ctx: LkrCtxObj, db_path: str = "~/.lkr/auth.db"):
+    def __init__(self, ctx: LkrCtxObj, db_path: str = "~/.lkr/auth.db") -> None:
         self.ctx = ctx
         self.db_path = os.path.expanduser(db_path)
         # Ensure the directory exists
@@ -470,10 +514,15 @@ class SqlLiteAuth:
         )
         self.conn.commit()
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: types.TracebackType | None,
+    ) -> None:
         pass
 
     def add_auth(
@@ -482,7 +531,7 @@ class SqlLiteAuth:
         base_url: str,
         access_token: AuthToken | AccessToken,
         use_production: bool,
-    ):
+    ) -> None:
         self.conn.execute("UPDATE auth SET current_instance = 0")
         CurrentAuth.from_access_token(
             access_token=access_token,
@@ -523,7 +572,7 @@ class SqlLiteAuth:
             self.delete_auth(curr.instance_name)
         return None
 
-    def set_current_instance(self, instance_name: str):
+    def set_current_instance(self, instance_name: str) -> None:
         self.conn.execute(
             "UPDATE auth SET current_instance = CASE WHEN instance_name = ? THEN 1 ELSE 0 END",
             (instance_name,),
@@ -579,7 +628,7 @@ class SqlLiteAuth:
                 else:
                     raise InvalidRefreshTokenError(current_auth.instance_name)
 
-            def refresh_current_token(token: AccessToken | AuthToken):
+            def refresh_current_token(token: AccessToken | AuthToken) -> None:
                 current_auth.set_token(self.conn, new_token=token, commit=True)
 
             target_use_production = (
@@ -614,7 +663,7 @@ class SqlLiteAuth:
             logger.error("No current instance found, please login")
             raise typer.Exit(1)
 
-    def delete_auth(self, instance_name: str):
+    def delete_auth(self, instance_name: str) -> None:
         self.conn.execute("DELETE FROM auth WHERE instance_name = ?", (instance_name,))
         self.conn.commit()
 
@@ -635,7 +684,9 @@ class SqlLiteAuth:
             for row in rows
         ]
 
-    def _cli_confirm_refresh_token(self, current_auth: CurrentAuth, quiet: bool = True):
+    def _cli_confirm_refresh_token(
+        self, current_auth: CurrentAuth, quiet: bool = True
+    ) -> Looker40SDK | None:
         from typer import confirm
 
         from lkr.auth.oauth import OAuth2PKCE
@@ -651,7 +702,7 @@ class SqlLiteAuth:
         )
         if confirmed:
 
-            def add_auth(token: AccessToken | AuthToken):
+            def add_auth(token: AccessToken | AuthToken) -> None:
                 current_auth.set_token(self.conn, commit=True, new_token=token)
 
             # Initialize OAuth2 PKCE flow
@@ -678,17 +729,23 @@ class SqlLiteAuth:
                     f"Successfully refreshed token for {current_auth.instance_name}"
                 )
                 return self.get_current_sdk(prompt_refresh_invalid_token=False)
+        return None
 
 
 class ApiKeyAuth:
-    def __init__(self, api_key: LookerApiKey, use_production: bool):
+    def __init__(self, api_key: LookerApiKey, use_production: bool) -> None:
         self.api_key = api_key
         self.use_production = use_production
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: types.TracebackType | None,
+    ) -> None:
         pass
 
     def add_auth(
@@ -697,16 +754,16 @@ class ApiKeyAuth:
         base_url: str,
         access_token: AuthToken | AccessToken,
         use_production: bool,
-    ):
+    ) -> None:
         raise NotImplementedError("ApiKeyAuth does not support adding auth")
 
-    def delete_auth(self, instance_name: str):
+    def delete_auth(self, instance_name: str) -> None:
         raise NotImplementedError("ApiKeyAuth does not support deleting auth")
 
     def list_auth(self) -> list[tuple[str, str, bool, bool]]:
         raise NotImplementedError("ApiKeyAuth does not support listing auth")
 
-    def set_current_instance(self, instance_name: str):
+    def set_current_instance(self, instance_name: str) -> None:
         raise NotImplementedError(
             "ApiKeyAuth does not support setting current instance"
         )
@@ -714,12 +771,14 @@ class ApiKeyAuth:
     def _get_current_auth(self) -> CurrentAuth | None:
         raise NotImplementedError("ApiKeyAuth does not support getting current auth")
 
-    def _cli_confirm_refresh_token(self, current_auth: CurrentAuth, quiet: bool = True):
+    def _cli_confirm_refresh_token(
+        self, current_auth: CurrentAuth, quiet: bool = True
+    ) -> Looker40SDK | None:
         raise NotImplementedError(
             "ApiKeyAuth does not support confirming refresh token"
         )
 
-    def get_current_sdk(self, **kwargs) -> Looker40SDK:
+    def get_current_sdk(self, **kwargs: object) -> Looker40SDK:
         return init_api_key_sdk(self.api_key, self.use_production)
 
     def get_current_instance(self) -> str | None:

@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from lkr.auth_service import get_auth
 from lkr.classes import LkrCtxObj
+from lkr.extended_sdk_methods import ExtendedLooker40SDK
 from lkr.logger import logger
 from lkr.mcp.classes import (
     Connection,
@@ -57,7 +58,7 @@ conn.execute("INSTALL 'json'")
 conn.execute("LOAD 'json'")
 
 
-def get_mcp_sdk(ctx: LkrCtxObj | typer.Context):
+def get_mcp_sdk(ctx: LkrCtxObj | typer.Context) -> ExtendedLooker40SDK:
     sdk = get_auth(ctx).get_current_sdk(prompt_refresh_invalid_token=False)
     sdk.auth.settings.agent_tag += "-mcp"
     return sdk
@@ -83,7 +84,7 @@ def get_spectacles(
             description="this should be the list of fields you want to return from the test query. If the user does not provide them, use all that have changed in your current context. The syntax of the field should be <view>.<field> name. The view will be the name of the view as it appears in the explore, or aliased from it with from or view_name"
         ),
     ],
-):
+) -> SpectaclesResponse:
     """
     run a spectacles query to validate the changes to the model
     """
@@ -94,6 +95,7 @@ def get_spectacles(
     sdk = get_mcp_sdk(ctx_lkr)
     returned_sql = None
     share_url = None
+    result = None
     try:
         query = sdk.create_query(
             body=WriteQuery(
@@ -313,9 +315,13 @@ def populate_looker_connection_search_on_startup(ctx: typer.Context) -> None:
                 )
                 if len(schema_tables) == 0:
                     continue
-                schema_name = get(schema_tables, "0.name", None)
+                raw_schema_name = get(schema_tables, "0.name", None)
+                schema_name = (
+                    str(raw_schema_name) if raw_schema_name is not None else ""
+                )
                 # logger.debug(f"Found {len(schema_tables)} tables for {schema.name}")
-                for table in get(schema_tables, "0.tables", []):
+                raw_tables = get(schema_tables, "0.tables", [])
+                for table in (raw_tables if isinstance(raw_tables, list) else []):
                     if registry.check("table", table.name):
                         # logger.debug(
                         #     f"Skipping {table.name} because it already exists in the registry"
@@ -331,10 +337,12 @@ def populate_looker_connection_search_on_startup(ctx: typer.Context) -> None:
                         ),
                         [],
                     )
+                    raw_columns = get(schema_columns, "0.columns", [])
+                    columns = raw_columns if isinstance(raw_columns, list) else []
                     logger.debug(
-                        f"Found {len(get(schema_columns, '0.columns', []))} columns in {database}.{schema.name}.{table.name}"
+                        f"Found {len(columns)} columns in {database}.{schema.name}.{table.name}"
                     )
-                    for column in get(schema_columns, "0.columns", []):
+                    for column in columns:
                         Row(
                             connection=connection.name,
                             database=database,
@@ -380,8 +388,10 @@ def populate_looker_connection_search_on_startup(ctx: typer.Context) -> None:
                 )
                 if len(ecomm_tables) == 0:
                     continue
-                schema_name = get(ecomm_tables, "0.name", None)
-                for table in get(ecomm_tables, "0.tables", []):
+                raw_ecomm_tables = get(ecomm_tables, "0.tables", [])
+                for table in (
+                    raw_ecomm_tables if isinstance(raw_ecomm_tables, list) else []
+                ):
                     if registry.check("table", table.name):
                         # logger.debug(
                         #     f"Skipping {table.name} because it already exists in the registry"
@@ -395,7 +405,10 @@ def populate_looker_connection_search_on_startup(ctx: typer.Context) -> None:
                     )
                     if len(schema_columns) == 0:
                         continue
-                    for column in get(schema_columns, "0.columns", []):
+                    raw_ecomm_cols = get(schema_columns, "0.columns", [])
+                    for column in (
+                        raw_ecomm_cols if isinstance(raw_ecomm_cols, list) else []
+                    ):
                         Row(
                             connection=connection.name,
                             database=database,
@@ -533,7 +546,7 @@ def search_fully_qualified_names(
 def run(
     ctx: typer.Context,
     debug: bool = typer.Option(False, help="Debug mode"),
-):
+) -> None:
     from lkr.logger import LogLevel, set_log_level
 
     global ctx_lkr

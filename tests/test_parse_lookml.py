@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Any, cast
 
 from typer.testing import CliRunner
 
@@ -2756,7 +2757,7 @@ def test_parse_lookml_constants_quoted_unquoted_and_positions(tmp_path: Path):
 
     # Verify source positions remain exact despite @{bq_dataset} expanding in length
     assert proj.positions is not None
-    v_pos = proj.positions.file["orders.view"]["view"]["orders"]
+    v_pos = cast(Any, proj.positions.file["orders.view"])["view"]["orders"]
     # dimension: status starts at 0-indexed line 17 (1-indexed line 18)
     assert v_pos["dimension"]["status"]["$p"][0] == 17
 
@@ -3021,7 +3022,7 @@ def test_lookml_to_api_duplicate_field_logic_and_count_star_matching(tmp_path: P
     """
     exp = lookml_to_lookml_model_explore("inline", "order_items", lookml=dup_lkml)
     assert exp.errors is not None
-    error_msgs = [e["message"] for e in exp.errors]
+    error_msgs = [str(e["message"]) for e in exp.errors]
     assert any(
         "order_items.count" in m and "order_items.total_line_items_sold" in m
         for m in error_msgs

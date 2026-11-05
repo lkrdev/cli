@@ -293,9 +293,13 @@ def main(
         explore_data = json.loads(explore_file.read_text(encoding="utf-8"))
         schema_data = build_explore_query_schema(model, explore, explore_data)
     else:
+        from typing import cast
+
         from lkr.codemode.main import to_primitive
 
-        explore_data = to_primitive(sdk.lookml_model_explore(model, explore))
+        explore_data = cast(
+            dict[str, object], to_primitive(sdk.lookml_model_explore(model, explore))
+        )
         schema_data = build_explore_query_schema(model, explore, explore_data)
 
     resolved = resolve_history_queries(

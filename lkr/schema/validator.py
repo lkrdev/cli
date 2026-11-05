@@ -1,18 +1,20 @@
-import concurrent.futures
 import copy
 import functools
 import importlib
 import json
 import re
+import types
 from dataclasses import dataclass, field
-from typing import Any
+from typing import cast
+
+from looker_sdk.rtl import transport
 
 from lkr.schema.builder import build_explore_query_schema, normalize_explores_map
 
 # ponytail: pure-Python stdlib fallback when Linux _schema_rs.so isn't loadable (Windows/macOS/ARM);
 # single-core ~5k queries/s ceiling — switch to maturin + cibuildwheel matrix if non-Linux batch throughput matters.
 try:
-    _schema_rs: Any = importlib.import_module("lkr.schema._schema_rs")
+    _schema_rs: types.ModuleType | None = importlib.import_module("lkr.schema._schema_rs")
 except ImportError:
     _schema_rs = None
 
@@ -38,11 +40,11 @@ _CUSTOM_MEASURE_TYPES = frozenset({
 })
 
 
-def _is_int(v: Any) -> bool:
+def _is_int(v: object) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
 
-def _str_set(v: Any) -> set[str]:
+def _str_set(v: object) -> set[str]:
     return {x for x in v if isinstance(x, str)} if isinstance(v, list) else set()
 
 
@@ -83,7 +85,7 @@ class _PyExploreValidator:
         self.base_pivots_set = _str_set(((body_props.get("pivots") or {}).get("items") or {}).get("enum"))
         self.measure_only_set = self.base_fields_set - self.base_pivots_set
 
-        self.filter_rules: dict[str, tuple[str, Any, str]] = {}
+        self.filter_rules: dict[str, tuple[str, set[str] | re.Pattern[str] | None, str]] = {}
         self.filter_kinds: dict[str, str] = {}
         f_props = (body_props.get("filters") or {}).get("properties")
         if isinstance(f_props, dict):
@@ -124,8 +126,8 @@ class _PyExploreValidator:
 
         self.schema_all_ref_fields = self.base_fields_set | set(self.filter_rules)
 
-    def _coerce_filter_map(self, filters_obj: dict[str, Any]) -> dict[str, Any]:
-        out: dict[str, Any] = {}
+    def _coerce_filter_map(self, filters_obj: dict[str, object]) -> dict[str, object]:
+        out: dict[str, object] = {}
         for k, v in filters_obj.items():
             if not isinstance(v, str):
                 out[k] = v
@@ -165,7 +167,7 @@ class _PyExploreValidator:
         return out
 
     @staticmethod
-    def _sanitize_body(body_map: dict[str, Any]) -> dict[str, Any]:
+    def _sanitize_body(body_map: dict[str, object]) -> dict[str, object]:
         return {
             k: str(v) if k in ("limit", "column_limit") and _is_int(v) else v
             for k, v in body_map.items()
@@ -201,7 +203,7 @@ class _PyExploreValidator:
                 )
 
     def _validate_filter_map(
-        self, filters_obj: dict[str, Any], path: str, errors: list[str]
+        self, filters_obj: dict[str, object], path: str, errors: list[str]
     ) -> None:
         for k, v in filters_obj.items():
             prop_path = f"{path}.{k}"
@@ -212,18 +214,18 @@ class _PyExploreValidator:
                 continue
             elif not isinstance(v, str):
                 errors.append(f"{prop_path}: expected string filter expression")
-            elif rule[0] == "enum" and v not in rule[1]:
+            elif rule[0] == "enum" and isinstance(rule[1], set) and v not in rule[1]:
                 errors.append(f"{prop_path}: value '{v}' is not in allowed values {rule[2]}")
-            elif rule[0] == "pattern" and not rule[1].search(v):
+            elif rule[0] == "pattern" and isinstance(rule[1], re.Pattern) and not rule[1].search(v):
                 errors.append(
                     f"{prop_path}: value '{v}' does not match filter expression pattern '{rule[2]}'"
                 )
 
-    def _validate_single(self, raw_val: Any) -> tuple[bool, list[str], list[str], str | None]:
+    def _validate_single(self, raw_val: object) -> tuple[bool, list[str], list[str], str | None]:
         if not isinstance(raw_val, dict):
             return (False, ["$: expected query payload to be a JSON object"], [], None)
 
-        payload: dict[str, Any]
+        payload: dict[str, object]
         if "body" in raw_val:
             body_val = raw_val["body"]
             if not isinstance(body_val, dict):
@@ -235,7 +237,7 @@ class _PyExploreValidator:
             payload = {"result_format": "json", "body": self._sanitize_body(raw_val)}
 
         payload.setdefault("limit", self.default_top_limit)
-        body: dict[str, Any] = payload["body"]
+        body = payload["body"]
         if "model" not in body and self.expected_model is not None:
             body["model"] = self.expected_model
         if "view" not in body and self.expected_view is not None:
@@ -247,7 +249,7 @@ class _PyExploreValidator:
         dim_dyn: list[str] = []
         non_dim_dyn: list[str] = []
         tc_names: set[str] = set()
-        dyn_items: list[Any] = []
+        dyn_items: list[object] = []
         dyn_ok = False
 
         if "dynamic_fields" in body:
@@ -271,7 +273,7 @@ class _PyExploreValidator:
                 )
 
             if dyn_ok:
-                norm_dyn: list[Any] = []
+                norm_dyn: list[object] = []
                 tc_ref_fields: list[str] = []
                 for item in dyn_items:
                     if isinstance(item, dict):
@@ -533,10 +535,10 @@ class ValidationResult:
     valid: bool
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    normalized_query: dict[str, Any] | None = None
+    normalized_query: dict[str, object] | None = None
 
-    def to_dict(self) -> dict[str, Any]:
-        res: dict[str, Any] = {
+    def to_dict(self) -> dict[str, object]:
+        res: dict[str, object] = {
             "valid": self.valid,
             "errors": self.errors,
             "warnings": self.warnings,
@@ -547,20 +549,20 @@ class ValidationResult:
 
 
 @functools.lru_cache(maxsize=64)
-def _compile_validator(schema_json: str) -> Any:
+def _compile_validator(schema_json: str) -> _PyExploreValidator:
     if _schema_rs is not None:
-        return _schema_rs.RustExploreValidator(schema_json)
+        return cast(_PyExploreValidator, _schema_rs.RustExploreValidator(schema_json))
     return _PyExploreValidator(schema_json)
 
 
-def get_rust_validator(schema: dict[str, Any]) -> Any:
+def get_rust_validator(schema: dict[str, object]) -> _PyExploreValidator:
     """Return a cached Rust `RustExploreValidator` instance for `schema`."""
     return _compile_validator(json.dumps(schema, sort_keys=True))
 
 
 def validate_batch_queries(
-    queries: list[dict[str, Any] | str],
-    schema: dict[str, Any],
+    queries: list[dict[str, object] | str] | list[dict[str, object]] | list[str],
+    schema: dict[str, object],
 ) -> list[ValidationResult]:
     """Validate a batch of queries in parallel across CPU cores via Rust `rayon`."""
     rust_val = get_rust_validator(schema)
@@ -580,22 +582,23 @@ def validate_batch_queries(
 
 
 def validate_query(
-    query_payload: dict[str, Any],
-    schema: dict[str, Any],
+    query_payload: dict[str, object],
+    schema: dict[str, object],
 ) -> ValidationResult:
     """Validate `query_payload` against `schema` using the compiled Rust `RustExploreValidator`."""
     return validate_batch_queries([query_payload], schema)[0]
 
 
 def _validate_subquery_with_fallback(
-    raw_query: dict[str, Any],
+    raw_query: dict[str, object],
     model: str,
-    cmap: dict[str, dict[str, Any]],
+    cmap: dict[str, dict[str, object]],
     candidates: list[str],
 ) -> ValidationResult:
-    body = copy.deepcopy(raw_query["body"] if isinstance(raw_query.get("body"), dict) else raw_query)
+    raw_body = raw_query.get("body")
+    body = copy.deepcopy(raw_body if isinstance(raw_body, dict) else raw_query)
     body["model"] = model
-    explore = body.get("view") or (candidates[0] if candidates else "")
+    explore = str(body.get("view") or (candidates[0] if candidates else ""))
     body["view"] = explore
     res: ValidationResult | None = None
     if (edata := cmap.get(explore)) is not None:
@@ -614,9 +617,9 @@ def _validate_subquery_with_fallback(
 
 
 def validate_merge_query(
-    payload: dict[str, Any],
+    payload: dict[str, object],
     model: str,
-    explores_map: dict[str, Any] | list[Any],
+    explores_map: dict[str, object] | list[dict[str, object]] | list[object],
     candidate_explores: list[str] | None = None,
 ) -> ValidationResult:
     """Validate a single `WriteQuery` or multi-Explore `source_queries` Merged Results spec."""
@@ -635,7 +638,12 @@ def validate_merge_query(
         return ValidationResult(valid=False, errors=["$.source_queries: expected at least 2 source queries", *errors])
 
     norm_spec = copy.deepcopy(payload)
-    sqs: list[Any] = norm_spec["source_queries"]
+    for k in ("limit", "column_limit"):
+        if _is_int(norm_spec.get(k)):
+            norm_spec[k] = str(norm_spec[k])
+    if (vc := norm_spec.get("vis_config")) is not None and not isinstance(vc, dict):
+        errors.append("$.vis_config: expected object")
+    sqs = cast(list[dict[str, object]], norm_spec["source_queries"])
     warnings: list[str] = []
 
     for idx, sq in enumerate(sqs):
@@ -651,10 +659,12 @@ def validate_merge_query(
     if errors:
         return ValidationResult(valid=False, errors=errors)
 
-    p0 = sqs[0]["query"]["body"] if isinstance(sqs[0]["query"].get("body"), dict) else sqs[0]["query"]
+    sq0_q = cast(dict[str, object], sqs[0]["query"])
+    p0 = cast(dict[str, object], sq0_q["body"] if isinstance(sq0_q.get("body"), dict) else sq0_q)
     p0_fields = p0.setdefault("fields", [])
     for idx, sq in enumerate(sqs[1:], start=1):
-        q = sq["query"]["body"] if isinstance(sq["query"].get("body"), dict) else sq["query"]
+        sq_q = cast(dict[str, object], sq["query"])
+        q = cast(dict[str, object], sq_q["body"] if isinstance(sq_q.get("body"), dict) else sq_q)
         q_fields = q.setdefault("fields", [])
         mfields = sq.get("merge_fields")
         if not isinstance(mfields, list) or not mfields:
@@ -669,27 +679,41 @@ def validate_merge_query(
                 if isinstance(fn, str) and fn and isinstance(target, list) and fn not in target:
                     target.append(fn)
 
-    def _dyn_names(items: list[Any]) -> set[str]:
+    def _parse_dyn(raw: object) -> list[dict[str, object]]:
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        return [d for d in raw if isinstance(d, dict)] if isinstance(raw, list) else []
+
+    def _dyn_names(items: list[dict[str, object]]) -> set[str]:
         return {
             n
             for df in items
-            if isinstance(df, dict)
-            for k in ("dimension", "measure", "table_calculation")
+            for k in ("dimension", "measure", "table_calculation", "name")
             if isinstance(n := df.get(k), str) and n
         }
 
-    union_fields: set[str] = _dyn_names(norm_spec.get("dynamic_fields") or [])
+    top_dyn_items = _parse_dyn(norm_spec.get("dynamic_fields")) + _parse_dyn(norm_spec.get("table_calculations"))
+    needs_merge_total = bool(norm_spec.get("total")) or any(
+        ":total" in str(df.get("expression", "")) for df in top_dyn_items
+    )
+    if needs_merge_total:
+        norm_spec["total"] = True
+
+    union_fields: set[str] = _dyn_names(top_dyn_items)
     for idx, sq in enumerate(sqs):
-        sub_res = _validate_subquery_with_fallback(sq["query"], model, cmap, candidates)
+        sub_res = _validate_subquery_with_fallback(cast(dict[str, object], sq["query"]), model, cmap, candidates)
         warnings.extend(sub_res.warnings)
         if not sub_res.valid or sub_res.normalized_query is None:
             errors.extend(f"$.source_queries[{idx}] ({sq.get('name', idx)}): {e}" for e in sub_res.errors)
         else:
-            norm_q = sub_res.normalized_query["body"]
+            norm_q = cast(dict[str, object], sub_res.normalized_query["body"])
+            if needs_merge_total:
+                norm_q["total"] = True
             sq["query"] = norm_q
-            union_fields.update(f for f in (norm_q.get("fields") or []) if isinstance(f, str))
+            raw_nq_fields = norm_q.get("fields")
+            union_fields.update(f for f in (raw_nq_fields if isinstance(raw_nq_fields, list) else []) if isinstance(f, str))
             if isinstance(dyn_str := norm_q.get("dynamic_fields"), str):
-                union_fields |= _dyn_names(json.loads(dyn_str))
+                union_fields |= _dyn_names(_parse_dyn(dyn_str))
 
     if (sorts := norm_spec.get("sorts")) is not None:
         if not isinstance(sorts, list):
@@ -705,44 +729,57 @@ def validate_merge_query(
     return ValidationResult(valid=not errors, errors=errors, warnings=warnings, normalized_query=None if errors else norm_spec)
 
 
-def execute_looker_query(sdk: Any, spec: dict[str, Any]) -> list[dict[str, Any]]:
-    """Execute a validated single WriteQuery or multi-query Merged Results spec."""
-    def _run_q(q: dict[str, Any]) -> list[dict[str, Any]]:
-        body = q.get("body", q)
-        res = json.loads(sdk.run_inline_query("json", body))
-        if isinstance(res, dict) and ("errors" in res or "message" in res):
-            raise RuntimeError(f"Looker query error ({body.get('view')}): {res}")
-        return res if isinstance(res, list) else []
+def execute_looker_query(
+    sdk: object,
+    spec: dict[str, object] | list[dict[str, object]],
+    model: str | None = None,
+    explores_data: dict[str, object] | list[dict[str, object]] | list[object] | None = None,
+    candidate_explores: list[str] | None = None,
+    transport_options: transport.TransportOptions | None = None,
+) -> list[dict[str, object]]:
+    """Validate a query or merge spec when explore metadata is available and execute via ExtendedLooker40SDK."""
+    from lkr.extended_sdk_methods.main import ExtendedLooker40SDK
 
-    if "source_queries" not in spec:
-        return _run_q(spec)
+    payload: dict[str, object] | list[dict[str, object]] = {"source_queries": spec} if isinstance(spec, list) and spec else spec
+    if isinstance(payload, dict) and payload:
+        sqs = payload.get("source_queries")
+        qs = [sq.get("query", sq) for sq in sqs if isinstance(sq, dict)] if isinstance(sqs, list) else [payload]
+        bodies = [q.get("body", q) for q in qs if isinstance(q, dict)]
+        raw_model = model or payload.get("model") or next((b.get("model") for b in bodies if isinstance(b, dict) and b.get("model")), None)
+        resolved_model = str(raw_model) if raw_model else None
+        exp_map: dict[str, object] | list[dict[str, object]] | list[object] | None = explores_data
+        if exp_map is None and resolved_model and hasattr(sdk, "lookml_model_explore"):
+            fetched: dict[str, object] = {}
+            for b in bodies:
+                if isinstance(b, dict) and isinstance(v := b.get("view"), str) and v and v not in fetched:
+                    try:
+                        ed = cast(ExtendedLooker40SDK, sdk).lookml_model_explore(str(b.get("model") or resolved_model), v)
+                        ed_dict = ed if isinstance(ed, dict) else (ed.__dict__ if hasattr(ed, "__dict__") else {})
+                        if isinstance(ed_dict, dict) and "fields" in ed_dict:
+                            fetched[v] = ed_dict
+                    except Exception:  # noqa: BLE001, S110
+                        pass
+            if fetched:
+                exp_map = fetched
+        if exp_map is not None and resolved_model:
+            val_res = validate_merge_query(payload, resolved_model, exp_map, candidate_explores)
+            if not val_res.valid or val_res.normalized_query is None:
+                raise ValueError("; ".join(val_res.errors))
+            payload = val_res.normalized_query
 
-    source_queries: list[dict[str, Any]] = spec["source_queries"]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(source_queries)) as pool:
-        sub_results = list(pool.map(lambda sq: _run_q(sq["query"]), source_queries))
+    if hasattr(sdk, "execute_looker_query"):
+        return cast(
+            list[dict[str, object]],
+            cast(ExtendedLooker40SDK, sdk).execute_looker_query(payload, transport_options=transport_options),
+        )
+    return cast(
+        list[dict[str, object]],
+        ExtendedLooker40SDK.execute_looker_query(
+            cast(ExtendedLooker40SDK, sdk),
+            payload,
+            transport_options=transport_options,
+        ),
+    )
 
-    merged_rows = [dict(r) for r in sub_results[0]]
-    for idx, sq in enumerate(source_queries[1:], start=1):
-        sec_rows = sub_results[idx]
-        mfields = sq.get("merge_fields") or []
-        join_type = (sq.get("join_type") or spec.get("join_type") or "left").lower()
-        lookup: dict[tuple[str, ...], list[dict[str, Any]]] = {}
-        for sr in sec_rows:
-            lookup.setdefault(tuple(str(sr.get(m["source_field_name"])) for m in mfields), []).append(sr)
 
-        null_pad = dict.fromkeys(sec_rows[0]) if sec_rows else {}
-        next_merged: list[dict[str, Any]] = []
-        for pr in merged_rows:
-            if matches := lookup.get(tuple(str(pr.get(m["field_name"])) for m in mfields)):
-                next_merged.extend({**sr, **pr} for sr in matches)
-            elif join_type != "inner":
-                next_merged.append({**null_pad, **pr})
-        merged_rows = next_merged
-
-    for s in reversed(spec.get("sorts") or []):
-        parts = s.strip().split()
-        col, desc = parts[0], len(parts) > 1 and parts[1].lower() == "desc"
-        merged_rows.sort(key=lambda r, c=col: (r.get(c) is None, r.get(c) if r.get(c) is not None else ""), reverse=desc)
-
-    limit = int(spec["limit"]) if spec.get("limit") else -1
-    return merged_rows[:limit] if limit >= 0 else merged_rows
+execute_validated_looker_queries = execute_looker_query

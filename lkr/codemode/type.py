@@ -10,14 +10,14 @@ from pydantic import BaseModel
 
 import lkr.extended_sdk_methods.classes as ext_classes
 
-_swagger_data = None
-_ext_definitions_cache = None
+_swagger_data: dict[str, object] | None = None
+_ext_definitions_cache: dict[str, dict[str, object]] | None = None
 
 
-def to_primitive(obj):
-    seen = set()
+def to_primitive(obj: object) -> object:
+    seen: set[int] = set()
 
-    def _to_primitive(o):
+    def _to_primitive(o: object) -> object:
         if isinstance(o, (str, int, float, bool, type(None))):
             return o
 
@@ -41,7 +41,7 @@ def to_primitive(obj):
     return _to_primitive(obj)
 
 
-def _get_swagger_data():
+def _get_swagger_data() -> dict[str, object]:
     global _swagger_data
     if _swagger_data is not None:
         return _swagger_data
@@ -62,7 +62,9 @@ def _get_swagger_data():
     return _swagger_data
 
 
-def _annotation_to_prop(ann, description: str | None = None) -> dict:
+def _annotation_to_prop(
+    ann: object, description: str | None = None
+) -> dict[str, object]:
     while (args := [a for a in get_args(ann) if a is not type(None)]) and not (
         inspect.isclass(o := get_origin(ann)) and issubclass(o, (Sequence, Mapping))
     ):
@@ -92,18 +94,21 @@ def _annotation_to_prop(ann, description: str | None = None) -> dict:
         if inspect.isclass(m := (origin or leaf)) and issubclass(m, Mapping)
         else {bool: "boolean", int: "integer", float: "float"}.get(leaf, "string")
     )
-    prop: dict = {"description": description} if description else {}
-    target = {"$ref": f"#/definitions/{ref}"} if ref else {"type": ptype}
+    prop: dict[str, object] = {"description": description} if description else {}
+    target: dict[str, object] = (
+        {"$ref": f"#/definitions/{ref}"} if ref else {"type": ptype}
+    )
     return {**prop, "type": "array", "items": target} if is_arr else {**prop, **target}
 
 
-def _get_ext_definitions() -> dict:
+def _get_ext_definitions() -> dict[str, dict[str, object]]:
     global _ext_definitions_cache
     if _ext_definitions_cache is not None:
         return _ext_definitions_cache
 
-    swagger_defs = _get_swagger_data().get("definitions", {})
-    ext_defs = {}
+    raw_swagger_defs = _get_swagger_data().get("definitions", {})
+    swagger_defs = raw_swagger_defs if isinstance(raw_swagger_defs, dict) else {}
+    ext_defs: dict[str, dict[str, object]] = {}
 
     for name, cls in inspect.getmembers(sdk_models, predicate=inspect.isclass):
         if cls.__module__ != sdk_models.__name__ or name in swagger_defs:
@@ -116,11 +121,11 @@ def _get_ext_definitions() -> dict:
                 }
             }
         elif anns := getattr(cls, "__annotations__", None):
-            base_props = (
-                swagger_defs.get(name[5:], {}).get("properties", {})
-                if name.startswith("Write")
-                else {}
+            base_def = swagger_defs.get(name[5:], {}) if name.startswith("Write") else {}
+            raw_base_props = (
+                base_def.get("properties", {}) if isinstance(base_def, dict) else {}
             )
+            base_props = raw_base_props if isinstance(raw_base_props, dict) else {}
             ext_defs[name] = {
                 "properties": {
                     fname: base_props[fname]
@@ -145,8 +150,10 @@ def _get_ext_definitions() -> dict:
 def lookup_type(type_name: str) -> str:
     """Lookup the Type and all nested reference types from swagger.json."""
     swagger = _get_swagger_data()
-    definitions = dict(_get_ext_definitions())
-    definitions.update(swagger.get('definitions', {}))
+    definitions: dict[str, object] = dict(_get_ext_definitions())
+    raw_defs = swagger.get('definitions', {})
+    if isinstance(raw_defs, Mapping):
+        definitions.update(raw_defs)
     
     if type_name not in definitions:
         type_name = next(
@@ -155,32 +162,35 @@ def lookup_type(type_name: str) -> str:
     if type_name not in definitions:
         return f"Type '{type_name}' not found."
         
-    seen_types = set()
-    result_lines = []
+    seen_types: set[str] = set()
+    result_lines: list[str] = []
     
-    def _resolve_type(name, def_obj):
-        if name in seen_types:
+    def _resolve_type(name: str, def_obj: object) -> None:
+        if name in seen_types or not isinstance(def_obj, Mapping):
             return
         seen_types.add(name)
         
         result_lines.append(f"Type: {name}")
         properties = def_obj.get('properties', {})
-        if not properties:
+        if not isinstance(properties, Mapping) or not properties:
             result_lines.append("  (No properties)")
             return
             
         for prop_name, prop_val in properties.items():
-            prop_type = prop_val.get('type', '')
-            description = prop_val.get('description', '')
-            ref = prop_val.get('$ref', '')
+            if not isinstance(prop_val, Mapping):
+                continue
+            prop_type = str(prop_val.get('type', '') or '')
+            description = str(prop_val.get('description', '') or '')
+            ref = str(prop_val.get('$ref', '') or '')
             
             if ref:
                 ref_type = ref.split('/')[-1]
                 result_lines.append(f"  - {prop_name}: {ref_type} (Ref)")
             elif prop_type == 'array':
-                items = prop_val.get('items', {})
-                item_ref = items.get('$ref', '')
-                item_type = items.get('type', '')
+                raw_items = prop_val.get('items', {})
+                items = raw_items if isinstance(raw_items, Mapping) else {}
+                item_ref = str(items.get('$ref', '') or '')
+                item_type = str(items.get('type', '') or '')
                 if item_ref:
                     ref_type = item_ref.split('/')[-1]
                     result_lines.append(f"  - {prop_name}: Array of {ref_type}")
@@ -196,7 +206,9 @@ def lookup_type(type_name: str) -> str:
                     
         # Now resolve references
         for prop_name, prop_val in properties.items():
-            ref = prop_val.get('$ref', '')
+            if not isinstance(prop_val, Mapping):
+                continue
+            ref = str(prop_val.get('$ref', '') or '')
             if ref:
                 ref_type = ref.split('/')[-1]
                 if ref_type in definitions and ref_type not in seen_types:
@@ -204,8 +216,9 @@ def lookup_type(type_name: str) -> str:
                     _resolve_type(ref_type, definitions[ref_type])
             
             if prop_val.get('type') == 'array':
-                items = prop_val.get('items', {})
-                item_ref = items.get('$ref', '')
+                raw_items = prop_val.get('items', {})
+                items = raw_items if isinstance(raw_items, Mapping) else {}
+                item_ref = str(items.get('$ref', '') or '')
                 if item_ref:
                     ref_type = item_ref.split('/')[-1]
                     if ref_type in definitions and ref_type not in seen_types:

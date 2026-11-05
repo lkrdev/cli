@@ -1,7 +1,7 @@
 import re
+from collections.abc import Mapping, Sequence
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
 from urllib.parse import quote
 
 import sqlglot
@@ -42,6 +42,7 @@ from lkr.parse.lookml import (
     LookmlDimension,
     LookmlDimensionGroup,
     LookmlExplore,
+    LookmlFieldProperties,
     LookmlFilter,
     LookmlJoin,
     LookmlMapLayer,
@@ -151,7 +152,7 @@ def _ordered_model_explore_names(
 
 
 def _extract_measure_filters(
-    raw_filters: Any,
+    raw_filters: object,
     default_alias: str,
 ) -> list[ApiLookmlModelExploreFieldMeasureFilters] | None:
     if not raw_filters:
@@ -304,7 +305,7 @@ def _user_attribute_filter_types(category: str, ftype: str) -> list[str]:
 
 
 def _resolve_field_source(
-    chain: list[tuple[str, Any, dict[str, Any]]],
+    chain: Sequence[tuple[str, LookmlView | LookmlExplore, dict[str, object]]],
     ftype: str,
     fname: str,
     fallback_file: str,
@@ -319,13 +320,15 @@ def _resolve_field_source(
         type_pos = p_dict.get(ftype, {})
         if isinstance(type_pos, dict) and fname in type_pos:
             f_pos = type_pos[fname]
-            if isinstance(f_pos, dict) and "$p" in f_pos and f_pos["$p"]:
-                src_file = fpath
-                src_line = int(f_pos["$p"][0]) + 1
-                if not found:
-                    first_idx = idx
-                    first_line = src_line
-                    found = True
+            if isinstance(f_pos, dict) and "$p" in f_pos:
+                raw_p = f_pos["$p"]
+                if isinstance(raw_p, (list, tuple)) and raw_p:
+                    src_file = fpath
+                    src_line = int(raw_p[0]) + 1
+                    if not found:
+                        first_idx = idx
+                        first_line = src_line
+                        found = True
     return first_idx, first_line, src_file, src_line
 
 
@@ -558,7 +561,7 @@ def _expand_view_for_explore(
     view_alias: str,
     original_view_name: str,
     view_obj: LookmlView,
-    view_chain: list[tuple[str, Any, dict[str, Any]]],
+    view_chain: list[tuple[str, LookmlView, dict[str, object]]],
     default_view_label: str,
     is_symmetric_join: bool,
     explore_name: str,
@@ -610,15 +613,16 @@ def _expand_view_for_explore(
             if a
         )
 
-    decl_items: list[tuple[int, int, int, int, str, str, str, Any]] = []
+    decl_items: list[tuple[int, int, int, int, str, str, str, LookmlFieldProperties]] = []
     seq = 0
-    for ftype, fdict in (
+    field_dicts: tuple[tuple[str, Mapping[str, LookmlFieldProperties]], ...] = (
         ("dimension", view_obj.dimension or {}),
         ("dimension_group", view_obj.dimension_group or {}),
         ("measure", view_obj.measure or {}),
         ("filter", view_obj.filter if isinstance(view_obj.filter, dict) else {}),
         ("parameter", view_obj.parameter or {}),
-    ):
+    )
+    for ftype, fdict in field_dicts:
         for fname, fobj in fdict.items():
             seq += 1
             c_idx, f_first_line, ffile, fline = _resolve_field_source(
@@ -667,13 +671,26 @@ def _expand_view_for_explore(
             sql: str | None = None,
             tags: list[str] | None = fobj.tags,
             synonyms: list[str] | None = f_synonyms,
+            primary_key: bool = False,
+            value_format: str | None = None,
+            value_format_name: str | None = None,
+            dimension_group: str | None = None,
+            field_group_label: str | None = None,
+            field_group_variant: str | None = None,
+            map_layer_name: str | None = None,
+            enumerations: list[ApiLookmlModelExploreFieldEnumeration] | None = None,
+            suggestions: list[str] | None = None,
+            sql_case: list[ApiLookmlModelExploreFieldSqlCase] | None = None,
+            filters: list[ApiLookmlModelExploreFieldMeasureFilters] | None = None,
+            default_filter_value: str | None = None,
+            has_allowed_values: bool = False,
+            can_filter_override: bool | None = None,
             _eff_view_label: str = eff_view_label,
             _src_file: str = src_file,
             _src_line: int = src_line,
-            _fobj: Any = fobj,
+            _fobj: LookmlFieldProperties = fobj,
             _eff_sug_override: bool | None = eff_sug_override,
             _eff_sug_dim: str | None = eff_sug_dim,
-            **kw: Any,
         ) -> ApiLookmlModelExploreField:
             return _build_field(
                 category=category,
@@ -690,11 +707,25 @@ def _expand_view_for_explore(
                 source_line=_src_line,
                 description=_fobj.description,
                 hidden=hidden,
+                primary_key=primary_key,
                 sql=sql,
+                value_format=value_format,
+                value_format_name=value_format_name,
                 synonyms=synonyms,
                 tags=tags,
+                dimension_group=dimension_group,
+                field_group_label=field_group_label,
+                field_group_variant=field_group_variant,
+                map_layer_name=map_layer_name,
+                enumerations=enumerations,
+                suggestions=suggestions,
+                sql_case=sql_case,
+                filters=filters,
+                default_filter_value=default_filter_value,
+                has_allowed_values=has_allowed_values,
                 label_from_parameter=_fobj.label_from_parameter,
                 allow_fill=_fobj.allow_fill,
+                can_filter_override=can_filter_override,
                 suggestable_override=_eff_sug_override,
                 suggest_dimension_override=_eff_sug_dim,
                 suggest_explore_override=_fobj.suggest_explore,
@@ -702,7 +733,6 @@ def _expand_view_for_explore(
                 week_start_day=wk_start,
                 model_named_value_formats=model_obj.named_value_format,
                 model_map_layers=model_obj.map_layer,
-                **kw,
             )
 
         if ftype == "dimension" and isinstance(fobj, LookmlDimension):
@@ -1103,7 +1133,7 @@ def _expand_view_for_explore(
 
 def _build_turtle_looks(
     exp_obj: LookmlExplore,
-    exp_chain: list[tuple[str, Any, dict[str, Any]]],
+    exp_chain: list[tuple[str, LookmlExplore, dict[str, object]]],
     base_alias: str,
     project_name: str | None,
     fallback_file: str,
@@ -1146,7 +1176,7 @@ def _build_turtle_looks(
                 for fk, fv in f_item.items():
                     if not fk.startswith("$"):
                         filters_dict[_qualify_field_ref(str(fk), base_alias)] = str(fv)
-        sorts_list: list[dict[str, Any]] = []
+        sorts_list: list[dict[str, object]] = []
         raw_sorts = q_val.get("sorts") or []
         for s_item in raw_sorts if isinstance(raw_sorts, list) else [raw_sorts]:
             if isinstance(s_item, dict):
@@ -1184,7 +1214,7 @@ def _find_duplicate_explore_fields(
     all_dims: list[ApiLookmlModelExploreField],
     all_meas: list[ApiLookmlModelExploreField],
     views_by_alias: dict[str, LookmlView],
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     dim_sql_map: dict[str, str] = {
         d.name: re.sub(r"\$\{\s*TABLE\s*\}\.", f"{d.view}.", (d.sql or "").strip())
         for d in all_dims
@@ -1209,7 +1239,7 @@ def _find_duplicate_explore_fields(
             s = next_s
         return " ".join(s.split())
 
-    groups: dict[tuple[Any, ...], list[ApiLookmlModelExploreField]] = {}
+    groups: dict[tuple[object, ...], list[ApiLookmlModelExploreField]] = {}
     for f in (*all_dims, *all_meas):
         if f.hidden and f.category == "measure" and f.sql == f.name:
             continue
@@ -1235,7 +1265,7 @@ def _find_duplicate_explore_fields(
                 if raw_m and raw_m.percentile is not None
                 else None
             )
-            sig: tuple[Any, ...] = (
+            sig: tuple[object, ...] = (
                 f.view,
                 "measure",
                 f.type,
@@ -1263,7 +1293,7 @@ def _find_duplicate_explore_fields(
             )
         groups.setdefault(sig, []).append(f)
 
-    errors: list[dict[str, Any]] = []
+    errors: list[dict[str, object]] = []
     for sig, flds in groups.items():
         if len(flds) > 1:
             names = sorted(f.name for f in flds)
@@ -1363,7 +1393,7 @@ def _find_percent_scaling_errors(
     all_dims: list[ApiLookmlModelExploreField],
     all_meas: list[ApiLookmlModelExploreField],
     views_by_alias: dict[str, LookmlView],
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     scaled_dims = {
         f"{v_alias}.{d_name}"
         for v_alias, v_obj in views_by_alias.items()
@@ -1397,8 +1427,8 @@ def _find_percent_scaling_errors(
 
 def _find_raw_sql_aggregate_errors(
     all_meas: list[ApiLookmlModelExploreField],
-) -> list[dict[str, Any]]:
-    errors: list[dict[str, Any]] = []
+) -> list[dict[str, object]]:
+    errors: list[dict[str, object]] = []
     for f in all_meas:
         if f.type != "number" or not f.sql:
             continue
@@ -1437,10 +1467,10 @@ def _find_invalid_value_format_errors(
     all_dims: list[ApiLookmlModelExploreField],
     all_meas: list[ApiLookmlModelExploreField],
     model_obj: LookmlModel,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     valid = set(VALUE_FORMAT_MAP) | set(model_obj.named_value_format or {})
     seen: set[str] = set()
-    errors: list[dict[str, Any]] = []
+    errors: list[dict[str, object]] = []
     for f in (*all_dims, *all_meas):
         target = f.dimension_group or f.name
         if not f.value_format_name or f.value_format_name in valid or target in seen:
@@ -1467,7 +1497,7 @@ def _find_case_filter_errors(
     all_meas: list[ApiLookmlModelExploreField],
     turtle_looks: list[ApiLookmlModelExploreTurtleLook],
     explore_filters: list[dict[str, str]],
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     case_labels = {
         d.name: [c.value for c in d.sql_case]
         for d in all_dims
@@ -1484,7 +1514,7 @@ def _find_case_filter_errors(
         ),
         *((explore_name, ef["name"], ef["value"]) for ef in explore_filters),
     ]
-    errors: list[dict[str, Any]] = []
+    errors: list[dict[str, object]] = []
     for owner, target, cond in checks:
         labels = case_labels.get(target)
         if not labels or not cond or "{{" in cond or "{%" in cond:
@@ -1523,7 +1553,7 @@ def _find_inaccessible_view_ref_errors(
     accessible_views: set[str],
     fields: tuple[ApiLookmlModelExploreField, ...],
     api_joins: list[ApiLookmlModelExploreJoins],
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     pairs = dict.fromkeys(
         (owner, ref)
         for owner, ref in (
@@ -1634,10 +1664,10 @@ def _extract_raw_dt_tables(dt_sql: str) -> list[str]:
 def _find_raw_derived_table_errors(
     views_by_alias: dict[str, LookmlView],
     model_views: dict[str, LookmlView],
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     queue = list(views_by_alias.items())
     seen: set[int] = set()
-    errors: list[dict[str, Any]] = []
+    errors: list[dict[str, object]] = []
     while queue:
         v_alias, v_obj = queue.pop(0)
         if id(v_obj) in seen:
@@ -1687,7 +1717,7 @@ def _find_raw_derived_table_errors(
 
 
 def _extract_access_filter_fields(
-    af_raw: Any, default_alias: str
+    af_raw: object, default_alias: str
 ) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     items = (
@@ -1712,13 +1742,13 @@ def _extract_access_filter_fields(
 def _find_security_and_agg_table_errors(
     explore_name: str,
     exp_obj: LookmlExplore,
-    exp_chain: list[tuple[str, Any, dict[str, Any]]],
+    exp_chain: list[tuple[str, LookmlExplore, dict[str, object]]],
     base_alias: str,
     join_entries: list[tuple[str, LookmlJoin, str, LookmlView]],
     views_by_alias: dict[str, LookmlView],
     model_obj: LookmlModel,
-) -> list[dict[str, Any]]:
-    errors: list[dict[str, Any]] = []
+) -> list[dict[str, object]]:
+    errors: list[dict[str, object]] = []
 
     # 1. Measure / derived-field grant propagation check
     for v_al, v_obj in sorted(views_by_alias.items()):
@@ -1760,7 +1790,7 @@ def _find_security_and_agg_table_errors(
     af_pairs = _extract_access_filter_fields(exp_obj.access_filter, base_alias)
     af_fields = [f for f, _ in af_pairs]
     for agg_name, agg_obj in sorted((exp_obj.aggregate_table or {}).items()):
-        q_dict: dict[str, Any] = {}
+        q_dict: dict[str, object] = {}
         for q_src in (
             agg_obj.query,
             *(
@@ -1773,9 +1803,10 @@ def _find_security_and_agg_table_errors(
                 q_dict.update(next((x for x in q_src if isinstance(x, dict)), {}))
             elif isinstance(q_src, dict):
                 q_dict.update(q_src)
+        raw_agg_dims = q_dict.get("dimensions")
         agg_dims = [
             _qualify_field_ref(str(d), base_alias)
-            for d in (q_dict.get("dimensions") or [])
+            for d in (raw_agg_dims if isinstance(raw_agg_dims, list) else [])
         ]
         for af_f in af_fields:
             if af_f not in agg_dims:
@@ -1854,10 +1885,10 @@ def _build_explore_from_assembled(
     model_obj: LookmlModel,
     explore_name: str,
     exp_obj: LookmlExplore,
-    view_base_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    view_ref_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    exp_base_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    exp_ref_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
+    view_base_decls: dict[str, list[tuple[str, LookmlView, dict[str, object]]]],
+    view_ref_decls: dict[str, list[tuple[str, LookmlView, dict[str, object]]]],
+    exp_base_decls: dict[str, list[tuple[str, LookmlExplore, dict[str, object]]]],
+    exp_ref_decls: dict[str, list[tuple[str, LookmlExplore, dict[str, object]]]],
     project_name: str | None,
     exclude_hidden: bool = False,
 ) -> ApiLookmlModelExplore:
@@ -1924,7 +1955,7 @@ def _build_explore_from_assembled(
         view_sets_by_alias[base_alias] = vset
 
     api_joins: list[ApiLookmlModelExploreJoins] = []
-    join_errors: list[dict[str, Any]] = []
+    join_errors: list[dict[str, object]] = []
     for j_name, j_obj, jv_name, jv in join_entries:
         j_chain = _build_chain(jv_name, view_base_decls, view_ref_decls)
         j_vlabel = j_obj.view_label or jv.view_label or jv.label or _titleize(j_name)

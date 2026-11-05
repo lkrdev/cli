@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import tempfile
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 import pydantic_monty
@@ -40,11 +41,11 @@ group = typer.Typer(
 )
 ctx_lkr: LkrCtxObj | None = None
 class OSCapture:
-    def __init__(self):
+    def __init__(self) -> None:
         self.output = ""
 
 @contextmanager
-def capture_os_stdout():
+def capture_os_stdout() -> Iterator[OSCapture]:
     cap = OSCapture()
     fd, temp_path = tempfile.mkstemp()
     
@@ -72,7 +73,7 @@ def capture_os_stdout():
             if os.path.exists(temp_path):
                 os.remove(temp_path)
 
-def get_mcp_sdk(ctx: LkrCtxObj):
+def get_mcp_sdk(ctx: LkrCtxObj) -> ExtendedLooker40SDK:
     sdk = get_auth(ctx).get_current_sdk(prompt_refresh_invalid_token=True)
     sdk.auth.settings.agent_tag += "-codemode"
     return sdk
@@ -112,21 +113,25 @@ def run_python_code(
             ctx.use_production = False
         sdk = get_mcp_sdk(ctx)
         
-        external_funcs = {}
+        external_funcs: dict[str, object] = {}
         for name, method in inspect.getmembers(
             sdk, predicate=lambda m: inspect.ismethod(m) or inspect.isfunction(m)
         ):
             if not name.startswith('_'):
                 # Wrap in a lambda to recursively convert output to primitives
-                def make_wrapper(m):
-                    def wrapper(*args, **kwargs):
+                def make_wrapper(
+                    m: Callable[..., object],
+                ) -> Callable[..., object]:
+                    def wrapper(*args: object, **kwargs: object) -> object:
                         res = m(*args, **kwargs)
                         return to_primitive(res)
+
                     return wrapper
+
                 external_funcs[name] = make_wrapper(method)
 
         if not allow_update_session:
-            def _blocked_update_session(*args, **kwargs):
+            def _blocked_update_session(*args: object, **kwargs: object) -> None:
                 raise RuntimeError(
                     "update_session is disabled in code-mode by default because calling update_session "
                     "affects anyone using this OAuth token/session. "
@@ -136,9 +141,9 @@ def run_python_code(
                 )
 
             external_funcs["update_session"] = _blocked_update_session
-        elif orig_session := external_funcs.get("update_session"):
+        elif callable(orig_session := external_funcs.get("update_session")):
 
-            def _warn_update_session(*args, **kwargs):
+            def _warn_update_session(*args: object, **kwargs: object) -> object:
                 logger.warning(
                     "WARNING: Calling update_session will affect API clients using this access token"
                 )
@@ -161,7 +166,7 @@ def run_python_code(
         class SDK:
             pass
         for name, func in external_funcs.items():
-            if name not in EXCLUDED_FUNCS:
+            if name not in EXCLUDED_FUNCS and callable(func):
                 setattr(SDK, name, staticmethod(func))
         external_funcs['sdk'] = SDK
 
@@ -169,7 +174,7 @@ def run_python_code(
         # Pre-process the code to replace `sdk.method_name` with `method_name` safely using AST.
         try:
             class SDKAttributeRewriter(ast.NodeTransformer):
-                def visit_Attribute(self, node):
+                def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
                     self.generic_visit(node)
                     if isinstance(node.value, ast.Name) and node.value.id == 'sdk':
                         return ast.copy_location(ast.Name(id=node.attr, ctx=node.ctx), node)
@@ -244,7 +249,7 @@ def sandbox(
     var: list[str] | None = typer.Option(  # noqa: B008
         None, "--var", "-v", help="Inject variable as key=value pair (e.g. -v project=my_project)"
     ),
-):
+) -> None:
     """Execute Python code or a script file in the Monty sandbox.
 
     \b
@@ -305,7 +310,7 @@ def sandbox(
     typer.echo(result)
 
 
-def _offline_sdk():
+def _offline_sdk() -> tuple[ExtendedLooker40SDK, dict[str, object]]:
     sdk = ExtendedLooker40SDK.__new__(ExtendedLooker40SDK)
     return sdk, {
         n: m for n, m in inspect.getmembers(sdk, inspect.ismethod) if not n.startswith("_")
@@ -319,7 +324,7 @@ def cli_help(
         metavar="[PATTERN_OR_METHOD]",
         help="Search pattern (e.g. '*dashboard*') or exact method/type name (e.g. 'run_lookml_test', 'WriteQuery').",
     ),
-):
+) -> None:
     """Search SDK methods or show detailed signature/docstring if an exact method or type name is given.
 
     \b
@@ -354,7 +359,7 @@ def cli_search(
         ...,
         help="Search pattern for SDK methods and types (supports * and ? wildcards).",
     ),
-):
+) -> None:
     """Search SDK methods and types and return full signatures and docstrings.
 
     \b
@@ -377,7 +382,7 @@ def cli_type(
         ...,
         help="Looker SDK model/type name to inspect (e.g. Dashboard, WriteQuery).",
     ),
-):
+) -> None:
     """Inspect fields and types of Looker SDK models.
 
     \b
@@ -392,7 +397,7 @@ def cli_type(
 def run(
     ctx: typer.Context,
     debug: bool = typer.Option(False, help="Debug mode"),
-):
+) -> None:
     """Start the Code Mode MCP server over stdio."""
     global ctx_lkr
     ctx_lkr = (

@@ -3,9 +3,10 @@ import json
 import os
 import re
 from collections import deque
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import NotRequired, TypedDict
 
 import sqlglot
 from sqlglot import exp
@@ -32,6 +33,7 @@ from lkr.parse.lookml import (
     LookmlDimensionGroup,
     LookmlExplore,
     LookmlExploreSource,
+    LookmlFieldProperties,
     LookmlFilter,
     LookmlModel,
     LookmlPositions,
@@ -166,10 +168,12 @@ __all__ = [
 ]
 
 
-def _make_location(file: str, pos: list[int] | None) -> LookmlSourceLocation | None:
-    if not pos or len(pos) < 4:
+def _make_location(file: str, pos: object) -> LookmlSourceLocation | None:
+    if not isinstance(pos, list) or len(pos) < 4:
         return None
-    p = [int(x) for x in pos[:4]]
+    p = [int(x) for x in pos[:4] if isinstance(x, (int, float, str))]
+    if len(p) < 4:
+        return None
     return LookmlSourceLocation(
         file=file,
         line=p[0] + 1,
@@ -193,7 +197,7 @@ def _parse_lookml_table_name(
     return TableRef(catalog=cat, db=db, name=name or view_name)
 
 
-def _run_sandbox_json(code: str) -> Any:
+def _run_sandbox_json(code: str) -> object:
     try:
         import click
 
@@ -215,7 +219,7 @@ def _run_sandbox_json(code: str) -> Any:
         res_str = run_python_code(code, ctx_lkr=ctx_lkr)
         if not res_str:
             return None
-        data = json.loads(res_str)
+        data: object = json.loads(res_str)
         if (
             isinstance(data, dict)
             and "result" in data
@@ -230,12 +234,16 @@ def _run_sandbox_json(code: str) -> Any:
 
 # in-memory lru_cache for connection/table metadata per process; no local file cache
 @lru_cache(maxsize=128)
-def _fetch_connection_metadata_sandbox(conn_name: str) -> dict[str, Any] | None:
+def _fetch_connection_metadata_sandbox(conn_name: str) -> dict[str, str | None] | None:
     res = _run_sandbox_json(
         f"c = connection({json.dumps(conn_name)})\n"
         "return {'database': c.get('database'), 'schema': c.get('schema'), 'dialect_name': c.get('dialect_name')}"
     )
-    return res if isinstance(res, dict) else None
+    if not isinstance(res, dict):
+        return None
+    return {
+        str(k): (str(v) if v is not None else None) for k, v in res.items()
+    }
 
 
 @lru_cache(maxsize=128)
@@ -248,7 +256,9 @@ def _fetch_table_columns_sandbox(
         "return {c['name'].lower(): (c.get('data_type') or 'UNKNOWN') "
         "for t in (res or []) for c in (t.get('columns') or []) if c.get('name')}"
     )
-    return res if isinstance(res, dict) and res else None
+    if not isinstance(res, dict) or not res:
+        return None
+    return {str(k): str(v) for k, v in res.items()}
 
 
 def _coerce_table(
@@ -305,8 +315,8 @@ def _find_explores_for_field(
     field_type: str,
     timeframes: list[str] | None,
     required_ext_aliases: set[str],
-    exp_base_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    exp_ref_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
+    exp_base_decls: dict[str, list[tuple[str, LookmlExplore, dict[str, object]]]],
+    exp_ref_decls: dict[str, list[tuple[str, LookmlExplore, dict[str, object]]]],
 ) -> list[LookmlExploreFieldMatch]:
     matches: list[LookmlExploreFieldMatch] = []
     model_views = model_obj.view or {}
@@ -413,7 +423,7 @@ def _find_explores_for_field(
 def _extract_query_columns(
     parsed_query: ParsedQuery,
     dialect: str | None = None,
-    schema: dict[str, Any] | None = None,
+    schema: dict[str, dict[str, dict[str, dict[str, str]]]] | None = None,
     default_db: str | None = None,
     default_schema: str | None = None,
     exclude_join_on: bool = False,
@@ -649,7 +659,7 @@ class _FieldMatchInfo:
         self.sub_key = sub_key
 
 
-def _extract_filter_refs(filters: Any) -> list[tuple[str, str]]:
+def _extract_filter_refs(filters: object) -> list[tuple[str, str]]:
     refs: list[tuple[str, str]] = []
     for f in _as_list(filters):
         if isinstance(f, LookmlFilter):
@@ -671,10 +681,12 @@ def _extract_filter_refs(filters: Any) -> list[tuple[str, str]]:
     return refs
 
 
-def _get_field_properties(ftype: str, fname: str, fobj: Any) -> list[_FieldProperty]:
+def _get_field_properties(
+    ftype: str, fname: str, fobj: LookmlFieldProperties
+) -> list[_FieldProperty]:
     props: list[_FieldProperty] = []
-    if getattr(fobj, "sql", None):
-        raw_sql = str(fobj.sql)
+    if raw_sql_val := getattr(fobj, "sql", None):
+        raw_sql = str(raw_sql_val)
         props.append(
             _FieldProperty(
                 prop_type=f"{ftype}.sql",
@@ -697,8 +709,8 @@ def _get_field_properties(ftype: str, fname: str, fobj: Any) -> list[_FieldPrope
                         sql_text=raw_wsql,
                     )
                 )
-    if ftype == "measure" and getattr(fobj, "filters", None):
-        for ref_field, filter_repr in _extract_filter_refs(fobj.filters):
+    if ftype == "measure" and (f_filters := getattr(fobj, "filters", None)):
+        for ref_field, filter_repr in _extract_filter_refs(f_filters):
             props.append(
                 _FieldProperty(
                     prop_type="measure.filters",
@@ -747,7 +759,7 @@ def _get_field_properties(ftype: str, fname: str, fobj: Any) -> list[_FieldPrope
 
 
 def _find_field_prop_location(
-    chain: list[tuple[str, Any, dict[str, Any]]],
+    chain: Sequence[tuple[str, LookmlView, dict[str, object]]],
     ftype: str,
     fname: str,
     sub_key: str,
@@ -770,7 +782,12 @@ def _find_field_prop_location(
                         return _make_location(fpath, when_p["$p"])
                 elif isinstance(when_p, list) and when_p:
                     for item in when_p:
-                        if isinstance(item, dict) and "sql" in item and "$p" in item["sql"]:
+                        if (
+                            isinstance(item, dict)
+                            and "sql" in item
+                            and isinstance(item["sql"], dict)
+                            and "$p" in item["sql"]
+                        ):
                             return _make_location(fpath, item["sql"]["$p"])
                 if "$p" in case_p:
                     return _make_location(fpath, case_p["$p"])
@@ -782,13 +799,13 @@ def _find_field_prop_location(
 
 
 def _chain_prop_loc(
-    chain: list[tuple[str, Any, dict[str, Any]]],
+    chain: Sequence[tuple[str, LookmlView | LookmlExplore, dict[str, object]]],
     prop_path: list[str],
     default_file: str,
     default_pos: list[int],
 ) -> LookmlSourceLocation:
     for fpath, _, p_dict in chain:
-        curr: Any = p_dict
+        curr: object = p_dict
         found = True
         for part in prop_path:
             if isinstance(curr, dict) and part in curr:
@@ -837,24 +854,28 @@ def _find_datagroup_location(
     pos_models = positions.model if positions and positions.model else {}
     pos_files = positions.file if positions and positions.file else {}
 
-    m_dg = pos_models.get(model_name, {}).get("datagroup", {}).get(dg_name, {})
+    m_pos = pos_models.get(model_name)
+    m_dgs = m_pos.get("datagroup") if isinstance(m_pos, dict) else None
+    m_dg = m_dgs.get(dg_name) if isinstance(m_dgs, dict) else None
     if isinstance(m_dg, dict):
-        if sub_key in m_dg and isinstance(m_dg[sub_key], dict) and "$p" in m_dg[sub_key]:
-            raw_p = m_dg[sub_key]["$p"]
+        if (
+            sub_key in m_dg
+            and isinstance(m_dg[sub_key], dict)
+            and isinstance(raw_p := m_dg[sub_key].get("$p"), list)
+        ):
             p = [int(x) for x in (raw_p[1:5] if len(raw_p) >= 5 else raw_p[:4])]
             return LookmlSourceLocation(
                 file=f"{model_name}.model.lkml", line=p[0] + 1, end_line=p[2] + 1, position=p
             )
-        if "$p" in m_dg:
-            raw_p = m_dg["$p"]
+        if isinstance(raw_p := m_dg.get("$p"), list):
             p = [int(x) for x in (raw_p[1:5] if len(raw_p) >= 5 else raw_p[:4])]
             return LookmlSourceLocation(
                 file=f"{model_name}.model.lkml", line=p[0] + 1, end_line=p[2] + 1, position=p
             )
 
     for f_key, f_val in pos_files.items():
-        if isinstance(f_val, dict) and "datagroup" in f_val:
-            dg_dict = f_val["datagroup"].get(dg_name, {})
+        if isinstance(f_val, dict) and isinstance(f_dgs := f_val.get("datagroup"), dict):
+            dg_dict = f_dgs.get(dg_name, {})
             if isinstance(dg_dict, dict):
                 f_name = f_key if f_key.endswith(".lkml") else f"{f_key}.lkml"
                 if (
@@ -872,12 +893,12 @@ def _find_datagroup_location(
 
 def _iter_view_fields(
     view_obj: LookmlView,
-) -> list[tuple[str, str, Any]]:
+) -> list[tuple[str, str, LookmlFieldProperties]]:
     f_val = view_obj.filter
-    filter_dict = (
+    filter_dict: dict[str, LookmlFilter] = (
         f_val
         if isinstance(f_val, dict)
-        else {f.name_: f for f in _as_list(f_val) if getattr(f, "name_", None)}
+        else {f.name_: f for f in _as_list(f_val) if isinstance(f, LookmlFilter) and f.name_}
     )
     return [
         (ftype, fname, fobj)
@@ -892,7 +913,9 @@ def _iter_view_fields(
     ]
 
 
-def _get_view_field(view_obj: LookmlView, ftype: str, fname: str) -> Any:
+def _get_view_field(
+    view_obj: LookmlView, ftype: str, fname: str
+) -> LookmlFieldProperties | None:
     return next(
         (fobj for ft, fn, fobj in _iter_view_fields(view_obj) if ft == ftype and fn == fname),
         None,
@@ -1026,8 +1049,8 @@ def _extract_test_refs(
 def _collect_model_test_infos(
     model_name: str,
     model_obj: LookmlModel,
-    test_base_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    test_ref_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
+    test_base_decls: dict[str, list[tuple[str, LookmlTest, dict[str, object]]]],
+    test_ref_decls: dict[str, list[tuple[str, LookmlTest, dict[str, object]]]],
     positions: LookmlPositions | None = None,
 ) -> list[_TestInfo]:
     tests_map: dict[str, LookmlTest] = {}
@@ -1054,21 +1077,21 @@ def _collect_model_test_infos(
 
         if not test_file or test_pos == [0, 0, 0, 0]:
             for f_key, f_val in pos_files.items():
-                if isinstance(f_val, dict) and "test" in f_val:
-                    t_pos_dict = f_val["test"].get(test_name)
-                    if isinstance(t_pos_dict, dict) and "$p" in t_pos_dict:
+                if isinstance(f_val, dict) and isinstance(f_tests := f_val.get("test"), dict):
+                    t_pos_dict = f_tests.get(test_name)
+                    if isinstance(t_pos_dict, dict) and isinstance(raw_p := t_pos_dict.get("$p"), list):
                         test_file = (
                             f_key if f_key.endswith(".lkml") else f"{f_key}.lkml"
                         )
-                        test_pos = [int(x) for x in t_pos_dict["$p"][:4]]
+                        test_pos = [int(x) for x in raw_p[:4]]
                         break
 
         if test_pos == [0, 0, 0, 0]:
-            m_tests = pos_models.get(model_name, {}).get("test", {})
+            m_pos = pos_models.get(model_name)
+            m_tests = m_pos.get("test") if isinstance(m_pos, dict) else None
             if isinstance(m_tests, dict) and test_name in m_tests:
                 t_pos_dict = m_tests[test_name]
-                if isinstance(t_pos_dict, dict) and "$p" in t_pos_dict:
-                    raw_p = t_pos_dict["$p"]
+                if isinstance(t_pos_dict, dict) and isinstance(raw_p := t_pos_dict.get("$p"), list):
                     test_pos = [
                         int(x)
                         for x in (raw_p[1:5] if len(raw_p) >= 5 else raw_p[:4])
@@ -1174,7 +1197,7 @@ def _find_tests_for_field(
 
 
 def _collect_query_block_fields(
-    q_dict: dict[str, Any], base_alias: str
+    q_dict: Mapping[str, object], base_alias: str
 ) -> list[LookmlQueryFieldUsage]:
     usages: list[LookmlQueryFieldUsage] = []
     seen: set[tuple[str, str]] = set()
@@ -1202,7 +1225,7 @@ def _collect_query_block_fields(
 
 
 def _chain_sub_loc(
-    exp_chain: list[tuple[str, Any, dict[str, Any]]],
+    exp_chain: Sequence[tuple[str, LookmlExplore, dict[str, object]]],
     block_key: str,
     item_name: str,
     default_file: str,
@@ -1329,12 +1352,12 @@ def _match_model_views(
     pq: ParsedQuery,
     model_name: str,
     model_obj: LookmlModel,
-    view_base_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    view_ref_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    exp_base_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    exp_ref_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    test_base_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]] | None = None,
-    test_ref_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]] | None = None,
+    view_base_decls: dict[str, list[tuple[str, LookmlView, dict[str, object]]]],
+    view_ref_decls: dict[str, list[tuple[str, LookmlView, dict[str, object]]]],
+    exp_base_decls: dict[str, list[tuple[str, LookmlExplore, dict[str, object]]]],
+    exp_ref_decls: dict[str, list[tuple[str, LookmlExplore, dict[str, object]]]],
+    test_base_decls: dict[str, list[tuple[str, LookmlTest, dict[str, object]]]] | None = None,
+    test_ref_decls: dict[str, list[tuple[str, LookmlTest, dict[str, object]]]] | None = None,
     positions: LookmlPositions | None = None,
     lkml_conn: str | None = None,
     lkml_db: str | None = None,
@@ -1730,7 +1753,9 @@ def _match_model_views(
                                 None,
                                 "dimension.sql",
                                 "sql",
-                                fobj.sql.strip() if getattr(fobj, "sql", None) else None,
+                                str(f_sql).strip()
+                                if (f_sql := getattr(fobj, "sql", None))
+                                else None,
                             )
                         )
                 else:
@@ -1738,7 +1763,16 @@ def _match_model_views(
                         if p.sql_text and _field_matches_column(target_col, fname, p.sql_text, ftype, tfs):
                             direct_hits.append((p, p.prop_type, p.prop_key, p.expr))
                     if not direct_hits and _field_matches_column(target_col, fname, None, ftype, tfs):
-                        direct_hits.append((None, f"{ftype}.sql", "sql", fobj.sql.strip() if getattr(fobj, "sql", None) else None))
+                        direct_hits.append(
+                            (
+                                None,
+                                f"{ftype}.sql",
+                                "sql",
+                                str(f_sql).strip()
+                                if (f_sql := getattr(fobj, "sql", None))
+                                else None,
+                            )
+                        )
 
                 for fp_obj, m_prop, sub_key, expr_val in direct_hits:
                     fkey = (view_name, ftype, fname)
@@ -1834,7 +1868,11 @@ def _match_model_views(
                             property_path=f"view.{cand_view}.{c_ftype}.{c_fname}.{sub_key}",
                             expression="count"
                             if is_ndt_cnt
-                            else (c_fobj.sql.strip() if getattr(c_fobj, "sql", None) else None),
+                            else (
+                                str(c_sql).strip()
+                                if (c_sql := getattr(c_fobj, "sql", None))
+                                else None
+                            ),
                             sub_key=sub_key,
                         )
                         matched_fields.setdefault(ckey, []).append(minfo)
@@ -1910,10 +1948,13 @@ def _match_model_views(
             fld.lower(),
         )
 
-    def _has_unmatched_filter(cur_view: str, self_set: set[str], fobj: Any) -> bool:
-        if not getattr(fobj, "filters", None):
+    def _has_unmatched_filter(
+        cur_view: str, self_set: set[str], fobj: LookmlFieldProperties
+    ) -> bool:
+        f_filters = getattr(fobj, "filters", None)
+        if not f_filters:
             return False
-        for ref_field, filter_repr in _extract_filter_refs(fobj.filters):
+        for ref_field, filter_repr in _extract_filter_refs(f_filters):
             rv, rf = _resolve_ref(ref_field, cur_view, self_set)
             if (rv, rf) not in matched_tokens:
                 return True
@@ -1957,7 +1998,11 @@ def _match_model_views(
             key = (view_name, ftype, fname)
             if key not in matched_fields:
                 continue
-            f_sql_str = fobj.sql.strip() if getattr(fobj, "sql", None) else None
+            f_sql_str = (
+                str(f_sql).strip()
+                if (f_sql := getattr(fobj, "sql", None))
+                else None
+            )
             f_deps = (
                 {_resolve_ref(r, view_name, self_names) for r in _extract_lookml_refs(f_sql_str)}
                 if ftype == "measure" and f_sql_str
@@ -2081,7 +2126,7 @@ def _match_model_views(
             )
         )
 
-    def _dict_list(val: Any) -> list[dict[str, Any]]:
+    def _dict_list(val: object) -> list[dict[str, object]]:
         return [d for d in (val if isinstance(val, list) else [val]) if isinstance(d, dict)]
 
     def _match_usages(
@@ -2510,7 +2555,10 @@ def _match_model_views(
                         None,
                     )
                     mat = (_dict_list(agg_obj.materialization) or [{}])[0]
-                    inc_key = mat.get("increment_key")
+                    inc_key_raw = mat.get("increment_key")
+                    inc_key = str(inc_key_raw) if inc_key_raw else None
+                    dg_trig_raw = mat.get("datagroup_trigger")
+                    dg_trig = str(dg_trig_raw) if dg_trig_raw else None
                     sql_trig = (
                         str(mat["sql_trigger_value"]).strip()
                         if mat.get("sql_trigger_value")
@@ -2519,7 +2567,7 @@ def _match_model_views(
                     if inc_key:
                         usages.append(
                             LookmlQueryFieldUsage(
-                                field=_qualify_field_ref(str(inc_key), base_alias),
+                                field=_qualify_field_ref(inc_key, base_alias),
                                 used_in="increment_key",
                             )
                         )
@@ -2578,7 +2626,7 @@ def _match_model_views(
                             matched_fields=matched_usages,
                             missing_query_fields=missing,
                             timeframe_granularity=tf_gran,
-                            datagroup_trigger=mat.get("datagroup_trigger"),
+                            datagroup_trigger=dg_trig,
                             sql_trigger_value=sql_trig,
                             increment_key=inc_key,
                             **loc.model_dump(),
@@ -2899,7 +2947,11 @@ def _analyze_query_joins(
     }
     results: list[ExploreJoinComparison] = []
 
-    def _find_join_node(tn: str, ta: str, meta: list[Any]) -> LookmlExploreJoinNode | None:
+    def _find_join_node(
+        tn: str,
+        ta: str,
+        meta: list[tuple[LookmlExploreJoinNode, set[str], set[str], set[str]]],
+    ) -> LookmlExploreJoinNode | None:
         if ta:
             for jn, al, _, _ in meta:
                 if ta in al:
@@ -3397,7 +3449,7 @@ def parse_sql_to_lookml(
         all_raw_usages = [
             u for vm in view_matches for fm in vm.fields for u in fm.usages
         ] + extra_usages
-        seen_keys: set[Any] = set()
+        seen_keys: set[tuple[object, ...]] = set()
         query_usages: list[LookmlUsageMatch] = []
         for u in all_raw_usages:
             key = (
@@ -3479,7 +3531,17 @@ def _valid_field_keys(
     return {(vn, fm.field_type, fm.field_name) for vn, fm in valid_fms}
 
 
-def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
+CompactSqlToLookmlResult = TypedDict(
+    "CompactSqlToLookmlResult",
+    {
+        "_doc": NotRequired[dict[str, str]],
+        "queries": NotRequired[list[dict[str, object]]],
+        "dialect": NotRequired[str],
+    },
+)
+
+
+def compact_sql_to_lookml(result: SqlToLookmlResult) -> CompactSqlToLookmlResult:
     """Serialize SqlToLookmlResult without duplicate per-field cross-refs, 0-indexed positions, or empty defaults."""
     data = result.model_dump(by_alias=True, exclude_none=True, exclude_defaults=True)
 
@@ -3494,7 +3556,7 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
         "usages",
     }
 
-    def _prune(val: Any) -> Any:
+    def _prune(val: object) -> object:
         if isinstance(val, dict):
             return {
                 k: pv
@@ -3507,7 +3569,7 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
             return [px for x in val if (px := _prune(x)) not in (None, "", [], {})]
         return val
 
-    seen_test_keys: set[tuple[Any, Any]] = set()
+    seen_test_keys: set[tuple[object, object]] = set()
     for qi, q in enumerate(data.get("queries") or []):
         if isinstance(pq := q.get("parsed_query"), dict):
             if pq.get("ctes"):
@@ -3528,11 +3590,11 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                 or _ANY_AGG_RE.search(pq_obj.raw_sql)
             ),
         )
-        kept_views: list[dict[str, Any]] = []
+        kept_views: list[dict[str, object]] = []
         for vm in q.get("views") or []:
             if vm.get("sql_table_name"):
                 vm.setdefault("unmodeled_db_columns", [])
-            dedup_fields: dict[tuple[Any, Any], dict[str, Any]] = {}
+            dedup_fields: dict[tuple[object, object], dict[str, object]] = {}
             for fm in vm.get("fields") or []:
                 if (vm.get("view_name"), fm.get("field_type"), fm.get("field_name")) not in keep_fkeys:
                     continue
@@ -3542,9 +3604,11 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                     fm.pop(dup_key, None)
                 fkey = (fm.get("field_type"), fm.get("field_name"))
                 if prev := dedup_fields.get(fkey):
-                    for v_ref in fm.get("via") or []:
-                        if v_ref not in prev.setdefault("via", []):
-                            prev["via"].append(v_ref)
+                    prev_via = prev.setdefault("via", [])
+                    if isinstance(prev_via, list):
+                        for v_ref in fm.get("via") or []:
+                            if v_ref not in prev_via:
+                                prev_via.append(v_ref)
                 else:
                     dedup_fields[fkey] = fm
             if not dedup_fields and not vm.get("sql_table_name"):
@@ -3555,9 +3619,11 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
         kept_view_fields = {
             (vm.get("view_name"), f.get("field_name"))
             for vm in kept_views
-            for f in (vm.get("fields") or [])
+            if isinstance(vm_flds := vm.get("fields"), list)
+            for f in vm_flds
+            if isinstance(f, dict)
         }
-        grouped_explores: dict[tuple[Any, ...], dict[str, Any]] = {}
+        grouped_explores: dict[tuple[object, ...], dict[str, object]] = {}
         kept_explore_fields: set[str] = set()
         for em in q.get("explores") or []:
             fld = em.get("field")
@@ -3568,8 +3634,9 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
             entry = grouped_explores.setdefault(
                 ekey, {**{k: v for k, v in em.items() if k != "field"}, "fields": []}
             )
-            if fld not in entry["fields"]:
-                entry["fields"].append(fld)
+            entry_fields = entry.get("fields")
+            if isinstance(entry_fields, list) and fld not in entry_fields:
+                entry_fields.append(fld)
         base_matched_exps = {
             (m, e) for (m, e, _va, jn) in grouped_explores if not jn
         }
@@ -3587,7 +3654,7 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
         ]
         kept_exp_keys = {(v.get("model_name"), v.get("explore_name")) for v in q["explores"]}
         if q.get("tests"):
-            dedup_tests: list[dict[str, Any]] = []
+            dedup_tests: list[dict[str, object]] = []
             for tm in q["tests"]:
                 if kept_exp_keys and (tm.get("model_name"), tm.get("explore_name")) not in kept_exp_keys:
                     continue
@@ -3631,7 +3698,7 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                 ja["sql_join"] = f"{l_str} {j_type} {r_str}".strip()
         q["join_analysis"] = jas
         eqs = q.get("explore_queries") or []
-        dedup_eqs: dict[tuple[Any, ...], dict[str, Any]] = {}
+        dedup_eqs: dict[tuple[object, ...], dict[str, object]] = {}
         for eq in eqs:
             if eq.get("matched_fields") and isinstance(eq["matched_fields"][0], dict):
                 eq["matched_fields"] = list(
@@ -3644,31 +3711,43 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> dict[str, Any]:
                 and not str(eq.get("explore_name") or "").endswith("_base")
             ):
                 dedup_eqs[qkey] = eq
-        eqs = [
+        eqs_list = [
             eq
             for eq in dedup_eqs.values()
             if not kept_exp_keys or (eq.get("model_name"), eq.get("explore_name")) in kept_exp_keys
         ]
-        if any(eq.get("coverage") == "exact" for eq in eqs):
-            eqs = [eq for eq in eqs if eq.get("coverage") == "exact"]
+        if any(eq.get("coverage") == "exact" for eq in eqs_list):
+            eqs_list = [eq for eq in eqs_list if eq.get("coverage") == "exact"]
         else:
             bad_join_exps = {
                 (ja.get("model_name"), ja.get("explore_name"))
                 for ja in jas
                 if ja.get("status") == "missing_join"
             }
-            eqs = sorted(
+            eqs_list = sorted(
                 [
                     eq
-                    for eq in eqs
+                    for eq in eqs_list
                     if (eq.get("model_name"), eq.get("explore_name")) not in bad_join_exps
                     and not (
-                        len(eq.get("matched_fields") or []) == 1
-                        and str(eq["matched_fields"][0]).endswith(".count")
+                        isinstance(mfs := eq.get("matched_fields"), list)
+                        and len(mfs) == 1
+                        and str(mfs[0]).endswith(".count")
                         and eq.get("missing_query_fields")
                     )
                 ],
-                key=lambda eq: -len(eq.get("matched_fields") or []),
+                key=lambda eq: -(
+                    len(mfs) if isinstance(mfs := eq.get("matched_fields"), list) else 0
+                ),
             )[:3]
-        q["explore_queries"] = eqs
-    return _prune(data)
+        q["explore_queries"] = eqs_list
+    pruned = _prune(data)
+    out: CompactSqlToLookmlResult = {}
+    if isinstance(pruned, dict):
+        if isinstance(doc_val := pruned.get("_doc"), dict):
+            out["_doc"] = {str(k): str(v) for k, v in doc_val.items()}
+        if isinstance(qs := pruned.get("queries"), list):
+            out["queries"] = [q for q in qs if isinstance(q, dict)]
+        if isinstance(dialect_val := pruned.get("dialect"), str):
+            out["dialect"] = dialect_val
+    return out
