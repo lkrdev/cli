@@ -1623,7 +1623,7 @@ def _extract_raw_dt_tables(dt_sql: str) -> list[str]:
                     or t.name == "__lkml_tbl"
                     or isinstance(t.this, exp.Func)
                     or (not t.db and not t.catalog and t.name.lower() in ctes)
-                    or (not t.catalog and t.db.lower() in valid_aliases)
+                    or (not t.catalog and t.db and t.db.lower() in valid_aliases)
                 ):
                     continue
                 raw.add(".".join(p.name for p in t.parts if p.name))

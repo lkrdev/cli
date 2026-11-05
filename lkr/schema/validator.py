@@ -744,4 +744,5 @@ def execute_looker_query(sdk: Any, spec: dict[str, Any]) -> list[dict[str, Any]]
         col, desc = parts[0], len(parts) > 1 and parts[1].lower() == "desc"
         merged_rows.sort(key=lambda r, c=col: (r.get(c) is None, r.get(c) if r.get(c) is not None else ""), reverse=desc)
 
-    return merged_rows[: int(spec["limit"]) if spec.get("limit") else len(merged_rows)]
+    limit = int(spec["limit"]) if spec.get("limit") else -1
+    return merged_rows[:limit] if limit >= 0 else merged_rows

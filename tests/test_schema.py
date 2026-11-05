@@ -1217,11 +1217,12 @@ def test_validate_merge_query_and_execute_looker_query():
     assert rows[1]["products.category"] == "Jeans"
     assert rows[1]["inventory_items.count"] is None
 
-    # Inner join + limit 1
+    # Inner join + limit 1 and unlimited (-1)
     norm_inner = {**norm, "join_type": "inner", "limit": "1"}
     rows_inner = execute_looker_query(sdk, norm_inner)
     assert len(rows_inner) == 1
     assert rows_inner[0]["products.category"] == "Accessories"
+    assert len(execute_looker_query(sdk, {**norm, "limit": "-1"})) == 2
 
     # Single query execution
     single_rows = execute_looker_query(sdk, single_res.normalized_query)
