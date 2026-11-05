@@ -1,10 +1,12 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from looker_sdk.sdk.api40 import models as models40
 
+from lkr.parse.lookml import LookmlProject
 from lkr.parse.lookml_to_api import (
     _extract_access_filter_fields,
     parse_lookml_to_api,
@@ -24,13 +26,13 @@ from lkr.tools.lookml import BigQueryAuditEvent, create_lookml_views
 
 
 class _FakeResp:
-    def __init__(self, status_code: int, body: dict[str, Any]) -> None:
+    def __init__(self, status_code: int, body: dict[str, object]) -> None:
         self.status_code = status_code
         self.ok = 200 <= status_code < 300
         self._body = body
         self.text = json.dumps(body)
 
-    def json(self) -> dict[str, Any]:
+    def json(self) -> dict[str, object]:
         return self._body
 
 
@@ -62,7 +64,7 @@ def test_discover_bq_security_ratchets_permissions_fail_closed() -> None:
     tax_name = "projects/12345/locations/us/taxonomies/tax1"
     dp_name = "projects/fifth-inkwell/locations/us/dataPolicies/mask_email"
 
-    base_ok: dict[tuple[str, str], dict[str, Any]] = {
+    base_ok: dict[tuple[str, str], dict[str, object]] = {
         (
             "GET",
             "https://bigquery.googleapis.com/bigquery/v2/projects/fifth-inkwell/datasets/bq_access_testing",
@@ -280,7 +282,7 @@ def test_discover_bq_security_ratchets_permissions_fail_closed() -> None:
     assert orders.columns["email"].masked_readers.groups == {"support@corp.com"}
 
 
-def test_progressive_stages_zero_add_mutate_remove(tmp_path: Any) -> None:
+def test_progressive_stages_zero_add_mutate_remove(tmp_path: Path) -> None:
     """Verify Stage 0 (Nothing) -> Stage 1 (Add 1-by-1) -> Stage 2 (Mutate) -> Stage 3 (Remove to 0)."""
     base_model = (
         'connection: "bq_sa"\n'
@@ -509,7 +511,7 @@ def test_progressive_stages_zero_add_mutate_remove(tmp_path: Any) -> None:
     assert restored_model == base_model
 
 
-def _parse_in_tmp(files: dict[str, str]) -> Any:
+def _parse_in_tmp(files: dict[str, str]) -> LookmlProject:
     from lkr.tools.bq_security import _parse_virtual_project
 
     return _parse_virtual_project(files)
@@ -689,11 +691,17 @@ def test_multi_table_persisted_ndt_and_sql_pdt_partial_table_access() -> None:
         ),
     }
     proj = _parse_in_tmp(merged)
-    m_views = proj.model["ecomm"].view
-    m_exps = proj.model["ecomm"].explore
+    assert proj.model is not None
+    ecomm = proj.model["ecomm"]
+    assert not isinstance(ecomm, list)
+    m_views = ecomm.view
+    m_exps = ecomm.explore
+    assert m_views is not None and m_exps is not None
 
     for dt_name in ("order_customer_ndt", "order_customer_pdt"):
         v = m_views[dt_name]
+        assert not isinstance(v, list)
+        assert v.dimension is not None and v.measure is not None
         # Whole PDT/NDT view requires ONLY `bq_tbl_ds_orders` (NOT `bq_tbl_ds_customers`!)
         assert v.required_access_grants == ["bq_tbl_ds_orders"]
         # `orders`-backed fields require NO customer grants -> User A can query them cleanly!
@@ -713,18 +721,23 @@ def test_multi_table_persisted_ndt_and_sql_pdt_partial_table_access() -> None:
         )
         # Explore on the PDT/NDT automatically applies `orders.region` `access_filter` mapped to `order_region`!
         exp = m_exps[dt_name]
+        assert not isinstance(exp, list)
         assert _extract_access_filter_fields(exp.access_filter, dt_name) == [
             (f"{dt_name}.order_region", "bq_rls_ds_orders_region")
         ]
 
     # INNER JOIN PDT requires BOTH `orders` AND `customers` table grants on the whole PDT view AND both spine `access_filter`s!
-    assert sorted(m_views["order_inner_pdt"].required_access_grants or []) == [
+    v_inner = m_views["order_inner_pdt"]
+    assert not isinstance(v_inner, list)
+    assert sorted(v_inner.required_access_grants or []) == [
         "bq_tbl_ds_customers",
         "bq_tbl_ds_orders",
     ]
+    exp_inner = m_exps["order_inner_pdt"]
+    assert not isinstance(exp_inner, list)
     assert sorted(
         _extract_access_filter_fields(
-            m_exps["order_inner_pdt"].access_filter, "order_inner_pdt"
+            exp_inner.access_filter, "order_inner_pdt"
         )
     ) == [
         ("order_inner_pdt.country", "bq_rls_ds_customers_country"),
@@ -732,7 +745,9 @@ def test_multi_table_persisted_ndt_and_sql_pdt_partial_table_access() -> None:
     ]
 
     # Aggregated PDT omitting `region` fails closed with a valid registered `bq_rls_missing_*` grant!
-    agg_grants = m_views["order_agg_no_rap_pdt"].required_access_grants or []
+    v_agg = m_views["order_agg_no_rap_pdt"]
+    assert not isinstance(v_agg, list)
+    agg_grants = v_agg.required_access_grants or []
     assert any(g.startswith("bq_rls_missing_") for g in agg_grants)
     assert "bq_rls_missing_ds_orders_order_agg_no_rap_pdt" in bundle.files["security/bq_access_grants.refinement.lkml"]
 
@@ -742,18 +757,18 @@ def test_sync_looker_security_attributes_multi_group_union_and_cleanup() -> None
     from lkr.tools.bq_security import DesiredAttributeSpec
 
     sdk = MagicMock()
-    attrs_store: dict[str, dict[str, Any]] = {}
+    attrs_store: dict[str, dict[str, object]] = {}
     next_id = 10
 
-    def _get_uas(path: str, **_kw: Any) -> list[dict[str, Any]]:
+    def _get_uas(path: str, **_kw: object) -> list[dict[str, object]]:
         assert path == "/user_attributes"
         return list(attrs_store.values())
 
-    def _create_ua(body: Any) -> Any:
+    def _create_ua(body: models40.WriteUserAttribute) -> SimpleNamespace:
         nonlocal next_id
         aid = str(next_id)
         next_id += 1
-        rec = {
+        rec: dict[str, object] = {
             "id": aid,
             "name": body.name,
             "label": body.label,
@@ -763,7 +778,7 @@ def test_sync_looker_security_attributes_multi_group_union_and_cleanup() -> None
         attrs_store[aid] = rec
         return SimpleNamespace(**rec)
 
-    def _get_ua(aid: str, *_args: Any, **_kw: Any) -> Any:
+    def _get_ua(aid: str, *_args: object, **_kw: object) -> SimpleNamespace:
         return SimpleNamespace(**attrs_store[aid])
 
     def _del_ua(aid: str) -> None:

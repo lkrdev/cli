@@ -15,7 +15,7 @@ from lkr.parse.dag import _build_chain, _collect_declarations
 runner = CliRunner()
 
 
-def test_sql_join_extraction_with_ctes_and_types():
+def test_sql_join_extraction_with_ctes_and_types() -> None:
     sql = """
     WITH active_users AS (
         SELECT id, country FROM raw.users WHERE active = 1
@@ -69,7 +69,7 @@ def test_sql_join_extraction_with_ctes_and_types():
     assert j2.equi_joins == []
 
 
-def test_sql_join_extraction_using_clause():
+def test_sql_join_extraction_using_clause() -> None:
     sql = """
     SELECT *
     FROM orders
@@ -90,7 +90,7 @@ def test_sql_join_extraction_using_clause():
     ]
 
 
-def test_lookml_explore_join_graph_building():
+def test_lookml_explore_join_graph_building() -> None:
     lkml = """
     model: sales {
       explore: orders {
@@ -183,7 +183,7 @@ def test_lookml_explore_join_graph_building():
     assert s_join.equi_joins == [(("orders", "shipping_id"), ("shipments", "id"))]
 
 
-def test_join_comparison_exact_and_type_mismatch():
+def test_join_comparison_exact_and_type_mismatch() -> None:
     lkml = """
     model: shop {
       explore: orders {
@@ -225,7 +225,7 @@ def test_join_comparison_exact_and_type_mismatch():
     assert ja_mismatch[0].explore_join_type == "left_outer"
 
 
-def test_precedent_discovery():
+def test_precedent_discovery() -> None:
     lkml = """
     model: shop {
       explore: orders {
@@ -270,7 +270,7 @@ def test_precedent_discovery():
     assert "inventory.suppliers" in prec_names or "catalog.suppliers" in prec_names
 
 
-def test_safety_checks_fan_trap_and_required_joins():
+def test_safety_checks_fan_trap_and_required_joins() -> None:
     lkml = """
     model: ecommerce {
       explore: orders {
@@ -330,7 +330,7 @@ def test_safety_checks_fan_trap_and_required_joins():
     assert "missing_required_join" not in oi_rules
 
 
-def test_cli_sql_lookml_compare_includes_join_analysis():
+def test_cli_sql_lookml_compare_includes_join_analysis() -> None:
     lkml = """
     model: store {
       explore: orders {
@@ -379,7 +379,7 @@ def test_cli_sql_lookml_compare_includes_join_analysis():
     assert ja[0]["inferred_relationship"] == "many_to_one"
 
 
-def test_inferred_relationships_and_mismatch_warning():
+def test_inferred_relationships_and_mismatch_warning() -> None:
     lkml = """
     model: shop {
       explore: orders {

@@ -1089,6 +1089,7 @@ pub async fn execute_python_code<T: SdkTransport>(
     if rewritten.contains("decompile_kda_target")
         || rewritten.contains("run_key_driver_analysis")
         || rewritten.contains("execute_looker_query")
+        || rewritten.contains("profile_fields")
     {
         let preamble = KDA_MODULE_RAW
             .split_once("# --- MONTY_KDA_PREAMBLE ---")

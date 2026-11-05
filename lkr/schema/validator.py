@@ -771,17 +771,13 @@ def execute_looker_query(
             payload = val_res.normalized_query
 
     if hasattr(sdk, "execute_looker_query"):
-        return cast(
-            list[dict[str, object]],
-            cast(ExtendedLooker40SDK, sdk).execute_looker_query(payload, transport_options=transport_options),
+        return cast(ExtendedLooker40SDK, sdk).execute_looker_query(
+            payload, transport_options=transport_options
         )
-    return cast(
-        list[dict[str, object]],
-        ExtendedLooker40SDK.execute_looker_query(
-            cast(ExtendedLooker40SDK, sdk),
-            payload,
-            transport_options=transport_options,
-        ),
+    return ExtendedLooker40SDK.execute_looker_query(
+        cast(ExtendedLooker40SDK, sdk),
+        payload,
+        transport_options=transport_options,
     )
 
 

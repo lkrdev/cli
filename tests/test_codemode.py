@@ -1,10 +1,12 @@
 import json
 import os
 import tempfile
-from typing import Any, cast
+from collections.abc import Iterator
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+from looker_sdk import models40 as mdls
 from looker_sdk.rtl.auth_session import AuthSession
 from looker_sdk.rtl.transport import Transport
 from typer.testing import CliRunner
@@ -15,63 +17,85 @@ from lkr.main import app
 
 
 class DummyAuth:
-    def __init__(self):
+    def __init__(self) -> None:
         self.settings = MagicMock()
         self.settings.base_url = "https://example.looker.com"
         self.settings.agent_tag = "test"
 
-    def authenticate(self, request):
+    def authenticate(self, request: object) -> object:
         return request
 
 
 class MockLookerSDK(ExtendedLooker40SDK):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(
             auth=cast(AuthSession, DummyAuth()),
-            deserialize=cast(Any, MagicMock()),
-            serialize=cast(Any, MagicMock()),
+            deserialize=MagicMock(),
+            serialize=MagicMock(),
             transport=cast(Transport, MagicMock()),
             api_version="4.0",
         )
 
-    def me(self, *args, **kwargs):
+    def me(self, *args: object, **kwargs: object) -> mdls.User:
         """Get information about the currently calling user."""
-        return {
-            "first_name": "Test",
-            "last_name": "User",
-            "personal_folder_id": "1",
-        }
+        return cast(
+            "mdls.User",
+            {
+                "first_name": "Test",
+                "last_name": "User",
+                "personal_folder_id": "1",
+            },
+        )
 
-    def folder(self, folder_id, *args, **kwargs):
+    def folder(
+        self, folder_id: str, *args: object, **kwargs: object
+    ) -> mdls.Folder:
         """Get a specific folder."""
-        return {
-            "id": folder_id,
-            "name": f"Folder {folder_id}",
-        }
+        return cast(
+            "mdls.Folder",
+            {
+                "id": folder_id,
+                "name": f"Folder {folder_id}",
+            },
+        )
 
-    def folder_children(self, folder_id, *args, **kwargs):
+    def folder_children(
+        self, folder_id: str, *args: object, **kwargs: object
+    ) -> list[mdls.Folder]:
         """Get the children of a specific folder."""
         if str(folder_id) == "1":
-            return [
-                {
-                    "id": "2",
-                    "name": "Child Folder 1",
-                }
-            ]
+            return cast(
+                "list[mdls.Folder]",
+                [
+                    {
+                        "id": "2",
+                        "name": "Child Folder 1",
+                    }
+                ],
+            )
         return []
 
-    def update_session(self, body=None, *args, **kwargs):
+    def update_session(
+        self, body: object = None, *args: object, **kwargs: object
+    ) -> mdls.ApiSession:
         """Update session workspace."""
-        return {"workspace_id": body.get("workspace_id", "dev") if isinstance(body, dict) else "dev"}
+        return cast(
+            "mdls.ApiSession",
+            {
+                "workspace_id": body.get("workspace_id", "dev")
+                if isinstance(body, dict)
+                else "dev"
+            },
+        )
 
 
 @pytest.fixture(autouse=True)
-def mock_get_mcp_sdk():
+def mock_get_mcp_sdk() -> Iterator[None]:
     with patch("lkr.codemode.main.get_mcp_sdk", return_value=MockLookerSDK()):
         yield
 
 
-def test_sdk_object():
+def test_sdk_object() -> None:
     code_sdk = """
 me_obj = sdk.me()
 return me_obj["first_name"]
@@ -79,21 +103,21 @@ return me_obj["first_name"]
     result = run_python_code(code_sdk)
     assert result == "Test"
 
-def test_examples():
+def test_examples() -> None:
     code_examples = """
 return examples()
 """
     result = run_python_code(code_examples)
     assert "Find all dashboard-related methods" in result
 
-def test_dev_mode():
+def test_dev_mode() -> None:
     code_dev = """
 return "Dev mode ran"
 """
     result = run_python_code(code_dev, dev_mode=True)
     assert result == "Dev mode ran"
 
-def test_help_search():
+def test_help_search() -> None:
     res_empty = run_python_code("return help()")
     assert "SANDBOX DISCOVERY" in res_empty
     assert 'lookup("run_inline_query")' in res_empty
@@ -109,35 +133,35 @@ return help('dashboard')
     res_none = run_python_code("return help('zzz_no_such_method_xyz')")
     assert "Try help('*keyword*'), lookup('func_name'), or lookup_type('TypeName')" in res_none
 
-def test_lookup():
+def test_lookup() -> None:
     code_lookup = """
 return lookup('me')
 """
     result = run_python_code(code_lookup)
     assert len(result) > 0
 
-def test_readme():
+def test_readme() -> None:
     code_readme = """
 return readme()
 """
     result = run_python_code(code_readme)
     assert "SDK Access" in result
 
-def test_wildcard_search():
+def test_wildcard_search() -> None:
     code_help = """
 return help('*dashboard*')
 """
     result = run_python_code(code_help)
     assert "Matches found" in result
 
-def test_search_with_lookups():
+def test_search_with_lookups() -> None:
     code_search = """
 return search_with_lookups('board_item')
 """
     result = run_python_code(code_search)
     assert "Function: board_item" in result
 
-def test_lookup_type():
+def test_lookup_type() -> None:
     code_type = """
 return lookup_type('User')
 """
@@ -145,7 +169,7 @@ return lookup_type('User')
     assert "Type: User" in result
     assert "CredentialsApi3" in result
 
-def test_help_search_description():
+def test_help_search_description() -> None:
     code_help = """
 return help('currently calling')
 """
@@ -153,7 +177,7 @@ return help('currently calling')
     assert "Matches found" in result
     assert "me" in result
 
-def test_lookup_type_recursion():
+def test_lookup_type_recursion() -> None:
     import lkr.codemode.type
     
     mock_swagger = {
@@ -180,7 +204,7 @@ return lookup_type('Node')
     finally:
         lkr.codemode.type._get_swagger_data = original_get_swagger
 
-def test_basic_usage():
+def test_basic_usage() -> None:
     code = """
 me_obj = me()
 res = []
@@ -195,7 +219,7 @@ return "\\n".join(res)
     assert "Name:" in result
     assert "Folders:" in result
 
-def test_recursive_listing():
+def test_recursive_listing() -> None:
     code = """
 me_obj = me()
 personal_folder_id = me_obj["personal_folder_id"]
@@ -216,7 +240,7 @@ return "\\n".join(res)
     assert "+ Folder:" in result
 
 
-def test_extended_sdk_methods_present():
+def test_extended_sdk_methods_present() -> None:
     ext_methods = [
         k for k, v in ExtendedLooker40SDK.__dict__.items() if not k.startswith("_") and callable(v)
     ]
@@ -231,7 +255,7 @@ return "All present"
     assert result == "All present"
 
 
-def test_extended_models_help_search():
+def test_extended_models_help_search() -> None:
     code_help = """
 return help('ProjectGeneratorTable')
 """
@@ -248,7 +272,7 @@ return lookup('ProjectGeneratorTable')
     assert "primary_key: string" in result_lookup
 
 
-def test_commit_help_and_lookup():
+def test_commit_help_and_lookup() -> None:
     code_help = """
 return help('commit')
 """
@@ -270,7 +294,7 @@ return lookup('ProjectCommitRequest')
     assert "Looker automatically stages and commits" in result_model
 
 
-def test_captured_print_json():
+def test_captured_print_json() -> None:
     code = """
 print("Hello from stdout")
 return {"status": "success"}
@@ -280,7 +304,7 @@ return {"status": "success"}
     assert data["stdout"] == "Hello from stdout\n"
     assert data["result"] == {"status": "success"}
 
-def test_captured_print_json_many():
+def test_captured_print_json_many() -> None:
     code = """
 for i in range(10):
     print(i)
@@ -292,7 +316,7 @@ return {"status": "success"}
     assert data["result"] == {"status": "success"}
 
 
-def test_parent_runtime_not_polluted(capfd):
+def test_parent_runtime_not_polluted(capfd: pytest.CaptureFixture[str]) -> None:
     code = """
 print("This should be trapped and not leak to parent stdout")
 print("Also checking second print")
@@ -308,17 +332,17 @@ return {"status": "clean"}
 
 runner = CliRunner()
 
-def test_cli_code_mode_sandbox_code():
+def test_cli_code_mode_sandbox_code() -> None:
     result = runner.invoke(app, ["code-mode", "sandbox", "--code", "return me()"])
     assert result.exit_code == 0
     assert "Test" in result.stdout
 
-def test_cli_code_mode_sandbox_sdk_code():
+def test_cli_code_mode_sandbox_sdk_code() -> None:
     result = runner.invoke(app, ["code-mode", "sandbox", "--code", "return sdk.me()"])
     assert result.exit_code == 0
     assert "Test" in result.stdout
 
-def test_cli_code_mode_sandbox_file():
+def test_cli_code_mode_sandbox_file() -> None:
     with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False) as f:
         f.write("return me()")
         temp_path = f.name
@@ -331,16 +355,16 @@ def test_cli_code_mode_sandbox_file():
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-def test_cli_code_mode_sandbox_both_error():
+def test_cli_code_mode_sandbox_both_error() -> None:
     result = runner.invoke(app, ["code-mode", "sandbox", "--code", "return me()", "--file", "dummy.py"])
     assert result.exit_code == 1
 
-def test_cli_code_mode_sandbox_neither_error():
+def test_cli_code_mode_sandbox_neither_error() -> None:
     result = runner.invoke(app, ["code-mode", "sandbox"])
     assert result.exit_code == 1
 
 
-def test_update_session_blocked_by_default():
+def test_update_session_blocked_by_default() -> None:
     code = """
 update_session(body={"workspace_id": "dev"})
 """
@@ -349,7 +373,7 @@ update_session(body={"workspace_id": "dev"})
     assert "calling update_session affects anyone using this OAuth token/session" in result
 
 
-def test_update_session_allowed_with_flag(caplog):
+def test_update_session_allowed_with_flag(caplog: pytest.LogCaptureFixture) -> None:
     code = """
 res = update_session(body={"workspace_id": "dev"})
 return res["workspace_id"]
@@ -359,7 +383,7 @@ return res["workspace_id"]
     assert "Calling update_session will affect API clients using this access token" in caplog.text
 
 
-def test_cli_code_mode_sandbox_update_session_blocked():
+def test_cli_code_mode_sandbox_update_session_blocked() -> None:
     result = runner.invoke(
         app,
         ["code-mode", "sandbox", "--code", 'update_session(body={"workspace_id": "dev"})'],
@@ -369,7 +393,7 @@ def test_cli_code_mode_sandbox_update_session_blocked():
 
 
 
-def test_cli_code_mode_sandbox_update_session_allowed():
+def test_cli_code_mode_sandbox_update_session_allowed() -> None:
     result = runner.invoke(
         app,
         ["code-mode", "sandbox", "--allow-update-session", "--code", 'return update_session(body={"workspace_id": "dev"})["workspace_id"]'],
@@ -378,7 +402,7 @@ def test_cli_code_mode_sandbox_update_session_allowed():
     assert "dev" in result.stdout
 
 
-def test_cli_code_mode_discovery_offline():
+def test_cli_code_mode_discovery_offline() -> None:
     with patch("lkr.codemode.main.get_mcp_sdk", side_effect=AssertionError("should not authenticate")):
         res_group_help = runner.invoke(app, ["code-mode", "--help"])
         assert res_group_help.exit_code == 0

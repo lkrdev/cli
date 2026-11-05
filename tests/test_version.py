@@ -5,7 +5,7 @@ from lkr.main import app
 runner = CliRunner()
 
 
-def test_version_option():
+def test_version_option() -> None:
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     # In test environment it should print "0.0.0" (default from importlib.metadata.PackageNotFoundError)

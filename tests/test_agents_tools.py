@@ -1,6 +1,8 @@
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from lkr.extended_sdk_methods import ExtendedLooker40SDK
@@ -20,7 +22,7 @@ def _make_mock_sdk() -> MagicMock:
 
 
 @patch("lkr.tools.agents.get_auth")
-def test_agents_publish_updates_artifact(mock_get_auth):
+def test_agents_publish_updates_artifact(mock_get_auth: MagicMock) -> None:
     sdk = _make_mock_sdk()
     sdk.validate_gemini_enterprise_metadata.return_value = {"success": True}
     sdk.publish_agent.return_value = {
@@ -69,8 +71,8 @@ def test_agents_publish_updates_artifact(mock_get_auth):
 @patch("lkr.tools.agents.logger")
 @patch("lkr.tools.agents.get_auth")
 def test_agents_publish_catches_failed_to_register_license_error(
-    mock_get_auth, mock_logger
-):
+    mock_get_auth: MagicMock, mock_logger: MagicMock
+) -> None:
     sdk = _make_mock_sdk()
     sdk.publish_agent.side_effect = Exception(
         '{"message":"Failed to register agent with GE."}'
@@ -105,7 +107,9 @@ def test_agents_publish_catches_failed_to_register_license_error(
 
 
 @patch("lkr.tools.agents.get_auth")
-def test_agents_delete_default_singleton_updates_artifact(mock_get_auth):
+def test_agents_delete_default_singleton_updates_artifact(
+    mock_get_auth: MagicMock,
+) -> None:
     sdk = _make_mock_sdk()
     sdk.unpublish_agent.return_value = {
         "state": "unpublished",
@@ -131,8 +135,10 @@ def test_agents_delete_default_singleton_updates_artifact(mock_get_auth):
 @patch("lkr.tools.agents.requests.get")
 @patch("lkr.tools.agents.get_auth")
 def test_agents_delete_auto_discovers_targets_from_artifact(
-    mock_get_auth, mock_requests_get, mock_requests_delete
-):
+    mock_get_auth: MagicMock,
+    mock_requests_get: MagicMock,
+    mock_requests_delete: MagicMock,
+) -> None:
     sdk = _make_mock_sdk()
     sdk.unpublish_agent.return_value = {
         "state": "unpublished",
@@ -207,8 +213,8 @@ def test_agents_delete_auto_discovers_targets_from_artifact(
 @patch("lkr.tools.agents.requests.get")
 @patch("lkr.tools.agents.get_auth")
 def test_agents_list_merges_and_dedupes_all_three_sources(
-    mock_get_auth, mock_requests_get, mock_sleep
-):
+    mock_get_auth: MagicMock, mock_requests_get: MagicMock, mock_sleep: MagicMock
+) -> None:
     sdk = _make_mock_sdk()
     # Looker agents metadata
     sdk.search_agents.return_value = [
@@ -267,7 +273,7 @@ def test_agents_list_merges_and_dedupes_all_three_sources(
     )
 
     # Source 3 (Method B): Looker API returns agent-123 on eng-1 AND agent-456 on eng-1
-    def _mock_get_pub(guid: str):
+    def _mock_get_pub(guid: str) -> dict[str, object]:
         return {
             "state": "published",
             "message": "ok",
@@ -315,8 +321,8 @@ def test_agents_list_merges_and_dedupes_all_three_sources(
 @patch("lkr.tools.agents.time.sleep")
 @patch("lkr.tools.agents.get_auth")
 def test_agents_list_stops_immediately_on_missing_ge_config(
-    mock_get_auth, mock_sleep
-):
+    mock_get_auth: MagicMock, mock_sleep: MagicMock
+) -> None:
     sdk = _make_mock_sdk()
     sdk.search_agents.return_value = [
         {"id": f"agent-{i}", "name": f"Agent {i}"} for i in range(98)
@@ -334,7 +340,7 @@ def test_agents_list_stops_immediately_on_missing_ge_config(
     assert json.loads(res.stdout) == []
 
 
-def test_dedupe_agent_publications_unit():
+def test_dedupe_agent_publications_unit() -> None:
     recs: list[dict[str, object]] = [
         {
             "agent_id": "a1",
@@ -366,8 +372,8 @@ def test_dedupe_agent_publications_unit():
 @patch("lkr.tools.agents.requests.get")
 @patch("lkr.tools.agents.get_auth")
 def test_agents_list_reconciles_ui_deletion_and_respects_no_update_artifact(
-    mock_get_auth, mock_requests_get
-):
+    mock_get_auth: MagicMock, mock_requests_get: MagicMock
+) -> None:
     sdk = _make_mock_sdk()
     sdk.search_agents.return_value = [{"id": "agent-123", "name": "Deleted In UI"}]
     sdk.search_artifacts.return_value = [
@@ -448,8 +454,7 @@ def test_agents_list_reconciles_ui_deletion_and_respects_no_update_artifact(
     )
 
 
-def test_project_number_validation_rejects_string_project_id():
-    import pytest
+def test_project_number_validation_rejects_string_project_id() -> None:
     from pydantic import ValidationError
 
     from lkr.extended_sdk_methods import GeminiEnterpriseAgentRequest
@@ -471,7 +476,12 @@ def test_project_number_validation_rejects_string_project_id():
 
 @patch("lkr.tools.agents.logger")
 @patch("lkr.tools.agents.get_auth")
-def test_agents_card(mock_get_auth, mock_logger, tmp_path, monkeypatch):
+def test_agents_card(
+    mock_get_auth: MagicMock,
+    mock_logger: MagicMock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("LOOKERSDK_BASE_URL", raising=False)
     sdk = _make_mock_sdk()

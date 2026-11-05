@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import NoReturn, cast
 
+import pytest
 from typer.testing import CliRunner
 
 from lkr.main import app
@@ -19,7 +20,7 @@ from lkr.parse import (
 runner = CliRunner()
 
 
-def test_parse_lookml_inline_extensions_refinements_and_positions():
+def test_parse_lookml_inline_extensions_refinements_and_positions() -> None:
     lkml = """
     view: base_orders {
       extension: required
@@ -114,7 +115,7 @@ def test_parse_lookml_inline_extensions_refinements_and_positions():
     ]
 
 
-def test_parse_lookml_extensions_refinements_sequencing():
+def test_parse_lookml_extensions_refinements_sequencing() -> None:
     lkml = """
     view: my_view {}
     explore: has_label_a { extension: required label: "A" }
@@ -145,7 +146,7 @@ def test_parse_lookml_extensions_refinements_sequencing():
     assert explores["a_plus_before_b_plus_d"].label == "D+"
 
 
-def test_parse_lookml_path_and_file_cli(tmp_path: Path):
+def test_parse_lookml_path_and_file_cli(tmp_path: Path) -> None:
     base_view = tmp_path / "base.view.lkml"
     base_view.write_text(
         "view: base { extension: required dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; } }",
@@ -187,7 +188,7 @@ def test_parse_lookml_path_and_file_cli(tmp_path: Path):
     assert "users" in direct.model["inline"].view
 
 
-def test_parse_sql_to_lookml_table_variants_and_locations(tmp_path: Path):
+def test_parse_sql_to_lookml_table_variants_and_locations(tmp_path: Path) -> None:
     from lkr.parse import SqlToLookmlResult, parse_sql_to_lookml
 
     order_items_file = tmp_path / "order_items.view.lkml"
@@ -267,7 +268,7 @@ def test_parse_sql_to_lookml_table_variants_and_locations(tmp_path: Path):
     assert payload["queries"][2]["views"][0]["fields"][0]["line"] == 3
 
 
-def test_parse_sql_to_lookml_explores_aliases_and_field_sets():
+def test_parse_sql_to_lookml_explores_aliases_and_field_sets() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = """
@@ -339,7 +340,7 @@ def test_parse_sql_to_lookml_explores_aliases_and_field_sets():
     }
 
 
-def test_parse_sql_to_lookml_transitive_refs_and_default_sql():
+def test_parse_sql_to_lookml_transitive_refs_and_default_sql() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = """
@@ -407,7 +408,7 @@ def test_parse_sql_to_lookml_transitive_refs_and_default_sql():
     assert ii_explores == {"order_items"}
 
 
-def test_parse_sql_to_lookml_tests_dag_association():
+def test_parse_sql_to_lookml_tests_dag_association() -> None:
     from lkr.parse import LookmlTestMatch, parse_sql_to_lookml
 
     lkml = """
@@ -541,7 +542,7 @@ def test_parse_sql_to_lookml_tests_dag_association():
     assert [t.test_name for t in oi_fields2["created"].tests] == ["test_order_pk"]
 
 
-def test_parse_sql_to_lookml_describe_doc():
+def test_parse_sql_to_lookml_describe_doc() -> None:
     from typer.testing import CliRunner
 
     from lkr.parse import SQL_TO_LOOKML_DOC, group, parse_sql_to_lookml
@@ -600,7 +601,7 @@ def test_parse_sql_to_lookml_describe_doc():
     assert cli_payload["_doc"] == SQL_TO_LOOKML_DOC
 
 
-def test_parse_lookml_to_api_inline_and_cli(tmp_path: Path):
+def test_parse_lookml_to_api_inline_and_cli(tmp_path: Path) -> None:
     from lkr.parse import (
         lookml_to_all_lookml_models,
         lookml_to_lookml_model_explore,
@@ -793,9 +794,7 @@ def test_parse_lookml_to_api_inline_and_cli(tmp_path: Path):
     assert "foo" in dotted_exp.scopes
 
 
-def test_parse_lookml_to_api_thelookevent_parity():
-    import pytest
-
+def test_parse_lookml_to_api_thelookevent_parity() -> None:
     from lkr.parse import lookml_to_all_lookml_models, lookml_to_lookml_model_explore
 
     proj_dir = Path("tmp/thelookevent")
@@ -968,7 +967,7 @@ def test_parse_lookml_to_api_thelookevent_parity():
                 )
 
 
-def test_parse_lookml_to_api_discrepancy_fixes():
+def test_parse_lookml_to_api_discrepancy_fixes() -> None:
     from lkr.parse import lookml_to_lookml_model_explore
 
     lkml = """
@@ -1657,9 +1656,7 @@ def test_parse_lookml_to_api_discrepancy_fixes():
     assert filts3["order_items.status_filter"]["suggestions"] == ["Complete", "Pending"]
 
 
-def test_parse_sql_to_lookml_unqualified_sql_error():
-    import pytest
-
+def test_parse_sql_to_lookml_unqualified_sql_error() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = "view: foo { sql_table_name: db.schema.foo ;; dimension: a {} }"
@@ -1674,9 +1671,7 @@ def test_parse_sql_to_lookml_unqualified_sql_error():
     assert cli_res.exit_code == 1
 
 
-def test_parse_sql_to_lookml_unqualified_lookml_error():
-    import pytest
-
+def test_parse_sql_to_lookml_unqualified_lookml_error() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = "view: foo { sql_table_name: foo ;; dimension: a {} }"
@@ -1686,7 +1681,7 @@ def test_parse_sql_to_lookml_unqualified_lookml_error():
         parse_sql_to_lookml(sql="SELECT a FROM db.schema.foo", lookml=lkml)
 
 
-def test_parse_sql_to_lookml_database_mismatch():
+def test_parse_sql_to_lookml_database_mismatch() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     # databaseA.schema1.foo vs databaseB.schema2.foo must NOT match
@@ -1696,7 +1691,7 @@ def test_parse_sql_to_lookml_database_mismatch():
     assert len(res.queries[0].views) == 0
 
 
-def test_parse_sql_to_lookml_fully_qualified_no_flags():
+def test_parse_sql_to_lookml_fully_qualified_no_flags() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     # When both sides are fully qualified, no flags or connection are required
@@ -1707,7 +1702,7 @@ def test_parse_sql_to_lookml_fully_qualified_no_flags():
     assert res.queries[0].views[0].view_name == "foo"
 
 
-def test_parse_sql_to_lookml_connection_coercion(monkeypatch):
+def test_parse_sql_to_lookml_connection_coercion(monkeypatch: pytest.MonkeyPatch) -> None:
     import lkr.parse.sql_to_lookml as s2l
     from lkr.parse import parse_sql_to_lookml
 
@@ -1734,7 +1729,7 @@ def test_parse_sql_to_lookml_connection_coercion(monkeypatch):
     assert res.queries[0].views[0].view_name == "foo"
 
 
-def test_parse_sql_to_lookml_native_derived_table():
+def test_parse_sql_to_lookml_native_derived_table() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = """
@@ -1770,7 +1765,7 @@ def test_parse_sql_to_lookml_native_derived_table():
     assert ndt_fields["ordering_user_id"].via == ["orders.customer_id"]
 
 
-def test_parse_sql_to_lookml_sql_derived_table():
+def test_parse_sql_to_lookml_sql_derived_table() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = """
@@ -1802,7 +1797,7 @@ def test_parse_sql_to_lookml_sql_derived_table():
     assert dt_fields["ordering_user_id"].via == ["orders.customer_id"]
 
 
-def test_parse_sql_to_lookml_ndt_with_derived_column():
+def test_parse_sql_to_lookml_ndt_with_derived_column() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = """
@@ -1840,7 +1835,7 @@ def test_parse_sql_to_lookml_ndt_with_derived_column():
     assert "ordering_user_id" in ndt_fields
 
 
-def test_parse_sql_to_lookml_ndt_chained_derived_column():
+def test_parse_sql_to_lookml_ndt_chained_derived_column() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = """
@@ -1879,7 +1874,7 @@ def test_parse_sql_to_lookml_ndt_chained_derived_column():
     assert ndt_fields["composite_user_key"].via == ["orders.customer_id"]
 
 
-def test_parse_sql_to_lookml_dt_cte_column_alias():
+def test_parse_sql_to_lookml_dt_cte_column_alias() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = """
@@ -1912,7 +1907,7 @@ def test_parse_sql_to_lookml_dt_cte_column_alias():
     assert "ordering_user_id" in dt_fields
 
 
-def test_parse_sql_to_lookml_dt_subquery_column_alias():
+def test_parse_sql_to_lookml_dt_subquery_column_alias() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = """
@@ -1944,7 +1939,7 @@ def test_parse_sql_to_lookml_dt_subquery_column_alias():
     assert "ordering_user_id" in dt_fields
 
 
-def test_parse_sql_to_lookml_dt_union_all_second_branch():
+def test_parse_sql_to_lookml_dt_union_all_second_branch() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = """
@@ -1978,7 +1973,7 @@ def test_parse_sql_to_lookml_dt_union_all_second_branch():
     assert "ordering_user_id" in dt_fields
 
 
-def test_parse_sql_to_lookml_dt_raw_table_without_sql_table_name_macro():
+def test_parse_sql_to_lookml_dt_raw_table_without_sql_table_name_macro() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = """
@@ -2001,7 +1996,7 @@ def test_parse_sql_to_lookml_dt_raw_table_without_sql_table_name_macro():
     assert "ordering_user_id" in dt_fields
 
 
-def test_parse_sql_to_lookml_dt_chained_cte_raw_table():
+def test_parse_sql_to_lookml_dt_chained_cte_raw_table() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = """
@@ -2034,7 +2029,7 @@ def test_parse_sql_to_lookml_dt_chained_cte_raw_table():
     assert "ordering_user_id" in dt_fields
 
 
-def test_parse_sql_to_lookml_dt_join_subquery_raw_table():
+def test_parse_sql_to_lookml_dt_join_subquery_raw_table() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = """
@@ -2063,7 +2058,7 @@ def test_parse_sql_to_lookml_dt_join_subquery_raw_table():
     assert "ordering_user_id" in dt_fields
 
 
-def test_parse_sql_to_lookml_star_and_modifiers():
+def test_parse_sql_to_lookml_star_and_modifiers() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = """
@@ -2222,7 +2217,7 @@ def test_parse_sql_to_lookml_star_and_modifiers():
         assert {f.field_name for f in v_gap.fields} == {"id", "email"}
 
 
-def test_parse_sql_to_lookml_aggregate_tables_and_explore_queries():
+def test_parse_sql_to_lookml_aggregate_tables_and_explore_queries() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = """
@@ -2352,7 +2347,7 @@ def test_parse_sql_to_lookml_aggregate_tables_and_explore_queries():
     }
 
 
-def test_parse_sql_to_lookml_property_level_impact_and_usages():
+def test_parse_sql_to_lookml_property_level_impact_and_usages() -> None:
     from lkr.parse import parse_sql_to_lookml
 
     lkml = """
@@ -2526,7 +2521,7 @@ view: summary {
     assert dg_u.datagroup_name == "orders_dg"
 
 
-def test_parse_lookml_separate_test_file(tmp_path: Path):
+def test_parse_lookml_separate_test_file(tmp_path: Path) -> None:
     model_file = tmp_path / "ecommerce.model.lkml"
     model_file.write_text(
         'connection: "test_db"\n'
@@ -2579,7 +2574,7 @@ def test_parse_lookml_separate_test_file(tmp_path: Path):
     assert "orders_pk_is_unique" in test_names
 
 
-def test_parse_sql_to_lookml_liquid_table_and_field_sql():
+def test_parse_sql_to_lookml_liquid_table_and_field_sql() -> None:
     from lkr.parse.sql_to_lookml import parse_sql_to_lookml
 
     lkml = """
@@ -2665,7 +2660,7 @@ view: share_of_net_return {
     assert "share_of_net_return.amount" in f_by_name["daily_net_return_rate"].via
 
 
-def test_parse_lookml_constants_quoted_unquoted_and_positions(tmp_path: Path):
+def test_parse_lookml_constants_quoted_unquoted_and_positions(tmp_path: Path) -> None:
     (tmp_path / "manifest.lkml").write_text(
         'project_name: "const_proj"\n'
         "constant: conn_name {\n"
@@ -2757,12 +2752,15 @@ def test_parse_lookml_constants_quoted_unquoted_and_positions(tmp_path: Path):
 
     # Verify source positions remain exact despite @{bq_dataset} expanding in length
     assert proj.positions is not None
-    v_pos = cast(Any, proj.positions.file["orders.view"])["view"]["orders"]
+    orders_pos = cast(
+        "dict[str, dict[str, dict[str, dict[str, dict[str, list[int]]]]]]",
+        proj.positions.file["orders.view"],
+    )["view"]["orders"]["dimension"]
     # dimension: status starts at 0-indexed line 17 (1-indexed line 18)
-    assert v_pos["dimension"]["status"]["$p"][0] == 17
+    assert orders_pos["status"]["$p"][0] == 17
 
 
-def test_parse_lookml_manifest_dependency_override_constants(tmp_path: Path):
+def test_parse_lookml_manifest_dependency_override_constants(tmp_path: Path) -> None:
     from lkr.parse import LookmlLocalDependency, LookmlRemoteDependency
 
     imp_dir = tmp_path / "imported_projects" / "core_hub"
@@ -2847,7 +2845,7 @@ def test_parse_lookml_manifest_dependency_override_constants(tmp_path: Path):
     assert (users_v.sql_table_name or "").strip() == "spoke_prod_schema.users"
 
 
-def test_parse_lookml_manifest_autodiscovery_and_cli_overrides(tmp_path: Path):
+def test_parse_lookml_manifest_autodiscovery_and_cli_overrides(tmp_path: Path) -> None:
     from lkr.parse import (
         parse_lookml_database_compare,
         parse_lookml_to_api,
@@ -2978,7 +2976,7 @@ def test_parse_lookml_manifest_autodiscovery_and_cli_overrides(tmp_path: Path):
     assert db_cmp.tables[0].connection == "db_cmp_conn"
 
 
-def test_lookml_to_api_duplicate_field_logic_and_count_star_matching(tmp_path: Path):
+def test_lookml_to_api_duplicate_field_logic_and_count_star_matching(tmp_path: Path) -> None:
     from typer.testing import CliRunner
 
     from lkr.main import app
@@ -3090,7 +3088,7 @@ def test_lookml_to_api_duplicate_field_logic_and_count_star_matching(tmp_path: P
     assert eq.coverage == "exact"
 
 
-def test_parse_lookml_to_api_exclude_hidden_flag(tmp_path: Path):
+def test_parse_lookml_to_api_exclude_hidden_flag(tmp_path: Path) -> None:
     from typer.testing import CliRunner
 
     from lkr.main import app
@@ -3169,7 +3167,7 @@ def test_parse_lookml_to_api_exclude_hidden_flag(tmp_path: Path):
     assert meas_names == ["orders.count"]
 
 
-def test_lookml_to_api_alias_expansion_and_collision_validation(tmp_path: Path):
+def test_lookml_to_api_alias_expansion_and_collision_validation(tmp_path: Path) -> None:
     from typer.testing import CliRunner
 
     from lkr.main import app
@@ -3244,7 +3242,7 @@ def test_lookml_to_api_alias_expansion_and_collision_validation(tmp_path: Path):
     assert by_alias["orders.rev"]["fields"] == ["orders.rev_a", "orders.rev_b"]
 
 
-def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
+def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path) -> None:
     from typer.testing import CliRunner
 
     from lkr.main import app
@@ -3557,11 +3555,9 @@ def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
     )
 
     # 9. sql-lookml-compare --offline skips live Looker sandbox lookups
-    import pytest
-
     import lkr.parse.sql_to_lookml as s2l
 
-    def _fail(*_a, **_kw):
+    def _fail(*_a: object, **_kw: object) -> NoReturn:
         raise AssertionError("live lookup called")
 
     with pytest.MonkeyPatch.context() as mp:
@@ -3583,7 +3579,7 @@ def test_count_pk_coverage_and_raw_sql_aggregate_validation(tmp_path: Path):
         )
 
 
-def test_sql_lookml_compare_refinement_file_attribution_and_compact(tmp_path: Path):
+def test_sql_lookml_compare_refinement_file_attribution_and_compact(tmp_path: Path) -> None:
     import json
 
     from typer.testing import CliRunner
@@ -3656,7 +3652,7 @@ def test_sql_lookml_compare_refinement_file_attribution_and_compact(tmp_path: Pa
     assert "explores" not in rev_fld
 
 
-def test_iter3_value_format_validation_compact_explores_and_diff_tests(tmp_path: Path):
+def test_iter3_value_format_validation_compact_explores_and_diff_tests(tmp_path: Path) -> None:
     import importlib.util
     import json
 
@@ -3781,7 +3777,7 @@ def test_iter3_value_format_validation_compact_explores_and_diff_tests(tmp_path:
 
 def test_validate_join_all_fields_base_path_cross_explore_and_scratch_ignore(
     tmp_path: Path,
-):
+) -> None:
     from typer.testing import CliRunner
 
     from lkr.main import app
@@ -3852,7 +3848,7 @@ def test_validate_join_all_fields_base_path_cross_explore_and_scratch_ignore(
     assert scoped_res.exit_code == 0, scoped_res.output
 
 
-def test_compact_sql_to_lookml_pk_type_hidden_via_and_dedup_tests():
+def test_compact_sql_to_lookml_pk_type_hidden_via_and_dedup_tests() -> None:
     import json
 
     from typer.testing import CliRunner
@@ -3900,7 +3896,7 @@ def test_compact_sql_to_lookml_pk_type_hidden_via_and_dedup_tests():
     assert "tests" in q0 and "tests" not in q1 and "tests" not in q2
 
 
-def test_compact_sql_to_lookml_ndt_count_extends_dedup_and_count_ratio_prune():
+def test_compact_sql_to_lookml_ndt_count_extends_dedup_and_count_ratio_prune() -> None:
     import json
 
     from typer.testing import CliRunner
@@ -3963,7 +3959,7 @@ def test_compact_sql_to_lookml_ndt_count_extends_dedup_and_count_ratio_prune():
     assert eqs[0]["matched_fields"] == ["events.session_id", "events.count"]
 
 
-def test_compact_sql_to_lookml_pk_count_join_filter_and_precedent_pruning():
+def test_compact_sql_to_lookml_pk_count_join_filter_and_precedent_pruning() -> None:
     import json
 
     from typer.testing import CliRunner
@@ -4055,7 +4051,7 @@ def test_compact_sql_to_lookml_pk_count_join_filter_and_precedent_pruning():
     assert [p["target_view"] for p in miss_orders.get("precedents", [])] == ["orders"]
 
 
-def test_cross_view_fields_exact_query_coverage_and_explore_oriented_inferred_rel():
+def test_cross_view_fields_exact_query_coverage_and_explore_oriented_inferred_rel() -> None:
     import json
 
     from typer.testing import CliRunner
@@ -4127,7 +4123,7 @@ def test_cross_view_fields_exact_query_coverage_and_explore_oriented_inferred_re
     assert unjoined_ja.status == "missing_join" and unjoined_ja.inferred_relationship == "many_to_one"
 
 
-def test_cte_dead_projection_pruning_count_alias_and_unnest_virtual_view():
+def test_cte_dead_projection_pruning_count_alias_and_unnest_virtual_view() -> None:
     import json
 
     from typer.testing import CliRunner
@@ -4203,7 +4199,7 @@ def test_cte_dead_projection_pruning_count_alias_and_unnest_virtual_view():
     assert [(eq["query_name"], eq["coverage"]) for eq in q2["explore_queries"]] == [("top_uri_segments", "exact")]
 
 
-def test_star_schema_transitive_pk_fk_join_analysis_and_explore_queries():
+def test_star_schema_transitive_pk_fk_join_analysis_and_explore_queries() -> None:
     import json
 
     from typer.testing import CliRunner
@@ -4274,7 +4270,7 @@ def test_star_schema_transitive_pk_fk_join_analysis_and_explore_queries():
     assert ja1["proj.ds.users INNER proj.ds.users"]["status"] == "missing_join"
 
 
-def test_compact_sql_lookml_compare_prunes_via_measures_on_row_queries():
+def test_compact_sql_lookml_compare_prunes_via_measures_on_row_queries() -> None:
     from typer.testing import CliRunner
 
     from lkr.main import app
@@ -4323,7 +4319,7 @@ def test_compact_sql_lookml_compare_prunes_via_measures_on_row_queries():
     assert ("measure", "avg_age") in cte_fields
 
 
-def test_lookml_to_api_validate_handles_liquid_date_and_elsif_sql():
+def test_lookml_to_api_validate_handles_liquid_date_and_elsif_sql() -> None:
     lkml = """
     connection: "bq"
     view: users {
@@ -4350,7 +4346,7 @@ def test_lookml_to_api_validate_handles_liquid_date_and_elsif_sql():
     assert "MEDIAN" in res.output
 
 
-def test_lookml_to_api_validate_rejects_raw_derived_table_sql_table_name():
+def test_lookml_to_api_validate_rejects_raw_derived_table_sql_table_name() -> None:
     good_lkml = """
     connection: "bq"
     view: orders {
@@ -4404,7 +4400,7 @@ def test_lookml_to_api_validate_rejects_raw_derived_table_sql_table_name():
     assert errs["helper_dt"]["fields"] == ["proj.ds.raw_helper"]
 
 
-def test_dimension_group_chrg_month_passes_schema_validate(tmp_path: Path):
+def test_dimension_group_chrg_month_passes_schema_validate(tmp_path: Path) -> None:
     lkml = """
     connection: "bq"
     view: t {

@@ -3,10 +3,11 @@
 import importlib.util
 import json
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, cast
+from types import ModuleType, SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock, patch
 
+from looker_sdk import models40 as mdls
 from looker_sdk.rtl.auth_session import AuthSession
 from looker_sdk.rtl.transport import Transport
 from typer.testing import CliRunner
@@ -23,7 +24,7 @@ CURATION_SCRIPTS_DIR = REPO_ROOT / "skills" / "lookml-field-curation" / "scripts
 runner = CliRunner()
 
 
-def _load_module(name: str, path: Path) -> Any:
+def _load_module(name: str, path: Path) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
@@ -37,7 +38,7 @@ class _DummyAuth:
         self.settings.base_url = "https://example.looker.com"
         self.settings.agent_tag = "test"
 
-    def authenticate(self, request: Any) -> Any:
+    def authenticate(self, request: object) -> object:
         return request
 
 
@@ -45,15 +46,19 @@ class _CurationMockSDK(ExtendedLooker40SDK):
     def __init__(self) -> None:
         super().__init__(
             auth=cast(AuthSession, _DummyAuth()),
-            deserialize=cast(Any, MagicMock()),
-            serialize=cast(Any, MagicMock()),
+            deserialize=MagicMock(),
+            serialize=MagicMock(),
             transport=cast(Transport, MagicMock()),
             api_version="4.0",
         )
         self._sql_queries: dict[str, str] = {}
 
     def run_inline_query(
-        self, result_format: str = "json", body: Any = None, *args: Any, **kwargs: Any
+        self,
+        result_format: str = "json",
+        body: object = None,
+        *args: object,
+        **kwargs: object,
     ) -> str:
         b = body if isinstance(body, dict) else {}
         fields = b.get("fields") or [""]
@@ -100,14 +105,16 @@ class _CurationMockSDK(ExtendedLooker40SDK):
             )
         return json.dumps([{f: f"ID-{i:04d}"} for i in range(1, 150)])
 
-    def create_sql_query(self, body: Any = None, *args: Any, **kwargs: Any) -> Any:
+    def create_sql_query(
+        self, body: object = None, *args: object, **kwargs: object
+    ) -> mdls.SqlQuery:
         b = body if isinstance(body, dict) else {}
         slug = f"slug_{len(self._sql_queries) + 1}"
         self._sql_queries[slug] = str(b.get("sql") or "")
-        return {"slug": slug}
+        return cast("mdls.SqlQuery", {"slug": slug})
 
     def run_sql_query(
-        self, slug: str, result_format: str = "json", *args: Any, **kwargs: Any
+        self, slug: str, result_format: str = "json", *args: object, **kwargs: object
     ) -> str:
         sql = self._sql_queries.get(slug, "")
         if "INFORMATION_SCHEMA.COLUMNS" in sql:
@@ -486,25 +493,50 @@ def test_project_helper_consolidated_monty_scripts() -> None:
     deploy_src = (helper_dir / "deploy_and_reset_workspace.py").read_text(encoding="utf-8")
 
     class _ProjectMockSDK(_CurationMockSDK):
-        def project(self, project_id: str, *args: Any, **kwargs: Any) -> Any:
-            return {"id": project_id, "uses_git": True, "git_remote_url": None}
+        def project(
+            self, project_id: str, *args: object, **kwargs: object
+        ) -> mdls.Project:
+            return cast(
+                "mdls.Project",
+                {"id": project_id, "uses_git": True, "git_remote_url": None},
+            )
 
-        def create_developer_copy(self, project_id: str, *args: Any, **kwargs: Any) -> Any:
-            return {"status": "ok"}
+        def create_developer_copy(
+            self, project_id: str, *args: object, **kwargs: object
+        ) -> str:
+            return cast("str", {"status": "ok"})
 
-        def all_lookml_models(self, *args: Any, **kwargs: Any) -> Any:
-            return [{"name": "demo_model", "allowed_db_connection_names": ["conn_a"]}]
+        def all_lookml_models(
+            self, *args: object, **kwargs: object
+        ) -> list[mdls.LookmlModel]:
+            return cast(
+                "list[mdls.LookmlModel]",
+                [{"name": "demo_model", "allowed_db_connection_names": ["conn_a"]}],
+            )
 
         def update_lookml_model(
-            self, lookml_model_name: str, body: Any = None, *args: Any, **kwargs: Any
-        ) -> Any:
-            return body
+            self,
+            lookml_model_name: str,
+            body: object = None,
+            *args: object,
+            **kwargs: object,
+        ) -> mdls.LookmlModel:
+            return cast("mdls.LookmlModel", body)
 
-        def validate_project(self, project_id: str, *args: Any, **kwargs: Any) -> Any:
-            return {"errors": []}
+        def validate_project(
+            self, project_id: str, *args: object, **kwargs: object
+        ) -> mdls.ProjectValidation:
+            return cast("mdls.ProjectValidation", {"errors": []})
 
-        def commit(self, project_id: str, body: Any = None, *args: Any, **kwargs: Any) -> Any:
-            return {"message": (body or {}).get("message")}
+        def commit(
+            self,
+            project_id: str,
+            body: object = None,
+            *args: object,
+            **kwargs: object,
+        ) -> str:
+            b = body if isinstance(body, dict) else {}
+            return cast("str", {"message": b.get("message")})
 
     with patch("lkr.codemode.main.get_mcp_sdk", return_value=_ProjectMockSDK()):
         ensure_out = json.loads(
@@ -524,13 +556,15 @@ def test_project_helper_consolidated_monty_scripts() -> None:
         assert deploy_out["status"] == "committed_without_deploy"
 
     # Also verify direct Python execution when Looker SDK returns model objects (non-dicts)
-    def _run_script_with_sdk_objects(path: Path, bindings: dict[str, Any]) -> Any:
+    def _run_script_with_sdk_objects(
+        path: Path, bindings: dict[str, object]
+    ) -> dict[str, object]:
         spec = importlib.util.spec_from_file_location(path.stem, path)
         assert spec is not None and spec.loader is not None
         mod = importlib.util.module_from_spec(spec)
         mod.__dict__.update(bindings)
         spec.loader.exec_module(mod)
-        return mod.main()
+        return cast("dict[str, object]", mod.main())
 
     ensure_obj_res = _run_script_with_sdk_objects(
         helper_dir / "ensure_project_and_model.py",

@@ -6,7 +6,7 @@ from lkr.tools.permission_deprecation import schedule_download_deprecation
 
 
 @pytest.fixture
-def mock_sdk():
+def mock_sdk() -> MagicMock:
     sdk = MagicMock()
     
     # Mock models
@@ -48,7 +48,9 @@ def mock_sdk():
     return sdk
 
 @patch("lkr.tools.permission_deprecation.get_auth")
-def test_user_scenario_with_access_data(mock_get_auth, mock_sdk):
+def test_user_scenario_with_access_data(
+    mock_get_auth: MagicMock, mock_sdk: MagicMock
+) -> None:
     mock_get_auth.return_value.get_current_sdk.return_value = mock_sdk
     
     # User 1: Role 1 (Target+Data on thelook), Role 2 (Data on finance)
@@ -67,7 +69,7 @@ def test_user_scenario_with_access_data(mock_get_auth, mock_sdk):
     user2.role_ids = ["4", "5"]
     user2.external_id = None
 
-    def search_side_effect(*args, **kwargs):
+    def search_side_effect(*args: object, **kwargs: object) -> list[MagicMock]:
         offset = kwargs.get('offset', 0)
         if offset == 0:
             return [user1, user2]
@@ -98,7 +100,9 @@ def test_user_scenario_with_access_data(mock_get_auth, mock_sdk):
     assert u2.model_permissions["finance"] is None
 
 @patch("lkr.tools.permission_deprecation.get_auth")
-def test_schedule_download_deprecation_admin(mock_get_auth, mock_sdk):
+def test_schedule_download_deprecation_admin(
+    mock_get_auth: MagicMock, mock_sdk: MagicMock
+) -> None:
     admin_role = MagicMock()
     admin_role.id = "admin_id"
     admin_role.permission_set.name = "Admin"
@@ -111,7 +115,7 @@ def test_schedule_download_deprecation_admin(mock_get_auth, mock_sdk):
     
     mock_sdk.all_roles.return_value = [admin_role]
     
-    def search_side_effect(*args, **kwargs):
+    def search_side_effect(*args: object, **kwargs: object) -> list[MagicMock]:
         offset = kwargs.get('offset', 0)
         if offset == 0:
             return [user]
@@ -134,7 +138,9 @@ def test_schedule_download_deprecation_admin(mock_get_auth, mock_sdk):
         assert result_unfiltered.rows[0].model_permissions[model] == []
 
 @patch("lkr.tools.permission_deprecation.get_auth")
-def test_schedule_download_deprecation_filtering_logic(mock_get_auth, mock_sdk):
+def test_schedule_download_deprecation_filtering_logic(
+    mock_get_auth: MagicMock, mock_sdk: MagicMock
+) -> None:
     mock_get_auth.return_value.get_current_sdk.return_value = mock_sdk
     
     # User A: Has missing permissions (Should always show)
@@ -158,7 +164,7 @@ def test_schedule_download_deprecation_filtering_logic(mock_get_auth, mock_sdk):
     user_c.role_ids = [] # No roles -> All N/A
     user_c.external_id = None
 
-    def search_side_effect(*args, **kwargs):
+    def search_side_effect(*args: object, **kwargs: object) -> list[MagicMock]:
         offset = kwargs.get('offset', 0)
         if offset == 0:
             return [user_a, user_b, user_c]

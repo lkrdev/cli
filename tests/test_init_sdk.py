@@ -1,4 +1,5 @@
 import sqlite3
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,7 +9,7 @@ from lkr.classes import LkrCtxObj, LookerApiKey
 from lkr_dev_cli import init_sdk
 
 
-def test_init_sdk_explicit_args(monkeypatch):
+def test_init_sdk_explicit_args(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_sdk = MagicMock()
     with patch("lkr.auth_service.init_api_key_sdk", return_value=mock_sdk) as mock_init:
         sdk = init_sdk(
@@ -30,7 +31,7 @@ def test_init_sdk_explicit_args(monkeypatch):
         assert use_prod is True
 
 
-def test_init_sdk_env_vars(monkeypatch):
+def test_init_sdk_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOOKERSDK_BASE_URL", "https://env.looker.com")
     monkeypatch.setenv("LOOKERSDK_CLIENT_ID", "env_id")
     monkeypatch.setenv("LOOKERSDK_CLIENT_SECRET", "env_secret")
@@ -48,7 +49,7 @@ def test_init_sdk_env_vars(monkeypatch):
         assert api_key.verify_ssl is False
 
 
-def test_api_key_api_settings():
+def test_api_key_api_settings() -> None:
     api_key = LookerApiKey(
         client_id="my_id",
         client_secret="my_secret",
@@ -63,7 +64,9 @@ def test_api_key_api_settings():
     assert config["verify_ssl"] == "false"
 
 
-def test_init_sdk_db_auth_fallback(tmp_path, monkeypatch):
+def test_init_sdk_db_auth_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("LOOKERSDK_BASE_URL", raising=False)
     monkeypatch.delenv("LOOKERSDK_CLIENT_ID", raising=False)
     monkeypatch.delenv("LOOKERSDK_CLIENT_SECRET", raising=False)
@@ -108,7 +111,9 @@ def test_init_sdk_db_auth_fallback(tmp_path, monkeypatch):
         mock_get_sdk.assert_called_once()
 
 
-def test_sqlite_auth_match_instance_name(tmp_path, monkeypatch):
+def test_sqlite_auth_match_instance_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     db_path = tmp_path / "auth.db"
     conn = sqlite3.connect(db_path)
     conn.execute(
@@ -145,7 +150,7 @@ def test_sqlite_auth_match_instance_name(tmp_path, monkeypatch):
         assert current_auth.base_url == "https://matchme.looker.com"
 
 
-def test_init_sdk_incomplete_api_key(monkeypatch):
+def test_init_sdk_incomplete_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LOOKERSDK_BASE_URL", raising=False)
     monkeypatch.delenv("LOOKERSDK_CLIENT_ID", raising=False)
     monkeypatch.delenv("LOOKERSDK_CLIENT_SECRET", raising=False)

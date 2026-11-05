@@ -14,19 +14,19 @@ runner = CliRunner()
 
 
 class MockUserAttribute:
-    def __init__(self, name: str):
+    def __init__(self, name: str) -> None:
         self.name = name
 
 
 class MockSDK:
-    def __init__(self, attribute_names: list[str]):
+    def __init__(self, attribute_names: list[str]) -> None:
         self._attrs = [MockUserAttribute(name) for name in attribute_names]
 
-    def all_user_attributes(self):
+    def all_user_attributes(self) -> list[MockUserAttribute]:
         return self._attrs
 
 
-def test_user_attributes_access_grant():
+def test_user_attributes_access_grant() -> None:
     lkml = """
     connection: "test_db"
 
@@ -46,7 +46,7 @@ def test_user_attributes_access_grant():
     assert ref.valid is None
 
 
-def test_user_attributes_access_filter():
+def test_user_attributes_access_filter() -> None:
     lkml = """
     explore: orders {
       access_filter: {
@@ -77,7 +77,7 @@ def test_user_attributes_access_filter():
     assert ref2.line == 9
 
 
-def test_user_attributes_liquid_syntax_variants():
+def test_user_attributes_liquid_syntax_variants() -> None:
     lkml = """
     explore: orders {
       sql_always_where: ${region} = '{{ _user_attributes["quote_region"] }}' ;;
@@ -136,7 +136,7 @@ def test_user_attributes_liquid_syntax_variants():
     assert html_ref.property == "html"
 
 
-def test_user_attributes_multiline_positions():
+def test_user_attributes_multiline_positions() -> None:
     lkml = """
     view: accounts {
       dimension: status {
@@ -158,7 +158,7 @@ def test_user_attributes_multiline_positions():
     assert tier_ref.line == 7
 
 
-def test_user_attributes_validation():
+def test_user_attributes_validation() -> None:
     lkml = """
     access_grant: sales_only {
       user_attribute: user_team
@@ -187,7 +187,7 @@ def test_user_attributes_validation():
     assert "Missing attributes on instance: secret_key" in text_output
 
 
-def test_user_attributes_empty():
+def test_user_attributes_empty() -> None:
     lkml = """
     view: plain {
       dimension: id {
@@ -204,7 +204,7 @@ def test_user_attributes_empty():
     )
 
 
-def test_user_attributes_cli_text_and_json(tmp_path: Path):
+def test_user_attributes_cli_text_and_json(tmp_path: Path) -> None:
     model_file = tmp_path / "app.model.lkml"
     model_file.write_text(
         """
@@ -259,7 +259,7 @@ def test_user_attributes_cli_text_and_json(tmp_path: Path):
     assert "tx_filter" in names
 
 
-def test_user_attributes_cli_errors(tmp_path: Path):
+def test_user_attributes_cli_errors(tmp_path: Path) -> None:
     # Non-existent path
     res_bad_path = runner.invoke(
         app,
@@ -283,7 +283,7 @@ def test_user_attributes_cli_errors(tmp_path: Path):
     assert res_bad_fmt.exit_code == 1
 
 
-def test_lookml_command_backward_compatibility(tmp_path: Path):
+def test_lookml_command_backward_compatibility(tmp_path: Path) -> None:
     view_file = tmp_path / "users.view.lkml"
     view_file.write_text(
         "view: users { dimension: id { type: number } }", encoding="utf-8"
@@ -298,14 +298,14 @@ def test_lookml_command_backward_compatibility(tmp_path: Path):
     assert "file" in parsed or "model" in parsed
 
 
-def test_user_attributes_validation_missing_context():
+def test_user_attributes_validation_missing_context() -> None:
     with pytest.raises(ValueError, match="No Looker context provided for --validate"):
         parse_user_attributes(
             lookml="access_grant: g { user_attribute: a }", validate=True
         )
 
 
-def test_user_attributes_lookml_filters():
+def test_user_attributes_lookml_filters() -> None:
     lkml = """
     explore: orders {
       always_filter: {
@@ -343,7 +343,7 @@ def test_user_attributes_lookml_filters():
     assert by_name["dept_filter"].property == "filters[orders.department]"
 
 
-def test_user_attributes_lookml_dashboard(tmp_path: Path):
+def test_user_attributes_lookml_dashboard(tmp_path: Path) -> None:
     dash_file = tmp_path / "overview.dashboard.lookml"
     dash_file.write_text(
         """- dashboard: executive_overview
@@ -388,7 +388,7 @@ def test_user_attributes_lookml_dashboard(tmp_path: Path):
     assert region_ref.line == 18
 
 
-def test_user_attributes_dashboard_json_shapes(tmp_path: Path):
+def test_user_attributes_dashboard_json_shapes(tmp_path: Path) -> None:
     # Shape 1: Single DashboardFilter object
     single_filter = {
         "name": "Region",

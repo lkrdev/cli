@@ -722,6 +722,31 @@ fn main() {
             return_type: "list[dict[str, Any]]".to_string(),
             output_fields: vec![],
         },
+        OperationMeta {
+            name: "profile_fields".to_string(),
+            http_method: "CUSTOM".to_string(),
+            path: "/queries/run/json_detail".to_string(),
+            doc: "Profile Explore fields across string, number, yesno, and datetime types with subtypes, spikiness, and LookML curation tags.".to_string(),
+            params: vec![
+                ParamMeta { name: "body".into(), location: "custom".into(), required: false, type_str: "WriteQuery | dict[str, Any] | None".into() },
+                ParamMeta { name: "model".into(), location: "custom".into(), required: false, type_str: "str | None".into() },
+                ParamMeta { name: "view".into(), location: "custom".into(), required: false, type_str: "str | None".into() },
+                ParamMeta { name: "fields".into(), location: "custom".into(), required: false, type_str: "list[str] | None".into() },
+                ParamMeta { name: "filters".into(), location: "custom".into(), required: false, type_str: "dict[str, str] | None".into() },
+                ParamMeta { name: "types_only".into(), location: "custom".into(), required: false, type_str: "bool".into() },
+                ParamMeta { name: "group_fields".into(), location: "custom".into(), required: false, type_str: "bool".into() },
+                ParamMeta { name: "limit".into(), location: "custom".into(), required: false, type_str: "int | str".into() },
+                ParamMeta { name: "transport_options".into(), location: "options".into(), required: false, type_str: "TransportOptions | None".into() },
+            ],
+            return_type: "dict[str, Any]".to_string(),
+            output_fields: vec![
+                FieldMeta { name: "model".into(), type_str: "str".into() },
+                FieldMeta { name: "view".into(), type_str: "str".into() },
+                FieldMeta { name: "total_rows".into(), type_str: "int".into() },
+                FieldMeta { name: "type_buckets".into(), type_str: "dict[str, list[str]]".into() },
+                FieldMeta { name: "profiles".into(), type_str: "dict[str, dict[str, Any]]".into() },
+            ],
+        },
     ];
 
     for name in ["create_developer_copy", "developer_copy"] {

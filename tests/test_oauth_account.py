@@ -1,15 +1,16 @@
 import sqlite3
+from pathlib import Path
 
 import pytest
 import typer
 from looker_sdk.rtl.auth_token import AccessToken
 
 from lkr.auth_service import SqlLiteAuth
-from lkr.classes import LkrCtxObj
+from lkr.classes import LkrCtxObj, LookerApiKey
 
 
 @pytest.fixture
-def temp_db(tmp_path):
+def temp_db(tmp_path: Path) -> str:
     db_path = tmp_path / "auth.db"
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -63,7 +64,7 @@ def temp_db(tmp_path):
     return str(db_path)
 
 
-def test_get_current_auth_default(temp_db):
+def test_get_current_auth_default(temp_db: str) -> None:
     ctx = LkrCtxObj(force_oauth=False)
     auth_service = SqlLiteAuth(ctx, db_path=temp_db)
     curr = auth_service._get_current_auth()
@@ -72,7 +73,7 @@ def test_get_current_auth_default(temp_db):
     assert curr.access_token == "token-active"
 
 
-def test_get_current_auth_oauth_account(temp_db):
+def test_get_current_auth_oauth_account(temp_db: str) -> None:
     ctx = LkrCtxObj(force_oauth=False, oauth_account="target-inst")
     auth_service = SqlLiteAuth(ctx, db_path=temp_db)
     curr = auth_service._get_current_auth()
@@ -81,7 +82,7 @@ def test_get_current_auth_oauth_account(temp_db):
     assert curr.access_token == "token-target"
 
 
-def test_get_current_auth_oauth_account_not_found(temp_db):
+def test_get_current_auth_oauth_account_not_found(temp_db: str) -> None:
     ctx = LkrCtxObj(force_oauth=False, oauth_account="non-existent")
     auth_service = SqlLiteAuth(ctx, db_path=temp_db)
     with pytest.raises(typer.Exit) as exc_info:
@@ -89,7 +90,7 @@ def test_get_current_auth_oauth_account_not_found(temp_db):
     assert exc_info.value.exit_code == 1
 
 
-def test_set_token_refreshes_lookedup_account(temp_db):
+def test_set_token_refreshes_lookedup_account(temp_db: str) -> None:
     ctx = LkrCtxObj(force_oauth=False, oauth_account="target-inst")
     auth_service = SqlLiteAuth(ctx, db_path=temp_db)
     curr = auth_service._get_current_auth()
@@ -124,7 +125,7 @@ def test_set_token_refreshes_lookedup_account(temp_db):
     conn.close()
 
 
-def test_parse_auth_code_input():
+def test_parse_auth_code_input() -> None:
     from lkr.auth.oauth import parse_auth_code_input
 
     assert parse_auth_code_input("  raw-code-123  ") == "raw-code-123"
@@ -158,7 +159,9 @@ def test_parse_auth_code_input():
         )
 
 
-def test_oauth_api_settings_default_redirect_uri(monkeypatch):
+def test_oauth_api_settings_default_redirect_uri(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from lkr.auth_service import OAuthApiSettings
     from lkr.constants import OAUTH_REDIRECT_URI
 
@@ -175,7 +178,9 @@ def test_oauth_api_settings_default_redirect_uri(monkeypatch):
     )
 
 
-def test_oauth_pkce_localhost_callback_wins_race(monkeypatch):
+def test_oauth_pkce_localhost_callback_wins_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import socket
     import threading
     import time
@@ -196,7 +201,7 @@ def test_oauth_pkce_localhost_callback_wins_race(monkeypatch):
         port=free_port,
     )
 
-    def send_callback():
+    def send_callback() -> None:
         for _ in range(30):
             if oauth.server is not None:
                 break
@@ -219,7 +224,7 @@ def test_oauth_pkce_localhost_callback_wins_race(monkeypatch):
     assert oauth.server is None
 
 
-def test_oauth_pkce_stdin_paste_wins_race(monkeypatch):
+def test_oauth_pkce_stdin_paste_wins_race(monkeypatch: pytest.MonkeyPatch) -> None:
     import io
     import socket
 
@@ -246,7 +251,9 @@ def test_oauth_pkce_stdin_paste_wins_race(monkeypatch):
     assert oauth.server is None
 
 
-def test_refresh_token_under_2h_rotates_and_preserves_in_memory(temp_db, monkeypatch):
+def test_refresh_token_under_2h_rotates_and_preserves_in_memory(
+    temp_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from datetime import UTC, datetime, timedelta
 
     from lkr.auth_service import DbOAuthSession
@@ -308,7 +315,9 @@ def test_refresh_token_under_2h_rotates_and_preserves_in_memory(temp_db, monkeyp
     assert row2["refresh_expires_at"] > under_2h
 
 
-def test_add_access_token_and_reuse_isolated_dev_prod(temp_db, monkeypatch):
+def test_add_access_token_and_reuse_isolated_dev_prod(
+    temp_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from datetime import UTC, datetime, timedelta
     from unittest.mock import MagicMock
 
@@ -325,11 +334,13 @@ def test_add_access_token_and_reuse_isolated_dev_prod(temp_db, monkeypatch):
     switched_dev = []
     logged_out = []
 
-    def fake_init_api_key_sdk(api_key, use_production=True):
+    def fake_init_api_key_sdk(
+        api_key: LookerApiKey, use_production: bool = True
+    ) -> MagicMock:
         sdk = MagicMock()
         sdk.auth.use_production = use_production
 
-        def fake_login(*_args, **_kwargs):
+        def fake_login(*_args: object, **_kwargs: object) -> None:
             tok = tokens.pop(0)
             sdk.auth.token = AccessToken(
                 access_token=tok,
@@ -443,7 +454,9 @@ def test_add_access_token_and_reuse_isolated_dev_prod(temp_db, monkeypatch):
         auth_dev._get_current_auth()
 
 
-def test_add_access_token_env_vars_only_until_expiry(temp_db, monkeypatch):
+def test_add_access_token_env_vars_only_until_expiry(
+    temp_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from datetime import UTC, datetime, timedelta
     from unittest.mock import MagicMock
 
@@ -460,7 +473,9 @@ def test_add_access_token_env_vars_only_until_expiry(temp_db, monkeypatch):
 
     api_key_calls = []
 
-    def fake_init_api_key_sdk(api_key, use_production=True):
+    def fake_init_api_key_sdk(
+        api_key: LookerApiKey, use_production: bool = True
+    ) -> MagicMock:
         api_key_calls.append((api_key.client_id, use_production))
         sdk = MagicMock()
         sdk.auth.token = AccessToken(

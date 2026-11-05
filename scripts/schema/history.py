@@ -1,8 +1,10 @@
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, NotRequired, Protocol, TypedDict, cast
 
 import typer
+from looker_sdk.sdk.api40 import models as mdls
 
 from lkr.auth_service import get_auth
 from lkr.classes import LkrCtxObj
@@ -12,26 +14,53 @@ from lkr.schema.validator import validate_batch_queries
 DEFAULT_HISTORY_QUERY_SLUG = "eiMJQXpAgoXow2JId7whVy"
 
 
-def _to_dict(obj: Any) -> dict[str, Any]:
+class _HistorySDK(Protocol):
+    def query_for_slug(self, slug: str, /) -> object: ...
+    def run_inline_query(
+        self, result_format: str, body: mdls.WriteQuery, /
+    ) -> object: ...
+    def query(self, query_id: str, /) -> object: ...
+
+
+class HistoryLookupQuery(TypedDict):
+    model: str
+    view: str
+    fields: list[str]
+    filters: dict[str, str]
+    sorts: list[str]
+    limit: str
+    filter_expression: NotRequired[str]
+
+
+class HistoryValidationSummary(TypedDict):
+    model: str | None
+    explore: str | None
+    total_queries: int
+    valid_queries: int
+    invalid_queries: int
+    results: list[dict[str, object]]
+
+
+def _to_dict(obj: object) -> dict[str, object]:
     if isinstance(obj, dict):
-        return obj
+        return cast(dict[str, object], obj)
     from lkr.codemode.main import to_primitive
 
     res = to_primitive(obj)
-    return res if isinstance(res, dict) else {}
+    return cast(dict[str, object], res) if isinstance(res, dict) else {}
 
 
 def build_history_lookup_query(
     *,
-    base_query: dict[str, Any] | None = None,
+    base_query: Mapping[str, object] | None = None,
     model: str | None = None,
     explore: str | None = None,
     query_ids: list[int | str] | None = None,
     require_dynamic_fields: bool = False,
     limit: int = 50,
-) -> dict[str, Any]:
+) -> HistoryLookupQuery:
     """Build a system__activity::history WriteQuery starting from base_query (e.g. eiMJQXpAgoXow2JId7whVy)."""
-    base = dict(base_query) if isinstance(base_query, dict) else {}
+    base = dict(base_query) if isinstance(base_query, Mapping) else {}
     raw_fields = base.get("fields")
     fields: list[str] = (
         [str(f) for f in raw_fields if isinstance(f, str)]
@@ -49,8 +78,8 @@ def build_history_lookup_query(
             fields.append(required_field)
 
     raw_filters = base.get("filters")
-    filters: dict[str, Any] = (
-        dict(raw_filters)
+    filters: dict[str, str] = (
+        cast(dict[str, str], dict(raw_filters))
         if isinstance(raw_filters, dict)
         else {
             "history.status": "complete",
@@ -65,28 +94,30 @@ def build_history_lookup_query(
     if query_ids:
         filters["query.id"] = ",".join(str(qid) for qid in query_ids)
 
+    raw_sorts = base.get("sorts")
     sorts = (
-        base.get("sorts")
-        if isinstance(base.get("sorts"), list)
+        cast(list[str], raw_sorts)
+        if isinstance(raw_sorts, list)
         else ["query.id desc"]
     )
-    out: dict[str, Any] = {
-        "model": base.get("model") or "system__activity",
-        "view": base.get("view") or "history",
+    out: HistoryLookupQuery = {
+        "model": str(base.get("model") or "system__activity"),
+        "view": str(base.get("view") or "history"),
         "fields": fields,
         "filters": filters,
         "sorts": sorts,
         "limit": str(limit),
     }
+    raw_filter_expr = base.get("filter_expression")
     if require_dynamic_fields:
         out["filter_expression"] = "length(${query.dynamic_fields}) > 2"
-    elif isinstance(base.get("filter_expression"), str) and base["filter_expression"]:
-        out["filter_expression"] = base["filter_expression"]
+    elif isinstance(raw_filter_expr, str) and raw_filter_expr:
+        out["filter_expression"] = raw_filter_expr
     return out
 
 
 def resolve_history_queries(
-    sdk: Any,
+    sdk: _HistorySDK,
     *,
     model: str | None = None,
     explore: str | None = None,
@@ -94,7 +125,7 @@ def resolve_history_queries(
     history_slug: str | None = DEFAULT_HISTORY_QUERY_SLUG,
     require_dynamic_fields: bool = False,
     limit: int = 50,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """
     Reusable dev/refinement pipeline:
     1. Optionally fetches the template query (default `eiMJQXpAgoXow2JId7whVy`) from `system__activity::history`.
@@ -102,7 +133,7 @@ def resolve_history_queries(
        to resolve completed `query.id` -> `query.slug`.
     3. Calls `sdk.query(slug)` (`get_query`) for each resolved query.
     """
-    base_query: dict[str, Any] | None = None
+    base_query: dict[str, object] | None = None
     if history_slug and hasattr(sdk, "query_for_slug"):
         try:
             base_query = _to_dict(sdk.query_for_slug(history_slug))
@@ -118,14 +149,14 @@ def resolve_history_queries(
         limit=limit,
     )
 
-    from looker_sdk.sdk.api40 import models as mdls
-
     raw_rows = sdk.run_inline_query("json", mdls.WriteQuery(**lookup_body))
-    rows: list[dict[str, Any]] = (
-        json.loads(raw_rows) if isinstance(raw_rows, str) else list(raw_rows or [])
+    rows: list[dict[str, object]] = (
+        json.loads(raw_rows)
+        if isinstance(raw_rows, str)
+        else list(cast(Sequence[dict[str, object]], raw_rows or []))
     )
 
-    resolved: list[dict[str, Any]] = []
+    resolved: list[dict[str, object]] = []
     seen_ids: set[str] = set()
     for row in rows:
         if not isinstance(row, dict):
@@ -150,19 +181,19 @@ def resolve_history_queries(
 
 
 def validate_history_queries(
-    queries: list[dict[str, Any]],
-    schema: dict[str, Any],
-) -> dict[str, Any]:
+    queries: Sequence[Mapping[str, object]],
+    schema: Mapping[str, object],
+) -> HistoryValidationSummary:
     """
     Validate a batch of completed queries (either output of `resolve_history_queries`
     or raw `sdk.query(...)` dicts) against an Explore JSON Schema using the Rust batch validator.
     """
-    results: list[dict[str, Any]] = []
+    results: list[dict[str, object]] = []
     valid_count = 0
     invalid_count = 0
 
-    prepared: list[tuple[Any, Any, dict[str, Any]]] = []
-    batch_inputs: list[dict[str, Any] | str] = []
+    prepared: list[tuple[object, object, dict[str, object]]] = []
+    batch_inputs: list[dict[str, object] | str] = []
     for item in queries:
         raw_candidate = (
             item.get("raw_query")
@@ -171,15 +202,17 @@ def validate_history_queries(
             if isinstance(item.get("query"), dict)
             else item
         )
-        raw_q: dict[str, Any] = (
-            raw_candidate if isinstance(raw_candidate, dict) else {}
+        raw_q: dict[str, object] = (
+            cast(dict[str, object], raw_candidate)
+            if isinstance(raw_candidate, dict)
+            else {}
         )
         qid = item.get("query_id", item.get("id", raw_q.get("id")))
         slug = item.get("slug", raw_q.get("slug"))
         prepared.append((qid, slug, raw_q))
         batch_inputs.append({"body": raw_q})
 
-    batch_results = validate_batch_queries(batch_inputs, schema)
+    batch_results = validate_batch_queries(batch_inputs, dict(schema))
     for (qid, slug, raw_q), val_result in zip(
         prepared, batch_results, strict=False
     ):
@@ -203,18 +236,17 @@ def validate_history_queries(
             }
         )
 
-    body_props = (
-        schema.get("properties", {}).get("body", {}).get("properties", {})
-        if isinstance(schema.get("properties"), dict)
-        else {}
-    )
+    def _const_str(name: str) -> str | None:
+        cur: object = schema
+        for k in ("properties", "body", "properties", name, "const"):
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(k)
+        return cur if isinstance(cur, str) else None
+
     return {
-        "model": body_props.get("model", {}).get("const")
-        if isinstance(body_props.get("model"), dict)
-        else None,
-        "explore": body_props.get("view", {}).get("const")
-        if isinstance(body_props.get("view"), dict)
-        else None,
+        "model": _const_str("model"),
+        "explore": _const_str("view"),
         "total_queries": len(results),
         "valid_queries": valid_count,
         "invalid_queries": invalid_count,
@@ -293,8 +325,6 @@ def main(
         explore_data = json.loads(explore_file.read_text(encoding="utf-8"))
         schema_data = build_explore_query_schema(model, explore, explore_data)
     else:
-        from typing import cast
-
         from lkr.codemode.main import to_primitive
 
         explore_data = cast(
