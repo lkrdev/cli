@@ -1912,7 +1912,7 @@ def _finalize_field_profile(
         uuid_hits = sum(
             1
             for v in samples
-            if 32 <= len(s := (v.strip().lower().replace("-", "") if len(v.strip()) == 36 and v.strip()[8::5] == "----" else v.strip().lower())) <= 64
+            if 32 <= len(s := (v.strip().lower().replace("-", "") if len(v.strip()) == 36 and v.strip()[8:24:5] == "----" else v.strip().lower())) <= 64
             and all(c in "0123456789abcdef" for c in s)
         )
         email_hits = sum(1 for v in samples if "@" in v and "." in v.split("@", 1)[-1])
@@ -2360,7 +2360,8 @@ def profile_fields(
                 },
                 "zero_count": _to_int(_cell_val(totals.get(f"{p}zero"))),
                 "negative_count": _to_int(_cell_val(totals.get(f"{p}neg"))),
-                "all_integers": bool(num_samples) and all(float(int(x)) == x for x in num_samples),
+                # ponytail: Monty float lacks .is_integer(); x % 1 == 0 is NaN/Inf-safe
+                "all_integers": bool(num_samples) and all(x % 1 == 0 for x in num_samples),
                 "top_values": top_values[:10],
             })
         elif rt == "yesno":
@@ -2409,6 +2410,18 @@ def profile_fields(
                 for r in d_rows[:50]
             )
 
+    def _grain_dim(
+        dg_map: dict[str, str],
+        dt_dyn: list[dict[str, object]],
+        sfx: str,
+        fallback: str,
+        expr: str,
+    ) -> str:
+        if found := dg_map.get(sfx):
+            return found
+        dt_dyn.append({"dimension": fallback, "expression": expr})
+        return fallback
+
     for dn in dt_dims:
         d_obj = dims_by_name[dn]
         dtype = str(d_obj.get("type") or "date_date")
@@ -2434,28 +2447,16 @@ def profile_fields(
             ])
             dt_m_names.extend(["_dt_min_d", "_dt_max_d"])
 
-        def _grain_dim(
-            sfx: str,
-            fallback: str,
-            expr: str,
-            _dg: dict[str, str] = dg_map,
-            _dyn: list[dict[str, object]] = dt_dyn,
-        ) -> str:
-            if found := _dg.get(sfx):
-                return found
-            _dyn.append({"dimension": fallback, "expression": expr})
-            return fallback
-
         subtotals_list: list[str] = []
         if is_time_grain:
-            day_f = _grain_dim("date", "_dt_day_dim", f"trunc_days({ref})")
-            hr_f = _grain_dim("hour", "_dt_hour_dim", f"trunc_hours({ref})")
+            day_f = _grain_dim(dg_map, dt_dyn, "date", "_dt_day_dim", f"trunc_days({ref})")
+            hr_f = _grain_dim(dg_map, dt_dyn, "hour", "_dt_hour_dim", f"trunc_hours({ref})")
             expanded_dims = _uniq([day_f, hr_f])
             subtotals_list = [day_f] if len(expanded_dims) > 1 else []
             grain_map = [("day", day_f), ("hour", hr_f)]
         elif is_date_grain:
-            yr_f = _grain_dim("year", "_dt_year_dim", f"extract_years({ref})")
-            mo_f = _grain_dim("month", "_dt_month_dim", f"trunc_months({ref})")
+            yr_f = _grain_dim(dg_map, dt_dyn, "year", "_dt_year_dim", f"extract_years({ref})")
+            mo_f = _grain_dim(dg_map, dt_dyn, "month", "_dt_month_dim", f"trunc_months({ref})")
             day_f = dg_map.get("date") or dn
             expanded_dims = _uniq([yr_f, mo_f, day_f])
             subtotals_list = expanded_dims[:-1]
