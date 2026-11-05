@@ -681,7 +681,10 @@ def validate_merge_query(
 
     def _parse_dyn(raw: object) -> list[dict[str, object]]:
         if isinstance(raw, str):
-            raw = json.loads(raw)
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                return []
         return [d for d in raw if isinstance(d, dict)] if isinstance(raw, list) else []
 
     def _dyn_names(items: list[dict[str, object]]) -> set[str]:

@@ -1650,12 +1650,15 @@ def execute_looker_query(spec, transport_options=None):
         sec_rows = sub_results[idx]
         lookup = {}
         for sr in sec_rows:
-            lookup.setdefault(tuple(str(sr.get(m["source_field_name"])) for m in mfields), []).append(sr)
+            raw_key = tuple(sr.get(m["source_field_name"]) for m in mfields)
+            if None not in raw_key:
+                lookup.setdefault(tuple(str(k) for k in raw_key), []).append(sr)
 
         null_pad = dict.fromkeys(sec_rows[0]) if sec_rows else {}
         next_merged = []
         for pr in merged_rows:
-            if matches := lookup.get(tuple(str(pr.get(m["field_name"])) for m in mfields)):
+            raw_key = tuple(pr.get(m["field_name"]) for m in mfields)
+            if None not in raw_key and (matches := lookup.get(tuple(str(k) for k in raw_key))):
                 for sr in matches:
                     next_merged.append({**sr, **pr})
             elif join_type != "inner":
