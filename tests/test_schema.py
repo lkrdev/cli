@@ -5,7 +5,13 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from lkr.main import app
-from lkr.schema import build_explore_query_schema, validate_query
+from lkr.schema import (
+    build_explore_query_schema,
+    build_schema_context,
+    execute_looker_query,
+    validate_merge_query,
+    validate_query,
+)
 from lkr.schema.builder import build_query_body_schema
 from lkr.schema.dynamic_fields import (
     build_custom_dimension_schema,
@@ -1014,6 +1020,319 @@ def test_py_explore_validator_windows_fallback_and_parity(monkeypatch, tmp_path:
     p_reg = mcp_utils.get_connection_registry_file("table", "https://acme.cloud.looker.com:19999")
     assert ":" not in p_search.name and "/" not in p_search.name and p_search.exists()
     assert ":" not in p_reg.name and "/" not in p_reg.name
+
+
+def test_dynamic_fields_sync_and_filter_coercion_parity():
+    import lkr.schema.validator as val_mod
+
+    explore_data = {
+        "fields": {
+            "dimensions": [
+                {"name": "order_items.status", "type": "string", "hidden": False},
+                {"name": "order_items.created_date", "type": "date_date", "hidden": False},
+                {"name": "order_items.created_year", "type": "date_year", "hidden": False},
+                {"name": "order_items.sale_price", "type": "number", "hidden": False},
+            ],
+            "measures": [
+                {"name": "order_items.total_sale_price", "type": "sum", "hidden": False},
+            ],
+            "filters": [],
+            "parameters": [],
+        }
+    }
+    schema = build_explore_query_schema("thelook", "order_items", explore_data)
+    schema_json = json.dumps(schema, sort_keys=True)
+    py_val = val_mod._PyExploreValidator(schema_json)
+
+    query_payload = {
+        "fields": ["pct_of_rev"],
+        "filters": {
+            "order_items.created_year": ">=2024",
+            "order_items.sale_price": "10 to 50",
+            "order_items.status": "NOT NULL",
+        },
+        "dynamic_fields": [
+            {
+                "dimension": "price_bucket",
+                "expression": 'if(${order_items.sale_price} >= 100, "High", "Low")',
+            },
+            {
+                "measure": "returned_rev",
+                "based_on": "order_items.sale_price",
+                "type": "sum",
+                "filter_expression": "",
+                "filters": {
+                    "order_items.status": "IS NULL",
+                    "order_items.created_year": "<=2024",
+                },
+            },
+            {
+                "table_calculation": "pct_of_rev",
+                "expression": "${returned_rev} / ${order_items.total_sale_price}",
+            },
+        ],
+    }
+
+    res = validate_query(query_payload, schema)
+    assert res.valid is True, res.errors
+    assert res.normalized_query is not None
+    body = res.normalized_query["body"]
+    # TableCalculation removed from fields; CustomDimension, CustomMeasure, and referenced static measure auto-injected
+    assert body["fields"] == ["price_bucket", "returned_rev", "order_items.total_sale_price"]
+    assert body["filters"] == {
+        "order_items.created_date": "after 2024-01-01",
+        "order_items.sale_price": "[10, 50]",
+        "order_items.status": "-NULL",
+    }
+    dyn = json.loads(body["dynamic_fields"])
+    assert dyn[0]["label"] == "price_bucket"
+    assert dyn[1]["label"] == "returned_rev"
+    assert "filter_expression" not in dyn[1]
+    assert dyn[1]["filters"] == {
+        "order_items.status": "NULL",
+        "order_items.created_date": "before 2024-12-31",
+    }
+    assert dyn[2]["label"] == "pct_of_rev"
+
+    # Additional filter coercion patterns (BETWEEN, >YYYY-MM-DD, <=YYYY-MM-DD)
+    res2 = validate_query(
+        {
+            "fields": ["order_items.status"],
+            "filters": {
+                "order_items.created_date": "BETWEEN '2024-01-01' AND '2024-06-30'",
+                "order_items.sale_price": "BETWEEN 5 AND 25.5",
+                "order_items.status": "!= NULL",
+            },
+        },
+        schema,
+    )
+    assert res2.valid is True, res2.errors
+    assert res2.normalized_query is not None
+    assert res2.normalized_query["body"]["filters"] == {
+        "order_items.created_date": "2024-01-01 to 2024-06-30",
+        "order_items.sale_price": "[5, 25.5]",
+        "order_items.status": "-NULL",
+    }
+
+    # Verify byte-for-byte parity between Python and Rust validators on normalization
+    serialized = [json.dumps(query_payload), json.dumps({"fields": ["order_items.status"], "filters": {"order_items.created_date": ">2024-03-01"}})]
+    py_out = py_val.validate_batch_json(serialized)
+    if val_mod._schema_rs is not None:
+        rs_val = val_mod._schema_rs.RustExploreValidator(schema_json)
+        rs_out = rs_val.validate_batch_json(serialized)
+        for (p_ok, p_err, p_warn, p_norm), (r_ok, r_err, r_warn, r_norm) in zip(py_out, rs_out, strict=True):
+            assert p_ok == r_ok
+            assert p_err == r_err
+            assert p_warn == r_warn
+            assert p_norm is not None and r_norm is not None
+            assert json.loads(p_norm) == json.loads(r_norm)
+
+
+def test_validate_merge_query_and_execute_looker_query():
+    explores_map = {
+        "order_items": {
+            "name": "order_items",
+            "view_name": "order_items",
+            "joins": [{"name": "products", "relationship": "many_to_one", "sql_on": "${order_items.product_id} = ${products.id}"}],
+            "fields": {
+                "dimensions": [
+                    {"name": "products.category", "type": "string", "hidden": False},
+                    {"name": "order_items.status", "type": "string", "hidden": False},
+                ],
+                "measures": [
+                    {"name": "order_items.total_sale_price", "type": "sum", "hidden": False},
+                ],
+            },
+        },
+        "inventory_items": {
+            "name": "inventory_items",
+            "view_name": "inventory_items",
+            "joins": [{"name": "products", "relationship": "many_to_one", "sql_on": "${inventory_items.product_id} = ${products.id}"}],
+            "fields": {
+                "dimensions": [
+                    {"name": "products.category", "type": "string", "hidden": False},
+                ],
+                "measures": [
+                    {"name": "inventory_items.count", "type": "count", "hidden": False},
+                ],
+            },
+        },
+    }
+
+    # 1. Single-query fallback across candidate_explores when Explore 'view' is initially wrong
+    single_res = validate_merge_query(
+        {"view": "wrong_explore", "fields": ["inventory_items.count"]},
+        "thelook",
+        explores_map,
+        candidate_explores=["order_items", "inventory_items"],
+    )
+    assert single_res.valid is True
+    assert single_res.normalized_query is not None
+    assert single_res.normalized_query["body"]["view"] == "inventory_items"
+
+    # 2. Multi-Explore source_queries validation with shared-key inference & auto-injection
+    merge_payload = {
+        "source_queries": [
+            {
+                "name": "sales",
+                "view": "order_items",
+                "fields": ["products.category", "order_items.total_sale_price"],
+            },
+            {
+                "name": "stock",
+                "view": "inventory_items",
+                "fields": ["products.category", "inventory_items.count"],
+            },
+        ],
+        "join_type": "left",
+        "sorts": ["order_items.total_sale_price desc"],
+        "limit": "5",
+    }
+    merge_res = validate_merge_query(merge_payload, "thelook", explores_map)
+    assert merge_res.valid is True, merge_res.errors
+    norm = merge_res.normalized_query
+    assert norm is not None
+    assert norm["source_queries"][1]["merge_fields"] == [
+        {"source_field_name": "products.category", "field_name": "products.category"}
+    ]
+
+    # 3. Execute single and merged queries via mock SDK
+    class FakeSDK:
+        def run_inline_query(self, result_format, body, limit=None):
+            view = body["view"]
+            if view == "order_items":
+                return json.dumps([
+                    {"products.category": "Jeans", "order_items.total_sale_price": 120.0},
+                    {"products.category": "Accessories", "order_items.total_sale_price": 300.0},
+                ])
+            return json.dumps([
+                {"products.category": "Accessories", "inventory_items.count": 50},
+            ])
+
+    sdk = FakeSDK()
+    rows = execute_looker_query(sdk, norm)
+    assert len(rows) == 2
+    assert rows[0]["products.category"] == "Accessories"
+    assert rows[0]["inventory_items.count"] == 50
+    assert rows[1]["products.category"] == "Jeans"
+    assert rows[1]["inventory_items.count"] is None
+
+    # Inner join + limit 1
+    norm_inner = {**norm, "join_type": "inner", "limit": "1"}
+    rows_inner = execute_looker_query(sdk, norm_inner)
+    assert len(rows_inner) == 1
+    assert rows_inner[0]["products.category"] == "Accessories"
+
+    # Single query execution
+    single_rows = execute_looker_query(sdk, single_res.normalized_query)
+    assert len(single_rows) == 1
+
+    # Invalid merge query cases
+    bad_merge = validate_merge_query(
+        {"source_queries": [{"view": "order_items", "fields": ["products.category"]}], "join_type": "outer"},
+        "thelook",
+        explores_map,
+    )
+    assert bad_merge.valid is False
+    assert any("at least 2" in e for e in bad_merge.errors)
+    assert any("join_type" in e for e in bad_merge.errors)
+
+
+def test_build_schema_context_and_cli_commands(tmp_path: Path):
+    explores_list = [
+        {
+            "name": "order_items",
+            "label": "Order Items",
+            "description": "Order line items and revenue",
+            "view_name": "order_items",
+            "joins": [
+                {"name": "products", "relationship": "many_to_one", "sql_on": "${order_items.product_id} = ${products.id}"},
+                {"name": "users", "relationship": "many_to_one", "sql_on": "${order_items.user_id} = ${users.id}"},
+            ],
+            "fields": {
+                "dimensions": [
+                    {"name": "products.category", "type": "string", "label": "Category", "hidden": False},
+                    {"name": "users.id", "type": "number", "label": "User ID", "hidden": False},
+                ],
+                "measures": [
+                    {"name": "order_items.total_sale_price", "type": "sum", "label": "Total Revenue", "hidden": False},
+                ],
+            },
+        },
+        {
+            "name": "inventory_items",
+            "label": "Inventory Items",
+            "description": "Warehouse stock and inventory counts",
+            "view_name": "inventory_items",
+            "joins": [
+                {"name": "products", "relationship": "many_to_one", "sql_on": "${inventory_items.product_id} = ${products.id}"},
+            ],
+            "fields": {
+                "dimensions": [
+                    {"name": "products.category", "type": "string", "label": "Category", "hidden": False},
+                ],
+                "measures": [
+                    {"name": "inventory_items.count", "type": "count", "label": "Inventory Count", "hidden": False},
+                ],
+            },
+        },
+    ]
+
+    ctx = build_schema_context("thelook", explores_list, prompt="revenue and warehouse inventory count by category")
+    assert ctx["model"] == "thelook"
+    assert len(ctx["explores"]) == 2
+    assert {"field_name": "products.category", "source_field_name": "products.category"} in ctx["candidate_merge_keys"]
+    assert ctx["explores"]["order_items"]["base_view"] == "order_items"
+
+    explores_file = tmp_path / "explores.json"
+    explores_file.write_text(json.dumps(explores_list))
+
+    # CLI: lkr schema context
+    ctx_res = runner.invoke(
+        app,
+        [
+            "schema",
+            "context",
+            "--model",
+            "thelook",
+            "--explore-file",
+            str(explores_file),
+            "--prompt",
+            "inventory count by category",
+        ],
+    )
+    assert ctx_res.exit_code == 0, ctx_res.output
+    parsed_ctx = json.loads(ctx_res.stdout)
+    assert parsed_ctx["model"] == "thelook"
+    assert next(iter(parsed_ctx["explores"])) == "inventory_items"
+
+    # CLI: lkr schema validate with source_queries
+    merge_query_json = json.dumps(
+        {
+            "source_queries": [
+                {"view": "order_items", "fields": ["products.category", "order_items.total_sale_price"]},
+                {"view": "inventory_items", "fields": ["products.category", "inventory_items.count"]},
+            ],
+            "sorts": ["order_items.total_sale_price desc"],
+        }
+    )
+    val_res = runner.invoke(
+        app,
+        [
+            "schema",
+            "validate",
+            "--model",
+            "thelook",
+            "--explore-file",
+            str(explores_file),
+            "--query",
+            merge_query_json,
+        ],
+    )
+    assert val_res.exit_code == 0, val_res.output
+    parsed_val = json.loads(val_res.stdout)
+    assert parsed_val["valid"] is True
+
 
 
 

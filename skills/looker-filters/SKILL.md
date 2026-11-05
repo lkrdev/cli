@@ -216,6 +216,11 @@ rows = json.loads(run_inline_query(result_format="json", body=body))
 
 - **Dashboard filter SDK methods & `.dashboard.lookml`:** Use `create_dashboard_filter(body=...)` / `update_dashboard_filter(dashboard_filter_id=..., body=...)` (`"default_value"` takes a Filter Expression string) and wire tiles via `listen` on `create_dashboard_element` / `update_dashboard_element` (or `filters:` + `listen:` in `.dashboard.lookml`).
 
+### 4. Grouping-Dimension Filter Hygiene
+
+- **Never turn `GROUP BY` bucket descriptions into `filters`:** When a prompt names example categories or tier labels in parentheses to describe a breakdown (e.g., *"break down by loyalty tier (Bronze, Silver, Gold)"* or *"by age tier (Under 30, 30-50, 50+)"*), project that dimension in `body["fields"]` (`GROUP BY`) without adding it to `body["filters"]`. Only filter on a grouping dimension when the prompt explicitly asks to restrict rows (`"only"`, `"where"`, `"for"`, `"excluding"`).
+- **Never add speculative `"-NULL"` filters:** Only add `"view.field": "-NULL"` when the user or prompt explicitly asks to exclude nulls/missing values.
+
 ## Public references
 
 - [Looker filter expressions](https://docs.cloud.google.com/looker/docs/filter-expressions)

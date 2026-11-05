@@ -747,7 +747,7 @@ def lookml_to_api_command(
         bool,
         typer.Option(
             "--validate",
-            help="Fail with non-zero exit code on duplicate field logic, alias collisions, unknown value_format_name, '* 100' paired with literal '%' value_format, or raw percentile/stddev/variance SQL in type: number measures",
+            help="Fail with non-zero exit code on duplicate field logic, alias collisions, unknown value_format_name, '* 100' paired with literal '%' value_format, raw percentile/stddev/variance SQL in type: number measures, or raw SQL table names in derived_table.sql",
         ),
     ] = False,
     base_path: Annotated[

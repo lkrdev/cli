@@ -7,7 +7,14 @@ from pydantic import BaseModel, Field
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
 
-from lkr.parse.lookml import LookmlExplore, LookmlJoin, LookmlProject, LookmlView
+from lkr.parse.lookml import (
+    DEFAULT_DURATION_INTERVALS,
+    DEFAULT_TIMEFRAMES,
+    LookmlExplore,
+    LookmlJoin,
+    LookmlProject,
+    LookmlView,
+)
 
 _LOOKML_REF_RE = re.compile(
     r"\$\{\s*([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)?)\s*\}"
@@ -185,6 +192,27 @@ def _expand_field_tokens(
                     visited_sets,
                 ):
                     expanded.append(("-" if is_excl else sub_op, sub_alias, sub_field))
+            elif (
+                target_view
+                and target_view.dimension_group
+                and (dg := target_view.dimension_group.get(s_name))
+            ):
+                sa_low = s_alias.lower()
+                expanded.append((op, sa_low, s_name.lower()))
+                if (dg.type or "time") == "duration":
+                    for iv in dg.intervals or DEFAULT_DURATION_INTERVALS:
+                        expanded.append(
+                            (op, sa_low, f"{iv.removesuffix('s')}s_{s_name}".lower())
+                        )
+                else:
+                    for tf in dg.timeframes or DEFAULT_TIMEFRAMES:
+                        expanded.append(
+                            (
+                                op,
+                                sa_low,
+                                (s_name if tf == "yesno" else f"{s_name}_{tf}").lower(),
+                            )
+                        )
             elif "." not in set_ref and any(
                 k.lower() == set_ref.lower() for k in views_by_alias
             ):

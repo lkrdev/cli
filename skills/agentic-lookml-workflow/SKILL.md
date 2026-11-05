@@ -116,6 +116,8 @@ Shell helpers in `.agents/skills/agentic-lookml-workflow/scripts/`: [preflight.s
   - Chain per-explore offline `--validate` (across `./data/$RUN_ID/inline_queries.json` `.view`s plus any modified upstream `explore_source:` explores) + `schema validate --explore-file`, `lookml push`, and [scripts/pre_gate.py](scripts/pre_gate.py) (writing `./data/$RUN_ID/inline_queries.json` and `./data/$RUN_ID/test_queries.json` via `write_file` first so any retry reuses those files instead of re-emitting multi-KB heredocs, and never polling `manage_task` while waiting on background `run_command` tasks; if a parity mismatch ever requires `code-mode sandbox` inspection, note `query_for_slug`/`sql_query` return `dict` while `run_query`/`run_inline_query`/`run_sql_query(..., "json")` return JSON `str`, and inspect compiled SQL + rows in one call) in **one shell call**, printing the compact `jq` summary so `data.json` need not be re-read:
   ```bash
   BASE_URL="${BASE_URL:-$LOOKERSDK_BASE_URL}"
+  LOOKML_DIR="./data/$RUN_ID/lookml" MODEL_NAME="$MODEL_NAME" CONNECTION_NAME="$CONNECTION_NAME" \
+    bash .agents/skills/agentic-lookml-workflow/scripts/setup_repo.sh --skip-preflight
   INLINE_QUERIES_JSON=$(cat "./data/$RUN_ID/inline_queries.json")
   TEST_QUERIES_JSON=$( [[ -f "./data/$RUN_ID/test_queries.json" ]] && cat "./data/$RUN_ID/test_queries.json" || echo "{}" )
   for EXPLORE_NAME in $(jq -r '[.[].view] | unique[]' <<<"$INLINE_QUERIES_JSON"); do

@@ -334,6 +334,45 @@ return search_dashboards(
 )
 ```
 
+## Query Planning Playbook: Single-Explore vs. Merged Results (`source_queries`)
+
+Before writing a Looker query, inspect the model's Explore topology with `lkr schema context --model <model> --prompt "<question>"` (or `build_schema_context(model, explores_data, prompt=...)`):
+
+1. **Check `base_view` grain & `joins` before picking an Explore:**
+   - Looker Explores execute `LEFT JOIN` outward from `base_view`. Querying `users.count` from `order_items` (`many_to_one` join `order_items.user_id = users.id`) only counts users who have placed an order. If the question includes zero-activity entities (e.g., all users or all inventory items), pick an Explore whose `base_view` is that entity or merge two Explores.
+2. **Reuse modeled fields before `dynamic_fields`:**
+   - Check the candidate Explore's dimensions and measures first. Only create a Custom Dimension, Custom Measure, or Table Calculation when no modeled field already computes the bucket, filtered metric, or ratio.
+3. **Single-Explore (`WriteQuery`) vs. Multi-Explore (`source_queries`):**
+   - **Single-Explore**: Use a single `WriteQuery` (`model`, `view`, `fields`, `filters`, `sorts`, `limit`) whenever one Explore holds all required views at a compatible grain.
+   - **Merged Results (`source_queries`)**: Use a multi-query merge payload when metrics live in disjoint Explores (e.g., `order_items` + `inventory_items` or `events`), or when a question combines an entity-level ranking with a separate fact table at the same shared dimension grain (`candidate_merge_keys`):
+     ```json
+     {
+       "source_queries": [
+         {
+           "name": "sales",
+           "model": "thelook",
+           "view": "order_items",
+           "fields": ["products.category", "order_items.total_sale_price"],
+           "sorts": ["order_items.total_sale_price desc"],
+           "limit": "10"
+         },
+         {
+           "name": "stock",
+           "model": "thelook",
+           "view": "inventory_items",
+           "fields": ["products.category", "inventory_items.count"],
+           "merge_fields": [
+             {"source_field_name": "products.category", "field_name": "products.category"}
+           ]
+         }
+       ],
+       "join_type": "left",
+       "sorts": ["order_items.total_sale_price desc"],
+       "limit": "10"
+     }
+     ```
+   - Validate offline with `lkr schema validate --model <model> --explore-file <explores.json> --query '<json>'` (or `validate_merge_query(payload, model, explores_map)`) and execute via `execute_looker_query(sdk, spec)`.
+
 ## Agent Guidelines for Non-Interactive Execution
 
 - Run `me()` once early in a task to verify authentication before executing multiple operations.

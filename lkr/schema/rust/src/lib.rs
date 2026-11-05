@@ -9,6 +9,12 @@ pub type ValidationOutcome = (bool, Vec<String>, Vec<String>, Option<String>);
 
 static FIELD_REF_RE: OnceLock<Regex> = OnceLock::new();
 static SORT_ITEM_RE: OnceLock<Regex> = OnceLock::new();
+static DT_GTE_RE: OnceLock<Regex> = OnceLock::new();
+static DT_GT_RE: OnceLock<Regex> = OnceLock::new();
+static DT_LTE_RE: OnceLock<Regex> = OnceLock::new();
+static DT_BETWEEN_RE: OnceLock<Regex> = OnceLock::new();
+static DT_TF_SUFFIX_RE: OnceLock<Regex> = OnceLock::new();
+static NUM_RANGE_RE: OnceLock<Regex> = OnceLock::new();
 
 fn field_ref_regex() -> &'static Regex {
     FIELD_REF_RE.get_or_init(|| Regex::new(r"\$\{([^}]*)\}").unwrap())
@@ -17,6 +23,33 @@ fn field_ref_regex() -> &'static Regex {
 fn sort_item_regex() -> &'static Regex {
     SORT_ITEM_RE.get_or_init(|| {
         Regex::new(r"^([A-Za-z0-9_.]+)(?:\s+(?:asc|desc))?(?:\s+\d+)?$").unwrap()
+    })
+}
+
+fn dt_gte_regex() -> &'static Regex {
+    DT_GTE_RE.get_or_init(|| Regex::new(r"^>=\s*(\d{4})(?:[-/](\d{2})[-/](\d{2}))?$").unwrap())
+}
+
+fn dt_gt_regex() -> &'static Regex {
+    DT_GT_RE.get_or_init(|| Regex::new(r"^>\s*(\d{4})[-/](\d{2})[-/](\d{2})$").unwrap())
+}
+
+fn dt_lte_regex() -> &'static Regex {
+    DT_LTE_RE.get_or_init(|| Regex::new(r"^<=\s*(\d{4})(?:[-/](\d{2})[-/](\d{2}))?$").unwrap())
+}
+
+fn dt_between_regex() -> &'static Regex {
+    DT_BETWEEN_RE.get_or_init(|| Regex::new(r"^(?i:BETWEEN)\s+(\S+)\s+(?i:AND)\s+(\S+)$").unwrap())
+}
+
+fn dt_tf_suffix_regex() -> &'static Regex {
+    DT_TF_SUFFIX_RE.get_or_init(|| Regex::new(r"_(?:year|month|quarter|week)$").unwrap())
+}
+
+fn num_range_regex() -> &'static Regex {
+    NUM_RANGE_RE.get_or_init(|| {
+        Regex::new(r"^(?:(?i:BETWEEN)\s+)?(-?\d+(?:\.\d+)?)\s+(?i:to|AND)\s+(-?\d+(?:\.\d+)?)$")
+            .unwrap()
     })
 }
 
@@ -90,25 +123,41 @@ pub struct RustExploreValidator {
     schema_all_ref_fields: HashSet<String>,
     measure_only_set: HashSet<String>,
     filter_rules: HashMap<String, CompiledFilterRule>,
+    filter_kinds: HashMap<String, String>,
     allowed_top_keys: HashSet<String>,
     allowed_body_keys: HashSet<String>,
     allowed_result_formats: HashSet<String>,
 }
 
 impl RustExploreValidator {
+    fn extract_filter_def_name(prop_schema: &Value) -> Option<String> {
+        let ref_str = prop_schema
+            .get("$ref")
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                prop_schema
+                    .get("anyOf")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| {
+                        arr.iter()
+                            .find_map(|x| x.get("$ref").and_then(|r| r.as_str()))
+                    })
+            })?;
+        ref_str.strip_prefix("#/$defs/").map(|s| s.to_string())
+    }
+
     fn compile_filter_prop(
         prop_schema: &Value,
         defs_regexes: &HashMap<String, (Regex, String)>,
     ) -> CompiledFilterRule {
-        if let Some(ref_str) = prop_schema.get("$ref").and_then(|v| v.as_str()) {
-            if let Some(def_name) = ref_str.strip_prefix("#/$defs/") {
-                if let Some((re, pat)) = defs_regexes.get(def_name) {
-                    return CompiledFilterRule::Pattern {
-                        regex: re.clone(),
-                        pattern_str: pat.clone(),
-                    };
-                }
+        if let Some(def_name) = Self::extract_filter_def_name(prop_schema) {
+            if let Some((re, pat)) = defs_regexes.get(&def_name) {
+                return CompiledFilterRule::Pattern {
+                    regex: re.clone(),
+                    pattern_str: pat.clone(),
+                };
             }
+            return CompiledFilterRule::AnyString;
         }
         if let Some(enum_arr) = prop_schema.get("enum").and_then(|v| v.as_array()) {
             let mut allowed = HashSet::new();
@@ -133,6 +182,65 @@ impl RustExploreValidator {
             }
         }
         CompiledFilterRule::AnyString
+    }
+
+    fn coerce_filter_map(&self, filters_obj: &Map<String, Value>) -> Map<String, Value> {
+        let mut out = Map::new();
+        for (k, v) in filters_obj {
+            let Some(v_str) = v.as_str() else {
+                out.insert(k.clone(), v.clone());
+                continue;
+            };
+            let s = v_str.trim();
+            let kind = self.filter_kinds.get(k).map(|x| x.as_str()).unwrap_or("");
+            let mut new_k = k.clone();
+            let mut new_v = v_str.to_string();
+            if kind == "DateTimeFilterExpression" {
+                if let Some(cap) = dt_gte_regex().captures(s) {
+                    new_v = format!(
+                        "after {}-{}-{}",
+                        &cap[1],
+                        cap.get(2).map_or("01", |m| m.as_str()),
+                        cap.get(3).map_or("01", |m| m.as_str())
+                    );
+                } else if let Some(cap) = dt_gt_regex().captures(s) {
+                    new_v = format!("after {}-{}-{}", &cap[1], &cap[2], &cap[3]);
+                } else if let Some(cap) = dt_lte_regex().captures(s) {
+                    new_v = format!(
+                        "before {}-{}-{}",
+                        &cap[1],
+                        cap.get(2).map_or("12", |m| m.as_str()),
+                        cap.get(3).map_or("31", |m| m.as_str())
+                    );
+                } else if let Some(cap) = dt_between_regex().captures(s) {
+                    new_v = format!("{} to {}", cap[1].trim_matches(['\'', '"']), cap[2].trim_matches(['\'', '"']));
+                }
+                if (new_v.starts_with("after ") || new_v.starts_with("before "))
+                    && dt_tf_suffix_regex().is_match(k)
+                {
+                    let base_date = dt_tf_suffix_regex().replace(k, "_date").to_string();
+                    if self.filter_rules.contains_key(&base_date)
+                        && !filters_obj.contains_key(&base_date)
+                        && !out.contains_key(&base_date)
+                    {
+                        new_k = base_date;
+                    }
+                }
+            } else if kind == "NumberFilterExpression" {
+                if let Some(cap) = num_range_regex().captures(s) {
+                    new_v = format!("[{}, {}]", &cap[1], &cap[2]);
+                }
+            } else if kind == "StringFilterExpression" {
+                let su = s.to_ascii_uppercase();
+                if matches!(su.as_str(), "NOT NULL" | "IS NOT NULL" | "!= NULL" | "<> NULL") || s == "-null" {
+                    new_v = "-NULL".to_string();
+                } else if matches!(su.as_str(), "IS NULL" | "= NULL") || s == "null" {
+                    new_v = "NULL".to_string();
+                }
+            }
+            out.insert(new_k, Value::String(new_v));
+        }
+        out
     }
 
     fn sanitize_body(body_map: &Map<String, Value>) -> Map<String, Value> {
@@ -342,25 +450,74 @@ impl RustExploreValidator {
             }
 
             if dyn_parse_ok {
-                for item in &parsed_dyn_items {
-                    if let Some(obj) = item.as_object() {
-                        if let Some(d) = obj.get("dimension").and_then(|v| v.as_str()) {
-                            if !d.is_empty() {
-                                dim_like_dynamic.push(d.to_string());
+                let mut tc_ref_fields: Vec<String> = Vec::new();
+                let ensure_label = |obj: &mut Map<String, Value>, name: &str| {
+                    if !obj.get("label").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty()) {
+                        obj.insert("label".to_string(), Value::String(name.to_string()));
+                    }
+                };
+                for item in &mut parsed_dyn_items {
+                    if let Some(obj) = item.as_object_mut() {
+                        let get_nonempty = |o: &Map<String, Value>, k: &str| {
+                            o.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string)
+                        };
+                        if let Some(d) = get_nonempty(obj, "dimension") {
+                            ensure_label(obj, &d);
+                            dim_like_dynamic.push(d);
+                        } else if let Some(m) = get_nonempty(obj, "measure") {
+                            ensure_label(obj, &m);
+                            if obj.get("filter_expression").is_some_and(|v| v.is_null() || v.as_str() == Some("")) {
+                                obj.remove("filter_expression");
                             }
-                        } else if let Some(m) = obj.get("measure").and_then(|v| v.as_str()) {
-                            if !m.is_empty() {
-                                non_dim_like_dynamic.push(m.to_string());
+                            if let Some(f_obj) = obj.get("filters").and_then(|v| v.as_object()) {
+                                obj.insert("filters".to_string(), Value::Object(self.coerce_filter_map(f_obj)));
                             }
-                        } else if let Some(tc) =
-                            obj.get("table_calculation").and_then(|v| v.as_str())
-                        {
-                            if !tc.is_empty() {
-                                non_dim_like_dynamic.push(tc.to_string());
-                                table_calc_names.insert(tc.to_string());
+                            non_dim_like_dynamic.push(m);
+                        } else if let Some(tc) = get_nonempty(obj, "table_calculation") {
+                            ensure_label(obj, &tc);
+                            if let Some(expr) = obj.get("expression").and_then(|v| v.as_str()) {
+                                for cap in field_ref_regex().captures_iter(expr) {
+                                    let raw_ref = cap.get(1).map_or("", |m| m.as_str()).trim();
+                                    let norm_ref = raw_ref
+                                        .strip_suffix(":row_total")
+                                        .or_else(|| raw_ref.strip_suffix(":total"))
+                                        .unwrap_or(raw_ref)
+                                        .trim();
+                                    if self.base_fields_set.contains(norm_ref)
+                                        && !tc_ref_fields.iter().any(|x| x == norm_ref)
+                                    {
+                                        tc_ref_fields.push(norm_ref.to_string());
+                                    }
+                                }
                             }
+                            non_dim_like_dynamic.push(tc.clone());
+                            table_calc_names.insert(tc);
                         }
                     }
+                }
+                body.insert(
+                    "dynamic_fields".to_string(),
+                    Value::Array(parsed_dyn_items.clone()),
+                );
+                if let Some(cur_fields) = body.get("fields").and_then(|v| v.as_array()).cloned() {
+                    let mut synced: Vec<Value> = cur_fields
+                        .into_iter()
+                        .filter(|v| !v.as_str().is_some_and(|s| table_calc_names.contains(s)))
+                        .collect();
+                    let extra_names = dim_like_dynamic
+                        .iter()
+                        .chain(
+                            non_dim_like_dynamic
+                                .iter()
+                                .filter(|x| !table_calc_names.contains(*x)),
+                        )
+                        .chain(tc_ref_fields.iter());
+                    for name in extra_names {
+                        if !synced.iter().any(|v| v.as_str() == Some(name.as_str())) {
+                            synced.push(Value::String(name.clone()));
+                        }
+                    }
+                    body.insert("fields".to_string(), Value::Array(synced));
                 }
             }
         }
@@ -635,9 +792,11 @@ impl RustExploreValidator {
         }
 
         // Step 5: Validate filters
-        if let Some(filters_val) = body.get("filters") {
+        if let Some(filters_val) = body.get("filters").cloned() {
             if let Some(f_obj) = filters_val.as_object() {
-                self.validate_filter_map(f_obj, "$.body.filters", &mut errors);
+                let coerced = self.coerce_filter_map(f_obj);
+                self.validate_filter_map(&coerced, "$.body.filters", &mut errors);
+                body.insert("filters".to_string(), Value::Object(coerced));
             } else if !filters_val.is_null() {
                 errors.push("$.body.filters: expected object".to_string());
             }
@@ -888,12 +1047,16 @@ impl RustExploreValidator {
             .collect();
 
         let mut filter_rules: HashMap<String, CompiledFilterRule> = HashMap::new();
+        let mut filter_kinds: HashMap<String, String> = HashMap::new();
         if let Some(filter_props) = body_props
             .get("filters")
             .and_then(|v| v.get("properties"))
             .and_then(|v| v.as_object())
         {
             for (field_name, prop_schema) in filter_props {
+                if let Some(def_name) = Self::extract_filter_def_name(prop_schema) {
+                    filter_kinds.insert(field_name.clone(), def_name);
+                }
                 let rule = Self::compile_filter_prop(prop_schema, &defs_regexes);
                 filter_rules.insert(field_name.clone(), rule);
             }
@@ -914,6 +1077,7 @@ impl RustExploreValidator {
             schema_all_ref_fields,
             measure_only_set,
             filter_rules,
+            filter_kinds,
             allowed_top_keys,
             allowed_body_keys,
             allowed_result_formats,
@@ -965,7 +1129,8 @@ mod tests {
         json!({
             "$defs": {
                 "StringFilterExpression": { "type": "string" },
-                "NumberFilterExpression": { "type": "string", "pattern": "^-?\\d+$" }
+                "NumberFilterExpression": { "type": "string", "pattern": "^(?:-?\\d+|\\[.*\\])$" },
+                "DateTimeFilterExpression": { "type": "string", "pattern": "^(?:after|before|\\d{4}).*$" }
             },
             "properties": {
                 "result_format": { "type": "string", "enum": ["json", "csv"] },
@@ -975,13 +1140,15 @@ mod tests {
                     "properties": {
                         "model": { "type": "string", "const": "thelook" },
                         "view": { "type": "string", "const": "order_items" },
-                        "fields": { "type": "array", "items": { "type": "string", "enum": ["order_items.status", "order_items.total_sale_price"] } },
+                        "fields": { "type": "array", "items": { "type": "string", "enum": ["order_items.status", "order_items.total_sale_price", "order_items.created_year", "order_items.created_date"] } },
                         "pivots": { "type": "array", "items": { "type": "string", "enum": ["order_items.status"] } },
                         "filters": {
                             "type": "object",
                             "properties": {
-                                "order_items.status": { "$ref": "#/$defs/StringFilterExpression" },
-                                "order_items.total_sale_price": { "$ref": "#/$defs/NumberFilterExpression" }
+                                "order_items.status": { "anyOf": [{ "type": "string", "enum": ["Complete"] }, { "$ref": "#/$defs/StringFilterExpression" }] },
+                                "order_items.total_sale_price": { "$ref": "#/$defs/NumberFilterExpression" },
+                                "order_items.created_year": { "$ref": "#/$defs/DateTimeFilterExpression" },
+                                "order_items.created_date": { "$ref": "#/$defs/DateTimeFilterExpression" }
                             }
                         },
                         "sorts": { "type": "array" },
@@ -1058,6 +1225,32 @@ mod tests {
         assert!(ok, "errs: {:?}", errs);
         assert_eq!(warns.len(), 1);
         assert!(warns[0].contains("$.body.column_limit"));
+
+        // Filter coercion + dynamic_fields <-> fields sync
+        let (ok, errs, _, norm_opt) = val.validate_single_value(json!({
+            "body": {
+                "fields": ["order_items.status", "tc_ratio"],
+                "filters": {
+                    "order_items.created_year": ">=2024",
+                    "order_items.total_sale_price": "2020 to 2026",
+                    "order_items.status": "NOT NULL"
+                },
+                "dynamic_fields": [
+                    {"dimension": "cd_flag", "expression": "${order_items.status} = \"Complete\""},
+                    {"measure": "cm_rev", "based_on": "order_items.total_sale_price", "filter_expression": "", "filters": {"order_items.status": "IS NULL"}},
+                    {"table_calculation": "tc_ratio", "expression": "${order_items.total_sale_price} / 100"}
+                ]
+            }
+        }));
+        assert!(ok, "errs: {:?}", errs);
+        let norm: Value = serde_json::from_str(&norm_opt.unwrap()).unwrap();
+        assert_eq!(
+            norm["body"]["fields"],
+            json!(["order_items.status", "cd_flag", "cm_rev", "order_items.total_sale_price"])
+        );
+        assert_eq!(norm["body"]["filters"]["order_items.created_date"], json!("after 2024-01-01"));
+        assert_eq!(norm["body"]["filters"]["order_items.total_sale_price"], json!("[2020, 2026]"));
+        assert_eq!(norm["body"]["filters"]["order_items.status"], json!("-NULL"));
     }
 }
 
