@@ -517,61 +517,14 @@ def test_profile_fields_sdk_and_monty() -> None:
         "view_name": "order_items",
         "fields": {
             "dimensions": [
-                {
-                    "name": "order_items.status",
-                    "view": "order_items",
-                    "type": "string",
-                    "label_short": "Status",
-                    "sql": "${TABLE}.status",
-                },
-                {
-                    "name": "order_items.sale_price",
-                    "view": "order_items",
-                    "type": "number",
-                    "label_short": "Sale Price",
-                    "value_format": "$#,##0.00",
-                    "sql": "${TABLE}.sale_price",
-                },
-                {
-                    "name": "order_items.is_delivered",
-                    "view": "order_items",
-                    "type": "yesno",
-                    "label_short": "Is Delivered",
-                    "sql": "${TABLE}.delivered_at IS NOT NULL",
-                },
-                {
-                    "name": "order_items.created_date",
-                    "view": "order_items",
-                    "type": "date_date",
-                    "is_timeframe": True,
-                    "dimension_group": "order_items.created",
-                    "sql": "${TABLE}.created_at",
-                },
-                {
-                    "name": "order_items.created_month",
-                    "view": "order_items",
-                    "type": "date_month",
-                    "is_timeframe": True,
-                    "dimension_group": "order_items.created",
-                    "sql": "${TABLE}.created_at",
-                },
-                {
-                    "name": "order_items.created_year",
-                    "view": "order_items",
-                    "type": "date_year",
-                    "is_timeframe": True,
-                    "dimension_group": "order_items.created",
-                    "sql": "${TABLE}.created_at",
-                },
+                {"name": "order_items.status", "view": "order_items", "type": "string", "label_short": "Status", "sql": "${TABLE}.status"},
+                {"name": "order_items.sale_price", "view": "order_items", "type": "number", "label_short": "Sale Price", "value_format": "$#,##0.00", "sql": "${TABLE}.sale_price"},
+                {"name": "order_items.is_delivered", "view": "order_items", "type": "yesno", "label_short": "Is Delivered", "sql": "${TABLE}.delivered_at IS NOT NULL"},
+                {"name": "order_items.created_date", "view": "order_items", "type": "date_date", "is_timeframe": True, "dimension_group": "order_items.created", "sql": "${TABLE}.created_at"},
+                {"name": "order_items.created_month", "view": "order_items", "type": "date_month", "is_timeframe": True, "dimension_group": "order_items.created", "sql": "${TABLE}.created_at"},
+                {"name": "order_items.created_year", "view": "order_items", "type": "date_year", "is_timeframe": True, "dimension_group": "order_items.created", "sql": "${TABLE}.created_at"},
             ],
-            "measures": [
-                {
-                    "name": "order_items.total_sale_price",
-                    "view": "order_items",
-                    "type": "sum",
-                    "sql": "${sale_price}",
-                }
-            ],
+            "measures": [{"name": "order_items.total_sale_price", "view": "order_items", "type": "sum", "sql": "${sale_price}"}],
         },
     }
 
