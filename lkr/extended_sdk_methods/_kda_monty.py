@@ -1835,15 +1835,6 @@ def _root_field_type(d: dict[str, object]) -> str:
     return "string"
 
 
-def _is_hex_or_uuid(val: str) -> bool:
-    s = val.strip().lower()
-    hex_chars = "0123456789abcdef"
-    if len(s) == 36 and s[8] == "-" and s[13] == "-" and s[18] == "-" and s[23] == "-":
-        clean = s.replace("-", "")
-        return len(clean) == 32 and all(c in hex_chars for c in clean)
-    return 32 <= len(s) <= 64 and all(c in hex_chars for c in s)
-
-
 def _spikiness_stats(pairs: list[tuple[str, float]]) -> dict[str, object]:
     clean = [(p, c) for p, c in pairs if p and p != "NULL"]
     if not clean:
@@ -1851,8 +1842,7 @@ def _spikiness_stats(pairs: list[tuple[str, float]]) -> dict[str, object]:
     vals = [c for _, c in clean]
     n = len(vals)
     mean = sum(vals) / n
-    variance = sum((v - mean) ** 2 for v in vals) / n
-    stddev = variance**0.5
+    stddev = (sum((v - mean) ** 2 for v in vals) / n) ** 0.5
     peak_p, max_v = max(clean, key=lambda x: x[1])
     trough_p, min_v = min(clean, key=lambda x: x[1])
     return {
@@ -1866,26 +1856,6 @@ def _spikiness_stats(pairs: list[tuple[str, float]]) -> dict[str, object]:
         "peak_period": peak_p,
         "trough_period": trough_p,
     }
-
-
-def _build_lookml_snippet(
-    short_name: str,
-    rec_hidden: bool,
-    rec_suggestable: bool | None,
-    rec_tags: list[str],
-    rec_desc: str,
-    is_dg: bool = False,
-) -> str:
-    kw = "dimension_group" if is_dg else "dimension"
-    lines = [f"  {kw}: {short_name} {{", f"    hidden: {'yes' if rec_hidden else 'no'}"]
-    if rec_suggestable is not None and not is_dg:
-        lines.append(f"    suggestable: {'yes' if rec_suggestable else 'no'}")
-    if rec_tags:
-        lines.append(f"    tags: [{', '.join(_json_dumps(t) for t in rec_tags)}]")
-    esc = rec_desc.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-    lines.append(f'    description: "{esc}"')
-    lines.append("  }")
-    return "\n".join(lines)
 
 
 def _finalize_field_profile(
@@ -1905,7 +1875,6 @@ def _finalize_field_profile(
     existing_tags = _uniq(_as_strs(d.get("tags")))
     is_pk = bool(d.get("primary_key"))
     is_sys = low.startswith(("_fivetran_", "_airbyte_", "_sdc_", "_baton_", "etl_", "ingest_")) or low.endswith(("_pk", "_fk", "_sk"))
-    is_fk = not is_pk and low.endswith(("_id", "_fk"))
 
     total_rows = _to_int(stats.get("total_rows"))
     dist_cnt = _to_int(stats.get("approx_count_distinct"))
@@ -1914,95 +1883,84 @@ def _finalize_field_profile(
 
     tags: list[str] = []
     decisions: list[str] = [f"root_type='{root_type}' from lookml_type='{dtype}'"]
-    if is_fk:
-        tags.append("profile:foreign_key")
-        decisions.append(f"tag 'profile:foreign_key': non-PK field name '{sname}' ends with _id/_fk")
+
+    def _tag(t: str, reason: str) -> None:
+        tags.append(t)
+        decisions.append(reason)
+
+    if not is_pk and low.endswith(("_id", "_fk")):
+        _tag("profile:foreign_key", f"tag 'profile:foreign_key': non-PK field name '{sname}' ends with _id/_fk")
     if null_cnt > 0:
-        tags.append("profile:nullable")
-        decisions.append(f"tag 'profile:nullable': null_count={null_cnt} ({null_pct}% of {total_rows} rows)")
+        _tag("profile:nullable", f"tag 'profile:nullable': null_count={null_cnt} ({null_pct}% of {total_rows} rows)")
     if total_rows > 0 and dist_cnt == total_rows and null_cnt == 0:
-        tags.append("profile:unique_key_candidate")
-        decisions.append(f"tag 'profile:unique_key_candidate': approx_count_distinct={dist_cnt} == total_rows={total_rows} with 0 nulls")
+        _tag("profile:unique_key_candidate", f"tag 'profile:unique_key_candidate': approx_count_distinct={dist_cnt} == total_rows={total_rows} with 0 nulls")
 
     rec_hidden = bool(d.get("hidden", False)) or is_pk or is_sys or is_helper
     rec_suggestable: bool | None = None
     subtype = root_type
-    rec_desc = base_desc or f"{ d.get('label_short') or sname }."
+    rec_desc = base_desc or f"{d.get('label_short') or sname}."
 
     if root_type == "string":
-        top_vals = _as_dicts(stats.get("top_values"))
-        samples = [str(tv.get("value") or "").strip() for tv in top_vals if tv.get("value") is not None and str(tv.get("value")).strip() != ""]
+        samples = [
+            str(tv.get("value") or "").strip()
+            for tv in _as_dicts(stats.get("top_values"))
+            if tv.get("value") is not None and str(tv.get("value")).strip() != ""
+        ]
         max_len = _to_int(stats.get("max_length"))
         avg_len = _to_float(stats.get("avg_length")) or 0.0
         json_hits = sum(1 for v in samples if (v.startswith("{") and v.endswith("}")) or (v.startswith("[") and v.endswith("]")))
-        uuid_hits = sum(1 for v in samples if _is_hex_or_uuid(v))
+        uuid_hits = sum(
+            1
+            for v in samples
+            if 32 <= len(s := (v.strip().lower().replace("-", "") if len(v.strip()) == 36 and v.strip()[8::5] == "----" else v.strip().lower())) <= 64
+            and all(c in "0123456789abcdef" for c in s)
+        )
         email_hits = sum(1 for v in samples if "@" in v and "." in v.split("@", 1)[-1])
+        ex3 = ", ".join(f"'{v[:40]}'" for v in samples[:3])
 
         if dtype in ("tier", "location"):
-            subtype = dtype
-            rec_hidden = is_helper
-            rec_suggestable = dtype == "tier"
-            tags.append(f"profile:{subtype}")
-            decisions.append(f"subtype='{subtype}' + tag 'profile:{subtype}' from lookml_type='{dtype}' (suggestable={rec_suggestable})")
-            vals_preview = ", ".join(f"'{v}'" for v in samples[:8])
-            rec_desc = f"{prefix}Values: {vals_preview}." if vals_preview else f"{prefix}{dtype.capitalize()} dimension."
+            subtype, rec_hidden, rec_suggestable = dtype, is_helper, dtype == "tier"
+            _tag(f"profile:{subtype}", f"subtype='{subtype}' + tag 'profile:{subtype}' from lookml_type='{dtype}' (suggestable={rec_suggestable})")
+            vals_p = ", ".join(f"'{v}'" for v in samples[:8])
+            rec_desc = f"{prefix}Values: {vals_p}." if vals_p else f"{prefix}{dtype.capitalize()} dimension."
         elif "JSON_" in sql_expr.upper() or any(t in low for t in ("json", "payload", "raw_event")) or (samples and json_hits * 2 >= len(samples)):
-            subtype = "json"
-            rec_hidden, rec_suggestable = True, False
-            tags.append("profile:json_payload")
-            decisions.append(f"subtype='json' + tag 'profile:json_payload' (hidden=True, suggestable=False): SQL/name or {json_hits}/{len(samples)} sample values match JSON")
+            subtype, rec_hidden, rec_suggestable = "json", True, False
+            _tag("profile:json_payload", f"subtype='json' + tag 'profile:json_payload' (hidden=True, suggestable=False): SQL/name or {json_hits}/{len(samples)} sample values match JSON")
             rec_desc = f"{prefix}Raw JSON payload; hidden and filter suggestions disabled to prevent full-column scans."
         elif any(t in low for t in ("uuid", "guid", "hash", "md5", "sha256")) or (samples and uuid_hits * 5 >= len(samples) * 4):
-            subtype = "id_or_code"
-            rec_hidden, rec_suggestable = True, False
-            tags.append("profile:uuid_or_hash")
-            decisions.append(f"subtype='id_or_code' + tag 'profile:uuid_or_hash' (hidden=True, suggestable=False): name or {uuid_hits}/{len(samples)} samples match UUID/hex")
+            subtype, rec_hidden, rec_suggestable = "id_or_code", True, False
+            _tag("profile:uuid_or_hash", f"subtype='id_or_code' + tag 'profile:uuid_or_hash' (hidden=True, suggestable=False): name or {uuid_hits}/{len(samples)} samples match UUID/hex")
             rec_desc = f"{prefix}High-cardinality UUID or hash identifier."
         elif is_pk or is_sys or is_helper or ((low == "id" or low.endswith("_id")) and dist_cnt > 100):
-            subtype = "id_or_code"
-            rec_hidden, rec_suggestable = True, False
+            subtype, rec_hidden, rec_suggestable = "id_or_code", True, False
             decisions.append(f"subtype='id_or_code' (hidden=True, suggestable=False): primary_key={is_pk}, system_col={is_sys}, helper={is_helper}, distinct={dist_cnt}")
             rec_desc = f"{prefix}Internal key or system metadata column not intended for end-user grouping."
         elif dist_cnt == 0 and total_rows > 0:
-            subtype = "empty_or_null"
-            rec_hidden, rec_suggestable = True, False
-            tags.append("profile:empty_or_null_only")
-            decisions.append(f"subtype='empty_or_null' + tag 'profile:empty_or_null_only' (hidden=True, suggestable=False): approx_count_distinct=0 across {total_rows} rows")
+            subtype, rec_hidden, rec_suggestable = "empty_or_null", True, False
+            _tag("profile:empty_or_null_only", f"subtype='empty_or_null' + tag 'profile:empty_or_null_only' (hidden=True, suggestable=False): approx_count_distinct=0 across {total_rows} rows")
             rec_desc = f"{prefix}Column contains only NULL or empty values in sampled data."
         elif max_len > 120 or avg_len > 60.0 or low.endswith(("comment", "comments", "note", "notes", "description", "message", "body", "transcript")):
-            subtype = "free_text"
-            rec_hidden, rec_suggestable = False, False
-            tags.append("profile:opaque_code_or_free_text")
-            decisions.append(f"subtype='free_text' + tag 'profile:opaque_code_or_free_text' (suggestable=False): max_length={max_len} (>120), avg_length={avg_len} (>60), or free-text name suffix")
+            subtype, rec_hidden, rec_suggestable = "free_text", False, False
+            _tag("profile:opaque_code_or_free_text", f"subtype='free_text' + tag 'profile:opaque_code_or_free_text' (suggestable=False): max_length={max_len} (>120), avg_length={avg_len} (>60), or free-text name suffix")
             rec_desc = f"{prefix}Free-text string ({dist_cnt}+ distinct values, max length {max_len}); filter suggestions disabled."
         elif dtype == "zipcode" or low.endswith(("sku", "code", "zip", "postal", "phone", "email", "url", "uri", "ip", "ip_address", "token", "tracking_number")):
-            subtype = "id_or_code"
-            rec_hidden, rec_suggestable = False, False
-            tags.append("profile:opaque_code_or_free_text")
-            decisions.append(f"subtype='id_or_code' + tag 'profile:opaque_code_or_free_text' (suggestable=False): identifier/code suffix on '{sname}' with {dist_cnt} distinct values")
-            ex = ", ".join(f"'{v[:40]}'" for v in samples[:3])
-            rec_desc = f"{prefix}Opaque identifier or code ({dist_cnt}+ distinct values, max length {max_len}); filter suggestions disabled." + (f" Example values: {ex}." if ex else "")
+            subtype, rec_hidden, rec_suggestable = "id_or_code", False, False
+            _tag("profile:opaque_code_or_free_text", f"subtype='id_or_code' + tag 'profile:opaque_code_or_free_text' (suggestable=False): identifier/code suffix on '{sname}' with {dist_cnt} distinct values")
+            rec_desc = f"{prefix}Opaque identifier or code ({dist_cnt}+ distinct values, max length {max_len}); filter suggestions disabled." + (f" Example values: {ex3}." if ex3 else "")
         elif 1 <= dist_cnt <= 15:
-            subtype = "enum"
-            rec_hidden, rec_suggestable = False, True
-            tags.append("profile:low_cardinality_enum")
-            decisions.append(f"subtype='enum' + tag 'profile:low_cardinality_enum' (suggestable=True): approx_count_distinct={dist_cnt} is in 1..15")
+            subtype, rec_hidden, rec_suggestable = "enum", False, True
+            _tag("profile:low_cardinality_enum", f"subtype='enum' + tag 'profile:low_cardinality_enum' (suggestable=True): approx_count_distinct={dist_cnt} is in 1..15")
             vals_str = ", ".join(f"'{v}'" for v in samples[:15])
             rec_desc = f"{prefix}Values: {vals_str}." if vals_str else f"{prefix}Low-cardinality enum ({dist_cnt} values)."
         elif dist_cnt <= 100:
-            subtype = "categorical"
-            rec_hidden, rec_suggestable = False, True
-            tags.append("profile:medium_cardinality_categorical")
-            decisions.append(f"subtype='categorical' + tag 'profile:medium_cardinality_categorical' (suggestable=True): approx_count_distinct={dist_cnt} is in 16..100")
+            subtype, rec_hidden, rec_suggestable = "categorical", False, True
+            _tag("profile:medium_cardinality_categorical", f"subtype='categorical' + tag 'profile:medium_cardinality_categorical' (suggestable=True): approx_count_distinct={dist_cnt} is in 16..100")
             vals_str = ", ".join(f"'{v}'" for v in samples[:10])
             rec_desc = f"{prefix}Top values include: {vals_str} ({dist_cnt} distinct values)." if vals_str else f"{prefix}Categorical string ({dist_cnt} distinct values)."
         else:
-            subtype = "entity_label"
-            rec_hidden, rec_suggestable = False, True
-            tags.append("profile:searchable_entity_label")
-            decisions.append(f"subtype='entity_label' + tag 'profile:searchable_entity_label' (suggestable=True): approx_count_distinct={dist_cnt} > 100")
-            ex = ", ".join(f"'{v[:40]}'" for v in samples[:3])
-            rec_desc = f"{prefix}Searchable entity label ({dist_cnt}+ distinct values)." + (f" Example values: {ex}." if ex else "")
+            subtype, rec_hidden, rec_suggestable = "entity_label", False, True
+            _tag("profile:searchable_entity_label", f"subtype='entity_label' + tag 'profile:searchable_entity_label' (suggestable=True): approx_count_distinct={dist_cnt} > 100")
+            rec_desc = f"{prefix}Searchable entity label ({dist_cnt}+ distinct values)." + (f" Example values: {ex3}." if ex3 else "")
 
         if "email" in low or (samples and email_hits * 2 >= len(samples)):
             tags.extend(["profile:pii", "profile:email"])
@@ -2011,80 +1969,61 @@ def _finalize_field_profile(
             tags.extend(["profile:pii", "profile:phone"])
             decisions.append(f"tags 'profile:pii', 'profile:phone': field name '{sname}' matches phone token")
         if any(t in low for t in ("ssn", "tax_id", "passport", "first_name", "last_name", "full_name", "street_address", "ip_address")):
-            tags.append("profile:pii")
-            decisions.append(f"tag 'profile:pii': field name '{sname}' matches PII token")
+            _tag("profile:pii", f"tag 'profile:pii': field name '{sname}' matches PII token")
 
     elif root_type == "number":
-        min_v = _to_float(stats.get("min"))
-        max_v = _to_float(stats.get("max"))
-        avg_v = _to_float(stats.get("average"))
-        med_v = _to_float(stats.get("median"))
-        zero_cnt = _to_int(stats.get("zero_count"))
-        neg_cnt = _to_int(stats.get("negative_count"))
+        min_v, max_v = _to_float(stats.get("min")), _to_float(stats.get("max"))
+        avg_v, med_v = _to_float(stats.get("average")), _to_float(stats.get("median"))
+        zero_cnt, neg_cnt = _to_int(stats.get("zero_count")), _to_int(stats.get("negative_count"))
         all_ints = bool(stats.get("all_integers", False))
+        rng = f"(range: {min_v} to {max_v}, avg: {avg_v}, median: {med_v})"
 
         if dist_cnt == 0 and total_rows > 0:
-            subtype = "empty_or_null"
-            rec_hidden = True
-            tags.append("profile:empty_or_null_only")
-            decisions.append(f"subtype='empty_or_null' + tag 'profile:empty_or_null_only' (hidden=True): approx_count_distinct=0 across {total_rows} rows")
+            subtype, rec_hidden = "empty_or_null", True
+            _tag("profile:empty_or_null_only", f"subtype='empty_or_null' + tag 'profile:empty_or_null_only' (hidden=True): approx_count_distinct=0 across {total_rows} rows")
             rec_desc = f"{prefix}Numeric column contains only NULL values."
         elif is_pk or is_sys or low == "id" or low.endswith(("_id", "_pk", "_fk", "_sk")):
-            subtype = "id_or_key"
-            rec_hidden = True
+            subtype, rec_hidden = "id_or_key", True
             decisions.append(f"subtype='id_or_key' (hidden=True): primary_key={is_pk} or key suffix on '{sname}'")
             rec_desc = f"{prefix}Internal numeric key not intended for direct aggregation."
         elif dist_cnt == 1 and total_rows > 0:
             subtype = "constant"
-            tags.append("profile:constant_value")
-            decisions.append(f"subtype='constant' + tag 'profile:constant_value': approx_count_distinct=1 (value={min_v})")
+            _tag("profile:constant_value", f"subtype='constant' + tag 'profile:constant_value': approx_count_distinct=1 (value={min_v})")
             rec_desc = f"{prefix}Constant numeric value ({min_v})."
         elif dtype.startswith("duration") or any(t in low for t in ("days_", "hours_", "minutes_", "months_", "years_", "_duration", "shelf_age")):
             subtype = "duration"
-            tags.append("profile:duration")
-            decisions.append(f"subtype='duration' + tag 'profile:duration': lookml_type='{dtype}' or duration token in '{sname}'")
-            rec_desc = f"{prefix}Duration metric (range: {min_v} to {max_v}, avg: {avg_v}, median: {med_v})."
+            _tag("profile:duration", f"subtype='duration' + tag 'profile:duration': lookml_type='{dtype}' or duration token in '{sname}'")
+            rec_desc = f"{prefix}Duration metric {rng}."
         elif "%" in val_fmt or any(t in low for t in ("pct", "percent", "rate", "ratio", "share", "z_score")) or (min_v is not None and max_v is not None and 0.0 <= min_v and max_v <= 1.0 and not all_ints):
             subtype = "percentage_or_ratio"
-            tags.append("profile:percentage_or_ratio")
-            decisions.append(f"subtype='percentage_or_ratio' + tag 'profile:percentage_or_ratio': format='{val_fmt}', rate/pct name, or [0,1] float range ({min_v}..{max_v})")
-            rec_desc = f"{prefix}Ratio or rate dimension (range: {min_v} to {max_v}, avg: {avg_v}, median: {med_v})."
+            _tag("profile:percentage_or_ratio", f"subtype='percentage_or_ratio' + tag 'profile:percentage_or_ratio': format='{val_fmt}', rate/pct name, or [0,1] float range ({min_v}..{max_v})")
+            rec_desc = f"{prefix}Ratio or rate dimension {rng}."
         elif "$" in val_fmt or "usd" in val_fmt or any(t in low for t in ("price", "cost", "revenue", "amount", "margin", "profit", "spend", "fee")):
             subtype = "currency_or_decimal"
-            tags.append("profile:currency_or_decimal")
-            decisions.append(f"subtype='currency_or_decimal' + tag 'profile:currency_or_decimal': format='{val_fmt}' or monetary token in '{sname}'")
-            rec_desc = f"{prefix}Monetary or decimal value (range: {min_v} to {max_v}, avg: {avg_v}, median: {med_v})."
+            _tag("profile:currency_or_decimal", f"subtype='currency_or_decimal' + tag 'profile:currency_or_decimal': format='{val_fmt}' or monetary token in '{sname}'")
+            rec_desc = f"{prefix}Monetary or decimal value {rng}."
         elif all_ints:
             subtype = "discrete_integer"
-            tags.append("profile:discrete_integer")
-            decisions.append(f"subtype='discrete_integer' + tag 'profile:discrete_integer': all sampled values are integers ({dist_cnt} distinct, range {min_v}..{max_v})")
+            _tag("profile:discrete_integer", f"subtype='discrete_integer' + tag 'profile:discrete_integer': all sampled values are integers ({dist_cnt} distinct, range {min_v}..{max_v})")
             rec_desc = f"{prefix}Discrete integer (range: {min_v} to {max_v}, avg: {avg_v}, median: {med_v}, {dist_cnt} distinct)."
         else:
             subtype = "continuous_number"
-            tags.append("profile:continuous_number")
-            decisions.append(f"subtype='continuous_number' + tag 'profile:continuous_number': non-integer numeric values (range {min_v}..{max_v})")
-            rec_desc = f"{prefix}Continuous number (range: {min_v} to {max_v}, avg: {avg_v}, median: {med_v})."
+            _tag("profile:continuous_number", f"subtype='continuous_number' + tag 'profile:continuous_number': non-integer numeric values (range {min_v}..{max_v})")
+            rec_desc = f"{prefix}Continuous number {rng}."
 
         if neg_cnt > 0:
-            tags.append("profile:has_negatives")
-            decisions.append(f"tag 'profile:has_negatives': negative_count={neg_cnt} > 0")
+            _tag("profile:has_negatives", f"tag 'profile:has_negatives': negative_count={neg_cnt} > 0")
         if zero_cnt > 0:
-            tags.append("profile:has_zeros")
-            decisions.append(f"tag 'profile:has_zeros': zero_count={zero_cnt} > 0")
+            _tag("profile:has_zeros", f"tag 'profile:has_zeros': zero_count={zero_cnt} > 0")
         if avg_v is not None and med_v is not None and med_v != 0 and abs(avg_v - med_v) / abs(med_v) >= 0.5:
-            tags.append("profile:skewed_distribution")
-            decisions.append(f"tag 'profile:skewed_distribution': |avg ({avg_v}) - median ({med_v})| / |median| >= 0.5")
+            _tag("profile:skewed_distribution", f"tag 'profile:skewed_distribution': |avg ({avg_v}) - median ({med_v})| / |median| >= 0.5")
 
     elif root_type == "yesno":
-        t_cnt = _to_int(stats.get("true_count"))
-        f_cnt = _to_int(stats.get("false_count"))
-        t_pct = _to_float(stats.get("true_pct")) or 0.0
-        f_pct = _to_float(stats.get("false_pct")) or 0.0
+        t_cnt, f_cnt = _to_int(stats.get("true_count")), _to_int(stats.get("false_count"))
+        t_pct, f_pct = _to_float(stats.get("true_pct")) or 0.0, _to_float(stats.get("false_pct")) or 0.0
         if t_cnt == 0 and f_cnt == 0 and total_rows > 0:
-            subtype = "empty_or_null"
-            rec_hidden = True
-            tags.append("profile:empty_or_null_only")
-            decisions.append(f"subtype='empty_or_null' + tag 'profile:empty_or_null_only' (hidden=True): 0 non-null boolean rows out of {total_rows}")
+            subtype, rec_hidden = "empty_or_null", True
+            _tag("profile:empty_or_null_only", f"subtype='empty_or_null' + tag 'profile:empty_or_null_only' (hidden=True): 0 non-null boolean rows out of {total_rows}")
             rec_desc = f"{prefix}Boolean flag with only NULL values."
         elif (t_cnt == 0 or f_cnt == 0) and (t_cnt + f_cnt) > 0:
             subtype = "constant_boolean"
@@ -2093,68 +2032,58 @@ def _finalize_field_profile(
             rec_desc = f"{prefix}Constant boolean flag (Yes: {t_pct}%, No: {f_pct}%)."
         elif min(t_pct, f_pct) < 5.0 and (t_cnt + f_cnt) > 0:
             subtype = "rare_or_skewed_boolean"
-            tags.append("profile:rare_or_skewed_boolean")
-            decisions.append(f"subtype='rare_or_skewed_boolean' + tag 'profile:rare_or_skewed_boolean': minority class {min(t_pct, f_pct)}% < 5.0% threshold (Yes={t_pct}%, No={f_pct}%)")
+            _tag("profile:rare_or_skewed_boolean", f"subtype='rare_or_skewed_boolean' + tag 'profile:rare_or_skewed_boolean': minority class {min(t_pct, f_pct)}% < 5.0% threshold (Yes={t_pct}%, No={f_pct}%)")
             rec_desc = f"{prefix}Skewed boolean flag (Yes: {t_pct}%, No: {f_pct}%)."
         else:
             subtype = "balanced_boolean"
-            tags.append("profile:balanced_boolean")
-            decisions.append(f"subtype='balanced_boolean' + tag 'profile:balanced_boolean': minority class {min(t_pct, f_pct)}% >= 5.0% threshold (Yes={t_pct}%, No={f_pct}%)")
+            _tag("profile:balanced_boolean", f"subtype='balanced_boolean' + tag 'profile:balanced_boolean': minority class {min(t_pct, f_pct)}% >= 5.0% threshold (Yes={t_pct}%, No={f_pct}%)")
             rec_desc = f"{prefix}Boolean flag (Yes: {t_pct}%, No: {f_pct}%)."
 
     elif root_type == "datetime":
-        min_d = stats.get("min_date")
-        max_d = stats.get("max_date")
-        span_d = stats.get("span_days")
+        min_d, max_d, span_d = stats.get("min_date"), stats.get("max_date"), stats.get("span_days")
         spikiness = _as_dict(stats.get("spikiness"))
         if dist_cnt == 0 and total_rows > 0:
-            subtype = "empty_or_null"
-            rec_hidden = True
-            tags.append("profile:empty_or_null_only")
-            decisions.append(f"subtype='empty_or_null' + tag 'profile:empty_or_null_only' (hidden=True): 0 distinct dates across {total_rows} rows")
+            subtype, rec_hidden = "empty_or_null", True
+            _tag("profile:empty_or_null_only", f"subtype='empty_or_null' + tag 'profile:empty_or_null_only' (hidden=True): 0 distinct dates across {total_rows} rows")
             rec_desc = f"{prefix}Date/time field contains only NULL values."
         elif dtype in ("date_time", "date_raw", "date_hour", "date_minute", "date_second"):
             subtype = "timestamp_or_raw"
-            tags.append("profile:timestamp_or_raw")
-            decisions.append(f"subtype='timestamp_or_raw' + tag 'profile:timestamp_or_raw': lookml_type='{dtype}' is sub-day timestamp grain; expanded to [date, hour] with date subtotals")
+            _tag("profile:timestamp_or_raw", f"subtype='timestamp_or_raw' + tag 'profile:timestamp_or_raw': lookml_type='{dtype}' is sub-day timestamp grain; expanded to [date, hour] with date subtotals")
         elif dtype == "date_date":
             subtype = "calendar_date"
-            tags.append("profile:calendar_date")
-            decisions.append("subtype='calendar_date' + tag 'profile:calendar_date': lookml_type='date_date'; expanded to [year, month, date] with [year, month] subtotals")
+            _tag("profile:calendar_date", "subtype='calendar_date' + tag 'profile:calendar_date': lookml_type='date_date'; expanded to [year, month, date] with [year, month] subtotals")
         elif dtype in ("date_year", "date_quarter", "date_month", "date_week", "date_fiscal_year", "date_fiscal_quarter"):
             subtype = "period_grain"
-            tags.append("profile:period_grain")
-            decisions.append(f"subtype='period_grain' + tag 'profile:period_grain': lookml_type='{dtype}' is coarse calendar period; expanded to [year, month, date] with [year, month] subtotals")
+            _tag("profile:period_grain", f"subtype='period_grain' + tag 'profile:period_grain': lookml_type='{dtype}' is coarse calendar period; expanded to [year, month, date] with [year, month] subtotals")
         else:
             subtype = "calendar_cycle"
-            tags.append("profile:calendar_cycle")
-            decisions.append(f"subtype='calendar_cycle' + tag 'profile:calendar_cycle': lookml_type='{dtype}' is a recurring calendar cycle")
+            _tag("profile:calendar_cycle", f"subtype='calendar_cycle' + tag 'profile:calendar_cycle': lookml_type='{dtype}' is a recurring calendar cycle")
 
         spiky_notes = []
         for g_name, g_obj in spikiness.items():
             gd = _as_dict(g_obj)
-            sr = _to_float(gd.get("spikiness_ratio")) or 0.0
-            cv = _to_float(gd.get("cv")) or 0.0
+            sr, cv = _to_float(gd.get("spikiness_ratio")) or 0.0, _to_float(gd.get("cv")) or 0.0
             if sr >= 2.0 or cv >= 0.5:
-                tags.append(f"profile:spiky_{g_name}")
+                _tag(f"profile:spiky_{g_name}", f"tag 'profile:spiky_{g_name}': {g_name} spikiness_ratio={sr} (>=2.0) or cv={cv} (>=0.5), peak={gd.get('peak_period')} ({gd.get('max_count')}) vs mean={gd.get('mean_count')}")
                 spiky_notes.append(f"{g_name} peak {gd.get('peak_period')} ({sr}x mean)")
-                decisions.append(
-                    f"tag 'profile:spiky_{g_name}': {g_name} spikiness_ratio={sr} (>=2.0) or cv={cv} (>=0.5), peak={gd.get('peak_period')} ({gd.get('max_count')}) vs mean={gd.get('mean_count')}"
-                )
             elif 0 < cv < 0.25 and "profile:steady_volume" not in tags:
-                tags.append("profile:steady_volume")
-                decisions.append(f"tag 'profile:steady_volume': {g_name} cv={cv} < 0.25")
+                _tag("profile:steady_volume", f"tag 'profile:steady_volume': {g_name} cv={cv} < 0.25")
 
         if subtype != "empty_or_null":
             range_str = f"Range: {min_d} to {max_d} ({span_d} days)" if min_d and max_d else f"{dist_cnt} distinct periods"
-            spike_str = f"; spikiness: {', '.join(spiky_notes)}" if spiky_notes else ""
-            rec_desc = f"{prefix}{range_str}{spike_str}."
+            rec_desc = f"{prefix}{range_str}{'; spikiness: ' + ', '.join(spiky_notes) if spiky_notes else ''}."
 
     suggested_tags = _uniq(tags)
     rec_tags = _uniq(existing_tags + suggested_tags)
     dg_name = d.get("dimension_group")
     target_short = str(dg_name).split(".", 1)[-1] if dg_name else sname
-    snippet = _build_lookml_snippet(target_short, rec_hidden, rec_suggestable, rec_tags, rec_desc, is_dg=bool(dg_name))
+    kw = "dimension_group" if dg_name else "dimension"
+    s_lines = [f"  {kw}: {target_short} {{", f"    hidden: {'yes' if rec_hidden else 'no'}"]
+    if rec_suggestable is not None and not dg_name:
+        s_lines.append(f"    suggestable: {'yes' if rec_suggestable else 'no'}")
+    if rec_tags:
+        s_lines.append(f"    tags: [{', '.join(_json_dumps(t) for t in rec_tags)}]")
+    s_lines.extend([f"    description: {_json_dumps(rec_desc)}", "  }"])
 
     return {
         "field": fname,
@@ -2183,7 +2112,7 @@ def _finalize_field_profile(
             "recommended_suggestable": rec_suggestable,
             "recommended_description": rec_desc,
             "suggested_tags": rec_tags,
-            "lookml_snippet": snippet,
+            "lookml_snippet": "\n".join(s_lines),
         },
     }
 
@@ -2209,10 +2138,8 @@ def profile_fields(
     req_fields = list(fields if fields is not None else _as_strs(b_dict.get("fields")))
     raw_flts = filters if filters is not None else _as_dict(b_dict.get("filters"))
     base_filters = {str(k): str(v) for k, v in raw_flts.items() if k and v is not None}
-    if "types_only" in b_dict and not types_only:
-        types_only = bool(b_dict["types_only"])
-    if "group_fields" in b_dict and not group_fields:
-        group_fields = bool(b_dict["group_fields"])
+    types_only = types_only or bool(b_dict.get("types_only"))
+    group_fields = group_fields or bool(b_dict.get("group_fields"))
     raw_lim = b_dict.get("limit", limit) if limit == 5000 else limit
     q_limit = min(max(_to_int(raw_lim) or 5000, 1), 5000)
 
@@ -2226,26 +2153,21 @@ def profile_fields(
     meas_by_name = {str(m["name"]): m for m in meas if m.get("name")}
     dgs_by_group: dict[str, dict[str, str]] = {}
     dim_by_table_col: dict[str, list[str]] = {}
-    referenced_by: dict[str, list[str]] = {}
+    referenced_fields = {
+        r
+        for item in dims + meas
+        for r in _extract_refs(item.get("sql"), item.get("view") or base_view)
+    }
 
     for d in dims:
         dn = str(d.get("name") or "")
         dv = str(d.get("view") or base_view)
         dg = d.get("dimension_group")
         if dg and dn.startswith(str(dg) + "_"):
-            sfx = dn[len(str(dg)) + 1 :]
-            dgs_by_group.setdefault(str(dg), {})[sfx] = dn
+            dgs_by_group.setdefault(str(dg), {})[dn[len(str(dg)) + 1 :]] = dn
         tc = _table_col(d.get("sql"), dv)
         if dn and tc and not d.get("is_timeframe"):
             dim_by_table_col.setdefault(tc, []).append(dn)
-        for r in _extract_refs(d.get("sql"), dv):
-            referenced_by.setdefault(r, []).append(dn)
-
-    for m in meas:
-        mn = str(m.get("name") or "")
-        mv = str(m.get("view") or base_view)
-        for r in _extract_refs(m.get("sql"), mv):
-            referenced_by.setdefault(r, []).append(mn)
 
     if not req_fields:
         req_fields = [
@@ -2274,15 +2196,11 @@ def profile_fields(
                 stack.extend(_extract_refs(rm.get("sql"), rm.get("view") or m_view))
             elif ref in dims_by_name:
                 rd = dims_by_name[ref]
-                sub = _extract_refs(rd.get("sql"), rd.get("view") or m_view)
-                if sub:
-                    stack.extend(sub)
+                stack.extend(_extract_refs(rd.get("sql"), rd.get("view") or m_view))
                 if ref not in leaves:
                     leaves.append(ref)
-        if not leaves:
-            tc = _table_col(m_obj.get("sql"), m_view)
-            if tc:
-                leaves.extend(dim_by_table_col.get(tc, []))
+        if not leaves and (tc := _table_col(m_obj.get("sql"), m_view)):
+            leaves.extend(dim_by_table_col.get(tc, []))
         return _uniq(leaves)
 
     for rf in req_fields:
@@ -2296,39 +2214,30 @@ def profile_fields(
             target_dims.extend(leaves)
         elif qual in dgs_by_group:
             dg_map = dgs_by_group[qual]
-            picked = dg_map.get("date") or dg_map.get("time") or next(iter(dg_map.values()), "")
-            if picked:
+            if picked := (dg_map.get("date") or dg_map.get("time") or next(iter(dg_map.values()), "")):
                 target_dims.append(picked)
 
     target_dims = _uniq(target_dims)
     target_measures = _uniq(target_measures)
-
-    type_buckets: dict[str, list[str]] = {
-        "string": [],
-        "number": [],
-        "yesno": [],
-        "datetime": [],
+    type_buckets = {
+        rt: [dn for dn in target_dims if _root_field_type(dims_by_name[dn]) == rt]
+        for rt in ("string", "number", "yesno", "datetime")
     }
-    for dn in target_dims:
-        rt = _root_field_type(dims_by_name[dn])
-        type_buckets[rt].append(dn)
 
     def _is_helper_dim(dn: str) -> bool:
-        sn = dn.split(".", 1)[-1].lower()
-        return bool(referenced_by.get(dn)) and sn.startswith(("_", "helper_", "tmp_", "raw_"))
+        return dn in referenced_fields and dn.split(".", 1)[-1].lower().startswith(("_", "helper_", "tmp_", "raw_"))
 
     if types_only:
-        profiles_meta = {
-            dn: _finalize_field_profile(dims_by_name[dn], _root_field_type(dims_by_name[dn]), {}, _is_helper_dim(dn))
-            for dn in target_dims
-        }
         return {
             "model": m_name,
             "view": v_name,
             "limit": q_limit,
             "types_only": True,
             "type_buckets": type_buckets,
-            "profiles": profiles_meta,
+            "profiles": {
+                dn: _finalize_field_profile(dims_by_name[dn], _root_field_type(dims_by_name[dn]), {}, _is_helper_dim(dn))
+                for dn in target_dims
+            },
             "measures": {
                 mn: {
                     "field": mn,
@@ -2341,19 +2250,11 @@ def profile_fields(
 
     def _run_detail(q_body: dict[str, object]) -> dict[str, object]:
         raw = run_inline_query("json_detail", q_body)
-        if isinstance(raw, str):
-            s = raw.strip()
-            return _as_dict(_json_loads(s)) if s.startswith("{") else {}
-        return _as_dict(raw)
+        return _as_dict(_json_loads(raw.strip()) if isinstance(raw, str) and raw.strip().startswith("{") else raw)
 
     measures_out: dict[str, dict[str, object]] = {}
     if target_measures:
-        m_body: dict[str, object] = {
-            "model": m_name,
-            "view": v_name,
-            "fields": target_measures,
-            "limit": "1",
-        }
+        m_body: dict[str, object] = {"model": m_name, "view": v_name, "fields": target_measures, "limit": "1"}
         if base_filters:
             m_body["filters"] = base_filters
         m_rows = _as_dicts(run_inline_query("json", m_body))
@@ -2374,8 +2275,7 @@ def profile_fields(
     overall_total_rows = 0
 
     def _build_dim_dyn(dn: str, rt: str, idx: int) -> tuple[list[dict[str, object]], list[str]]:
-        ref = "${" + dn + "}"
-        p = f"_p{idx}_"
+        ref, p = "${" + dn + "}", f"_p{idx}_"
         dyn: list[dict[str, object]] = [
             {"measure": f"{p}rows", "based_on": dn, "type": "count"},
             {"measure": f"{p}dist", "based_on": dn, "type": "count_distinct"},
@@ -2432,14 +2332,9 @@ def profile_fields(
                 sv = str(v)
                 val_counts[sv] = val_counts.get(sv, 0) + rc
 
-        top_pairs = sorted(val_counts.items(), key=lambda x: x[1], reverse=True)[:15]
         top_values = [
-            {
-                "value": k,
-                "count": c,
-                "pct": round(100.0 * c / t_rows, 2) if t_rows > 0 else 0.0,
-            }
-            for k, c in top_pairs
+            {"value": k, "count": c, "pct": round(100.0 * c / t_rows, 2) if t_rows > 0 else 0.0}
+            for k, c in sorted(val_counts.items(), key=lambda x: x[1], reverse=True)[:15]
         ]
 
         st: dict[str, object] = {
@@ -2449,41 +2344,27 @@ def profile_fields(
             "sample_rows_returned": len(data_rows),
         }
         if rt == "string":
-            e_cnt = _to_int(_cell_val(totals.get(f"{p}empty")))
-            min_l = _to_int(_cell_val(totals.get(f"{p}minlen")))
-            max_l = _to_int(_cell_val(totals.get(f"{p}maxlen")))
-            avg_l = _to_float(_cell_val(totals.get(f"{p}avglen"))) or 0.0
             st.update({
-                "empty_count": e_cnt,
-                "min_length": min_l,
-                "max_length": max_l,
-                "avg_length": round(avg_l, 2),
+                "empty_count": _to_int(_cell_val(totals.get(f"{p}empty"))),
+                "min_length": _to_int(_cell_val(totals.get(f"{p}minlen"))),
+                "max_length": _to_int(_cell_val(totals.get(f"{p}maxlen"))),
+                "avg_length": round(_to_float(_cell_val(totals.get(f"{p}avglen"))) or 0.0, 2),
                 "top_values": top_values,
             })
         elif rt == "number":
-            min_v = _to_float(_cell_val(totals.get(f"{p}min")))
-            max_v = _to_float(_cell_val(totals.get(f"{p}max")))
-            avg_v = _to_float(_cell_val(totals.get(f"{p}avg")))
-            med_v = _to_float(_cell_val(totals.get(f"{p}med")))
-            sum_v = _to_float(_cell_val(totals.get(f"{p}sum")))
-            z_cnt = _to_int(_cell_val(totals.get(f"{p}zero")))
-            neg_cnt = _to_int(_cell_val(totals.get(f"{p}neg")))
             num_samples = [f for x in raw_vals if (f := _to_float(x)) is not None]
-            all_ints = bool(num_samples) and all(float(int(x)) == x for x in num_samples)
             st.update({
-                "min": round(min_v, 4) if min_v is not None else None,
-                "max": round(max_v, 4) if max_v is not None else None,
-                "average": round(avg_v, 4) if avg_v is not None else None,
-                "median": round(med_v, 4) if med_v is not None else None,
-                "sum": round(sum_v, 4) if sum_v is not None else None,
-                "zero_count": z_cnt,
-                "negative_count": neg_cnt,
-                "all_integers": all_ints,
+                **{
+                    k: (round(fv, 4) if (fv := _to_float(_cell_val(totals.get(f"{p}{sfx}")))) is not None else None)
+                    for k, sfx in (("min", "min"), ("max", "max"), ("average", "avg"), ("median", "med"), ("sum", "sum"))
+                },
+                "zero_count": _to_int(_cell_val(totals.get(f"{p}zero"))),
+                "negative_count": _to_int(_cell_val(totals.get(f"{p}neg"))),
+                "all_integers": bool(num_samples) and all(float(int(x)) == x for x in num_samples),
                 "top_values": top_values[:10],
             })
         elif rt == "yesno":
-            t_cnt = _to_int(_cell_val(totals.get(f"{p}true")))
-            f_cnt = _to_int(_cell_val(totals.get(f"{p}false")))
+            t_cnt, f_cnt = _to_int(_cell_val(totals.get(f"{p}true"))), _to_int(_cell_val(totals.get(f"{p}false")))
             denom = t_cnt + f_cnt
             st.update({
                 "true_count": t_cnt,
@@ -2493,20 +2374,15 @@ def profile_fields(
             })
         return st
 
-    non_dt_dims = [dn for dn in target_dims if _root_field_type(dims_by_name[dn]) != "datetime"]
-    dt_dims = [dn for dn in target_dims if _root_field_type(dims_by_name[dn]) == "datetime"]
+    dt_dims = type_buckets["datetime"]
+    non_dt_dims = [dn for dn in target_dims if dn not in dt_dims]
 
-    batches = (
-        [non_dt_dims]
-        if group_fields and len(non_dt_dims) > 1
-        else [[dn] for dn in non_dt_dims]
-    )
+    batches = [non_dt_dims] if group_fields and len(non_dt_dims) > 1 else [[dn] for dn in non_dt_dims]
     for batch in batches:
         all_dyn: list[dict[str, object]] = []
         all_m_names: list[str] = []
         for idx, dn in enumerate(batch):
-            rt = _root_field_type(dims_by_name[dn])
-            d_items, m_items = _build_dim_dyn(dn, rt, idx)
+            d_items, m_items = _build_dim_dyn(dn, _root_field_type(dims_by_name[dn]), idx)
             all_dyn.extend(d_items)
             all_m_names.extend(m_items)
         q_body: dict[str, object] = {
@@ -2521,20 +2397,17 @@ def profile_fields(
         if base_filters:
             q_body["filters"] = base_filters
         detail = _run_detail(q_body)
-        totals = _as_dict(detail.get("totals_data"))
-        d_rows = _as_dicts(detail.get("data"))
+        totals, d_rows = _as_dict(detail.get("totals_data")), _as_dicts(detail.get("data"))
         for idx, dn in enumerate(batch):
             rt = _root_field_type(dims_by_name[dn])
             st = _extract_dim_stats(dn, rt, idx, totals, d_rows)
             overall_total_rows = max(overall_total_rows, _to_int(st.get("total_rows")))
-            profiles[dn] = _finalize_field_profile(
-                dims_by_name[dn], rt, st, _is_helper_dim(dn)
-            )
+            profiles[dn] = _finalize_field_profile(dims_by_name[dn], rt, st, _is_helper_dim(dn))
         if len(batch) > 1:
-            for r in d_rows[:50]:
-                row_clean = {dn: _cell_val(r.get(dn)) for dn in batch}
-                row_clean["count"] = _to_int(_cell_val(r.get("_p0_rows")))
-                grouped_rows_out.append(row_clean)
+            grouped_rows_out.extend(
+                {**{dn: _cell_val(r.get(dn)) for dn in batch}, "count": _to_int(_cell_val(r.get("_p0_rows")))}
+                for r in d_rows[:50]
+            )
 
     for dn in dt_dims:
         d_obj = dims_by_name[dn]
@@ -2561,39 +2434,34 @@ def profile_fields(
             ])
             dt_m_names.extend(["_dt_min_d", "_dt_max_d"])
 
-        expanded_dims: list[str] = []
-        subtotals_list: list[str] = []
-        grain_map: list[tuple[str, str]] = []
+        def _grain_dim(
+            sfx: str,
+            fallback: str,
+            expr: str,
+            _dg: dict[str, str] = dg_map,
+            _dyn: list[dict[str, object]] = dt_dyn,
+        ) -> str:
+            if found := _dg.get(sfx):
+                return found
+            _dyn.append({"dimension": fallback, "expression": expr})
+            return fallback
 
+        subtotals_list: list[str] = []
         if is_time_grain:
-            day_f = dg_map.get("date")
-            if not day_f:
-                day_f = "_dt_day_dim"
-                dt_dyn.append({"dimension": day_f, "expression": f"trunc_days({ref})"})
-            hr_f = dg_map.get("hour")
-            if not hr_f:
-                hr_f = "_dt_hour_dim"
-                dt_dyn.append({"dimension": hr_f, "expression": f"trunc_hours({ref})"})
+            day_f = _grain_dim("date", "_dt_day_dim", f"trunc_days({ref})")
+            hr_f = _grain_dim("hour", "_dt_hour_dim", f"trunc_hours({ref})")
             expanded_dims = _uniq([day_f, hr_f])
-            if len(expanded_dims) > 1:
-                subtotals_list = [day_f]
+            subtotals_list = [day_f] if len(expanded_dims) > 1 else []
             grain_map = [("day", day_f), ("hour", hr_f)]
         elif is_date_grain:
-            yr_f = dg_map.get("year")
-            if not yr_f:
-                yr_f = "_dt_year_dim"
-                dt_dyn.append({"dimension": yr_f, "expression": f"extract_years({ref})"})
-            mo_f = dg_map.get("month")
-            if not mo_f:
-                mo_f = "_dt_month_dim"
-                dt_dyn.append({"dimension": mo_f, "expression": f"trunc_months({ref})"})
+            yr_f = _grain_dim("year", "_dt_year_dim", f"extract_years({ref})")
+            mo_f = _grain_dim("month", "_dt_month_dim", f"trunc_months({ref})")
             day_f = dg_map.get("date") or dn
             expanded_dims = _uniq([yr_f, mo_f, day_f])
             subtotals_list = expanded_dims[:-1]
             grain_map = [("year", yr_f), ("month", mo_f), ("day", day_f)]
         else:
-            expanded_dims = [dn]
-            grain_map = [("cycle", dn)]
+            expanded_dims, grain_map = [dn], [("cycle", dn)]
 
         dt_body: dict[str, object] = {
             "model": m_name,
@@ -2610,17 +2478,14 @@ def profile_fields(
             dt_body["filters"] = base_filters
 
         detail = _run_detail(dt_body)
-        totals = _as_dict(detail.get("totals_data"))
-        d_rows = _as_dicts(detail.get("data"))
-        sub_data = _as_dict(detail.get("subtotals_data"))
+        totals, d_rows, sub_data = _as_dict(detail.get("totals_data")), _as_dicts(detail.get("data")), _as_dict(detail.get("subtotals_data"))
 
         t_rows = _to_int(_cell_val(totals.get("_dt_rows")))
         d_cnt = _to_int(_cell_val(totals.get("_dt_dist")))
         n_cnt = _to_int(_cell_val(totals.get("_dt_null")))
         overall_total_rows = max(overall_total_rows, t_rows)
 
-        min_epoch = _to_float(_cell_val(totals.get("_dt_min_d")))
-        max_epoch = _to_float(_cell_val(totals.get("_dt_max_d")))
+        min_epoch, max_epoch = _to_float(_cell_val(totals.get("_dt_min_d"))), _to_float(_cell_val(totals.get("_dt_max_d")))
         min_date = _days_to_ymd(round(min_epoch)) if min_epoch is not None else None
         max_date = _days_to_ymd(round(max_epoch)) if max_epoch is not None else None
         span_days = round(max_epoch - min_epoch) if (min_epoch is not None and max_epoch is not None) else None
@@ -2630,10 +2495,7 @@ def profile_fields(
 
         for depth_idx, (g_label, g_field) in enumerate(grain_map, start=1):
             depth_key = str(depth_idx)
-            if depth_key in sub_data and depth_idx <= len(subtotals_list):
-                src_rows = _as_dicts(sub_data.get(depth_key))
-            else:
-                src_rows = d_rows
+            src_rows = _as_dicts(sub_data.get(depth_key)) if (depth_key in sub_data and depth_idx <= len(subtotals_list)) else d_rows
             agg_by_p: dict[str, float] = {}
             for r in src_rows:
                 pv = _cell_val(r.get(g_field))
@@ -2641,11 +2503,10 @@ def profile_fields(
                 if pv is not None:
                     ps = str(pv)
                     agg_by_p[ps] = agg_by_p.get(ps, 0.0) + rc
-            pairs = sorted(agg_by_p.items(), key=lambda x: x[0])
-            spikiness[g_label] = _spikiness_stats(pairs)
-            top_p = sorted(agg_by_p.items(), key=lambda x: x[1], reverse=True)[:12]
+            spikiness[g_label] = _spikiness_stats(sorted(agg_by_p.items(), key=lambda x: x[0]))
             subtotals_summary[g_label] = [
-                {"period": k, "count": round(c)} for k, c in top_p
+                {"period": k, "count": round(c)}
+                for k, c in sorted(agg_by_p.items(), key=lambda x: x[1], reverse=True)[:12]
             ]
 
         dt_stats: dict[str, object] = {
