@@ -187,6 +187,11 @@ rows = json.loads(run_inline_query(result_format="json", body=body))
 
 Custom Fields and Custom Filters compile directly into the warehouse SQL query (`SELECT`, `GROUP BY`, `WHERE`) without modifying LookML files. Promote them to `bronze/:table.refinement.lkml` (single-table DAG) or `silver/:view_a_:view_b_fields.view.lkml` (cross-view DAG) when reused across reports or defined as canonical metrics/terms ([agentic-lookml](../agentic-lookml/SKILL.md)).
 
+### Semantic Reuse Before `dynamic_fields` & Nested `if()` Preference
+
+- **Check modeled fields first:** Always inspect the Explore's modeled dimensions and measures (`lkr schema context` or `lookml_model_explore`) before authoring `dynamic_fields`. If a modeled tier dimension, filtered measure, or ratio measure already exists in LookML, select it in `body["fields"]` instead of recreating it in `dynamic_fields`.
+- **Prefer nested `if()` over `case(when(...))`:** When writing conditional bucketing in a Custom Dimension or Table Calculation, prefer nested `if(cond1, val1, if(cond2, val2, val3))` over `case(when(...))`—it requires fewer tokens and avoids `when()` wrapping mistakes.
+
 ### Custom Dimensions & Custom Measures (`body["dynamic_fields"]`)
 
 - **Must appear in both `dynamic_fields` AND `fields`:** Every Custom Dimension (`"dimension"`) or Custom Measure (`"measure"`) defined in `body["dynamic_fields"]` on `run_inline_query` / `create_query` (or `create_dashboard_element` / `update_dashboard_element`) must also list its identifier in `body["fields"]` in projection order.

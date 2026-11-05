@@ -4349,5 +4349,102 @@ def test_lookml_to_api_validate_handles_liquid_date_and_elsif_sql():
     assert "MEDIAN" in res.output
 
 
+def test_lookml_to_api_validate_rejects_raw_derived_table_sql_table_name():
+    good_lkml = """
+    connection: "bq"
+    view: orders {
+      sql_table_name: `proj.ds.orders` ;;
+      dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }
+    }
+    view: base_rollup {
+      derived_table: {
+        sql: WITH cte AS (SELECT id, items FROM ${orders.SQL_TABLE_NAME})
+             SELECT cte.id FROM cte, UNNEST(cte.items) AS item ;;
+      }
+      dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }
+    }
+    view: ext_rollup {
+      extends: [base_rollup]
+      derived_table: {
+        sql: SELECT id FROM (${EXTENDED}) ;;
+      }
+    }
+    explore: ext_rollup {}
+    """
+    res_good = runner.invoke(
+        app,
+        ["parse", "lookml-to-api", "--lookml", good_lkml, "-m", "inline", "-e", "ext_rollup", "--validate"],
+    )
+    assert res_good.exit_code == 0, res_good.output
+
+    bad_lkml = """
+    connection: "bq"
+    view: helper_dt {
+      derived_table: {
+        sql: SELECT id FROM `proj.ds.raw_helper` ;;
+      }
+    }
+    view: main_dt {
+      derived_table: {
+        sql: SELECT h.id FROM ${helper_dt.SQL_TABLE_NAME} AS h JOIN ds.orders AS o ON h.id = o.id ;;
+      }
+      dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }
+    }
+    explore: main_dt {}
+    """
+    res_bad = runner.invoke(
+        app,
+        ["parse", "lookml-to-api", "--lookml", bad_lkml, "-m", "inline", "-e", "main_dt", "--validate"],
+    )
+    assert res_bad.exit_code == 1
+    exp_errs = json.loads(res_bad.stdout)["lookml_model_explores"]["inline::main_dt"]["errors"]
+    errs = {e["view"]: e for e in exp_errs if e["type"] == "raw_derived_table_sql_table_name"}
+    assert errs["main_dt"]["fields"] == ["ds.orders"]
+    assert errs["helper_dt"]["fields"] == ["proj.ds.raw_helper"]
+
+
+def test_dimension_group_chrg_month_passes_schema_validate(tmp_path: Path):
+    lkml = """
+    connection: "bq"
+    view: t {
+      sql_table_name: `p.d.t` ;;
+      fields_hidden_by_default: yes
+      dimension_group: chrg_month {
+        hidden: no
+        type: time
+        sql: ${TABLE}.chrg_month ;;
+        timeframes: [raw, month]
+      }
+    }
+    explore: t {
+      fields: [t.chrg_month*]
+    }
+    """
+    exp_file = tmp_path / "explore_t.json"
+    r1 = runner.invoke(
+        app,
+        ["parse", "lookml-to-api", "--lookml", lkml, "-m", "inline", "-e", "t", "--validate", "-o", str(exp_file)],
+    )
+    assert r1.exit_code == 0, r1.output
+    r2 = runner.invoke(
+        app,
+        [
+            "schema",
+            "validate",
+            "-m",
+            "inline",
+            "-e",
+            "t",
+            "--explore-file",
+            str(exp_file),
+            "--query",
+            json.dumps({"model": "inline", "view": "t", "fields": ["t.chrg_month_month"]}),
+        ],
+    )
+    assert r2.exit_code == 0, r2.output
+    assert json.loads(r2.stdout)["valid"] is True
+
+
+
 
 

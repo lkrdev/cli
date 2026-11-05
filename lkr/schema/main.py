@@ -7,10 +7,15 @@ import typer
 from lkr.auth_service import get_auth
 from lkr.classes import LkrCtxObj
 from lkr.logger import logger
-from lkr.schema.builder import build_explore_query_schema
-from lkr.schema.validator import validate_batch_queries, validate_query
+from lkr.schema.builder import build_explore_query_schema, build_schema_context
+from lkr.schema.validator import (
+    validate_batch_queries,
+    validate_merge_query,
+    validate_query,
+)
 
 __all__ = [
+    "context_command",
     "generate_command",
     "group",
     "validate_command",
@@ -157,6 +162,30 @@ def validate_command(
     else:
         raise typer.Exit(1)
 
+    if (
+        isinstance(query_payload, dict)
+        and "source_queries" in query_payload
+        and explore_file is not None
+    ):
+        sqs = query_payload.get("source_queries")
+        first_q = (
+            (sqs[0].get("query") if isinstance(sqs[0].get("query"), dict) else sqs[0])
+            if isinstance(sqs, list) and sqs and isinstance(sqs[0], dict)
+            else {}
+        )
+        resolved_model = model or (
+            first_q.get("model") if isinstance(first_q, dict) else None
+        )
+        if not resolved_model:
+            logger.error("Must provide --model for source_queries validation")
+            raise typer.Exit(1)
+        explore_data = _load_explore_data(ctx, resolved_model, "", explore_file)
+        result = validate_merge_query(query_payload, resolved_model, explore_data)
+        typer.echo(json.dumps(result.to_dict(), indent=2))
+        if not result.valid:
+            raise typer.Exit(1)
+        return
+
     if schema is not None:
         schema_data = json.loads(schema)
     elif schema_file is not None:
@@ -200,3 +229,58 @@ def validate_command(
         typer.echo(json.dumps(result.to_dict(), indent=2))
         if not result.valid:
             raise typer.Exit(1)
+
+
+@group.command(name="context")
+def context_command(
+    ctx: typer.Context,
+    model: Annotated[
+        str,
+        typer.Option("--model", "-m", help="LookML model name"),
+    ],
+    path: Annotated[
+        Path | None,
+        typer.Option("--path", help="Path to local LookML repository directory"),
+    ] = None,
+    explore_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--explore-file",
+            "-f",
+            help="Path to a local lookml-to-api JSON file",
+        ),
+    ] = None,
+    prompt: Annotated[
+        str | None,
+        typer.Option("--prompt", "-p", help="User analytics question for BM25 ranking"),
+    ] = None,
+    top_explores: Annotated[
+        int,
+        typer.Option("--top-explores", help="Number of top Explores to include"),
+    ] = 3,
+    max_fields_per_view: Annotated[
+        int,
+        typer.Option(
+            "--max-fields-per-view",
+            help="Maximum dimensions/measures to include per view when --prompt is set",
+        ),
+    ] = 35,
+) -> None:
+    """Prune LookML Explores and fields into a compact local BM25 context catalog."""
+    if explore_file is not None:
+        explores_data = _load_explore_data(ctx, model, "", explore_file)
+    else:
+        from lkr.parse.lookml_to_api import parse_lookml_to_api
+
+        repo_dir = path if path is not None else Path(".")
+        explores_data = parse_lookml_to_api(
+            repo_dir, model=model, exclude_hidden=True
+        ).model_dump(exclude_none=True)
+    catalog = build_schema_context(
+        model,
+        explores_data,
+        prompt=prompt,
+        top_explores=top_explores,
+        max_fields_per_view=max_fields_per_view,
+    )
+    typer.echo(json.dumps(catalog, indent=2))

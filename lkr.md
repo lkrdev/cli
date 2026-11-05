@@ -148,6 +148,7 @@ $ lkr schema [OPTIONS] COMMAND [ARGS]...
 
 * `generate`: Generate a strongly-typed run_inline_query...
 * `validate`: Validate a query (--query or --query-file)...
+* `context`: Prune LookML Explores and fields into a...
 
 ### `lkr schema generate`
 
@@ -186,6 +187,26 @@ $ lkr schema validate [OPTIONS]
 * `--schema-file <path>`: Path to a generated JSON schema file (optional; if omitted, generates schema from --model and --explore)
 * `-q, --query <str>`: Inline query JSON string (either full run_inline_query payload or body WriteQuery)
 * `--query-file <path>`: Path to a query JSON file (either full run_inline_query payload or body WriteQuery)
+* `--help`: Show this message and exit.
+
+### `lkr schema context`
+
+Prune LookML Explores and fields into a compact local BM25 context catalog.
+
+**Usage**:
+
+```console
+$ lkr schema context [OPTIONS]
+```
+
+**Options**:
+
+* `-m, --model <str>`: LookML model name  [required]
+* `--path <path>`: Path to local LookML repository directory
+* `-f, --explore-file <path>`: Path to a local lookml-to-api JSON file
+* `-p, --prompt <str>`: User analytics question for BM25 ranking
+* `--top-explores <int>`: Number of top Explores to include  [default: 3]
+* `--max-fields-per-view <int>`: Maximum dimensions/measures to include per view when --prompt is set  [default: 35]
 * `--help`: Show this message and exit.
 
 ## `lkr mcp`
@@ -793,7 +814,7 @@ $ lkr parse lookml-to-api [OPTIONS]
 * `-m, --model <str>`: Optional LookML model name filter
 * `-e, --explore <str>`: Optional LookML explore name filter
 * `--exclude-hidden`: Exclude hidden explores and hidden fields from output
-* `--validate`: Fail with non-zero exit code on duplicate field logic, alias collisions, unknown value_format_name, &#x27;* 100&#x27; paired with literal &#x27;%&#x27; value_format, or raw percentile/stddev/variance SQL in type: number measures
+* `--validate`: Fail with non-zero exit code on duplicate field logic, alias collisions, unknown value_format_name, &#x27;* 100&#x27; paired with literal &#x27;%&#x27; value_format, raw percentile/stddev/variance SQL in type: number measures, or raw SQL table names in derived_table.sql
 * `--base-path <path>`: Baseline LookML directory; --validate ignores pre-existing errors present in --base-path
 * `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
 * `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)

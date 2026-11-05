@@ -634,7 +634,9 @@ def _expand_view_for_explore(
     for _, _, _, src_line, src_file, ftype, fname, fobj in decl_items:
         eff_view_label = getattr(fobj, "view_label", None) or default_view_label
         is_hidden = bool(
-            getattr(fobj, "hidden", False) or view_obj.fields_hidden_by_default
+            fobj.hidden
+            if getattr(fobj, "hidden", None) is not None
+            else view_obj.fields_hidden_by_default
         )
         if exclude_hidden and is_hidden:
             continue
@@ -1560,6 +1562,130 @@ def _find_inaccessible_view_ref_errors(
     ]
 
 
+def _extract_raw_dt_tables(dt_sql: str) -> list[str]:
+    s = re.sub(r"\$\{\s*EXTENDED\s*\}\s*\.\s*\*", "*", dt_sql, flags=re.IGNORECASE)
+    s = re.sub(
+        r"\(\s*\$\{\s*(?:[a-zA-Z0-9_]+\.SQL_TABLE_NAME|EXTENDED)\s*\}\s*\)|\$\{\s*(?:[a-zA-Z0-9_]+\.SQL_TABLE_NAME|EXTENDED)\s*\}",
+        " __lkml_tbl ",
+        s,
+        flags=re.IGNORECASE,
+    )
+    s = re.sub(
+        r"\{\{\s*(?:_table|_view\._name|[a-zA-Z0-9_]+\._name)\s*\}\}",
+        "__lkml_alias",
+        s,
+    )
+    s = re.sub(r"\{\{\s*[a-zA-Z0-9_.]+\._sql\s*\}\}", "__self.col", s)
+    s = re.sub(
+        r"\{%-?\s*date_(?:start|end)\b.*?-?%\}",
+        "CURRENT_TIMESTAMP()",
+        s,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    s = re.sub(r"\{%-?\s*parameter\b.*?-?%\}", "1", s, flags=re.IGNORECASE | re.DOTALL)
+    s = re.sub(
+        r"\{%-?\s*condition\b.*?-?%\}(.*?)\{%-?\s*endcondition\s*-?%\}",
+        r"(\1 IS NOT NULL)",
+        s,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    s = re.sub(r"\{%.*?%\}", " ", s, flags=re.DOTALL)
+    s = re.sub(r"\{\{.*?\}\}", "1", s, flags=re.DOTALL)
+    s = re.sub(r"\$\{\s*TABLE\s*\}\.", "__tbl.", s)
+    s = re.sub(r"\$\{\s*([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s*\}", r"\1.\2", s)
+    s = re.sub(r"\$\{\s*([a-zA-Z0-9_]+)\s*\}", r"__self.\1", s)
+    for d in ("bigquery", None):
+        try:
+            trees = [
+                t
+                for t in sqlglot.parse(s.strip().rstrip(";"), read=d)
+                if t is not None
+            ]
+        except (SqlglotError, AttributeError):
+            continue
+        if not trees:
+            continue
+        raw: set[str] = set()
+        for tree in trees:
+            ctes = {
+                c.alias_or_name.lower()
+                for c in tree.find_all(exp.CTE)
+                if c.alias_or_name
+            }
+            valid_aliases = {
+                t.alias.lower()
+                for t in tree.find_all(exp.Table)
+                if t.alias and (t.name == "__lkml_tbl" or t.name.lower() in ctes)
+            } | {"__lkml_alias", "__self", "__tbl"}
+            for t in tree.find_all(exp.Table):
+                if (
+                    not t.name
+                    or t.name == "__lkml_tbl"
+                    or isinstance(t.this, exp.Func)
+                    or (not t.db and not t.catalog and t.name.lower() in ctes)
+                    or (not t.catalog and t.db and t.db.lower() in valid_aliases)
+                ):
+                    continue
+                raw.add(".".join(p.name for p in t.parts if p.name))
+        return sorted(raw)
+    return []
+
+
+def _find_raw_derived_table_errors(
+    views_by_alias: dict[str, LookmlView],
+    model_views: dict[str, LookmlView],
+) -> list[dict[str, Any]]:
+    queue = list(views_by_alias.items())
+    seen: set[int] = set()
+    errors: list[dict[str, Any]] = []
+    while queue:
+        v_alias, v_obj = queue.pop(0)
+        if id(v_obj) in seen:
+            continue
+        seen.add(id(v_obj))
+        dt = getattr(v_obj, "derived_table", None)
+        dt_sql = getattr(dt, "sql", None) if dt else None
+        if isinstance(dt_sql, str) and dt_sql.strip():
+            if raw_tbls := _extract_raw_dt_tables(dt_sql):
+                errors.append(
+                    {
+                        "type": "raw_derived_table_sql_table_name",
+                        "view": v_alias,
+                        "field": f"{v_alias}.derived_table.sql",
+                        "fields": raw_tbls,
+                        "message": (
+                            f"Derived table '{v_alias}' references raw SQL table(s) {raw_tbls} in derived_table.sql; "
+                            "use '${view_name.SQL_TABLE_NAME}' or '(${EXTENDED})' instead."
+                        ),
+                    }
+                )
+            if re.search(r"\$\{\s*EXTENDED\s*\}", dt_sql, flags=re.IGNORECASE):
+                for ext in _as_list(getattr(v_obj, "extends", None)):
+                    if isinstance(ext, str) and ext in model_views:
+                        queue.append((ext, model_views[ext]))
+        for sql_txt in (
+            dt_sql,
+            *(
+                getattr(f_obj, "sql", None)
+                for fdict in (
+                    v_obj.dimension or {},
+                    v_obj.dimension_group or {},
+                    v_obj.measure or {},
+                )
+                for f_obj in fdict.values()
+            ),
+        ):
+            if isinstance(sql_txt, str):
+                for m in re.finditer(
+                    r"\$\{\s*([a-zA-Z0-9_]+)\.SQL_TABLE_NAME\s*\}",
+                    sql_txt,
+                    flags=re.IGNORECASE,
+                ):
+                    if (ref_v := m.group(1)) in model_views:
+                        queue.append((ref_v, model_views[ref_v]))
+    return errors
+
+
 def _extract_access_filter_fields(
     af_raw: Any, default_alias: str
 ) -> list[tuple[str, str]]:
@@ -2027,6 +2153,7 @@ def _build_explore_from_assembled(
             (*all_dims, *all_meas, *all_filts, *all_params),
             api_joins,
         ),
+        *_find_raw_derived_table_errors(views_by_alias, model_views),
         *_find_security_and_agg_table_errors(
             explore_name,
             exp_obj,
