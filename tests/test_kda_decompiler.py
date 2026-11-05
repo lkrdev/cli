@@ -1,11 +1,60 @@
 import copy
 import json
-from typing import Any
+from typing import TypedDict, cast
 from unittest.mock import MagicMock
 
 import pytest
 
 from lkr.extended_sdk_methods.main import ExtendedLooker40SDK
+
+
+class _KdaUnmodeledComponent(TypedDict):
+    dimension: str
+    expected_measure_type: str
+    dynamic_field_hint: dict[str, str]
+
+
+class _KdaMeasureInfo(TypedDict):
+    recommended_kda_measures: list[str]
+    unmodeled_components: list[_KdaUnmodeledComponent]
+    derived_dimensions: list[dict[str, object]]
+    leaf_dimensions: list[dict[str, object]]
+    referenced_measures: list[str]
+
+
+class _KdaCandidateDims(TypedDict):
+    conditional_join_dimensions: list[dict[str, str]]
+    entity_dimensions: list[str]
+    query_dimensions: list[str]
+    drill_dimensions: list[str]
+    secondary_flag_and_tier_dimensions: list[str]
+
+
+class _KdaOverlap(TypedDict):
+    explores: list[str]
+    shared_views: list[str]
+    shared_dimensions: list[str]
+    shared_filter_mappings: dict[str, object]
+
+
+class _KdaTarget(TypedDict):
+    title: str
+    data_source: dict[str, object]
+    base_filters: dict[str, object]
+    colliding_time_filters: dict[str, object]
+    measures: dict[str, _KdaMeasureInfo]
+    candidate_dimensions: _KdaCandidateDims
+    recommended_pass1_dimensions: list[str]
+    excluded_views: list[str]
+
+
+class _KdaDecompileResult(TypedDict):
+    targets: list[_KdaTarget]
+    cross_explore_overlaps: list[_KdaOverlap]
+
+
+def _kda(res: dict[str, object]) -> _KdaDecompileResult:
+    return cast(_KdaDecompileResult, res)
 
 
 def _make_sdk() -> ExtendedLooker40SDK:
@@ -20,7 +69,7 @@ def _make_sdk() -> ExtendedLooker40SDK:
     )
 
 
-ORDER_ITEMS_EXPLORE: dict[str, Any] = {
+ORDER_ITEMS_EXPLORE = {
     "name": "order_items",
     "view_name": "order_items",
     "joins": [
@@ -332,7 +381,7 @@ ORDER_ITEMS_EXPLORE: dict[str, Any] = {
 }
 
 
-EVENTS_EXPLORE: dict[str, Any] = {
+EVENTS_EXPLORE = {
     "name": "events",
     "view_name": "events",
     "joins": [
@@ -450,7 +499,7 @@ EVENTS_EXPLORE: dict[str, Any] = {
 }
 
 
-def test_decompile_direct_explore_and_measure_tree():
+def test_decompile_direct_explore_and_measure_tree() -> None:
     sdk = _make_sdk()
     sdk.lookml_model_explore = MagicMock(return_value=ORDER_ITEMS_EXPLORE)
 
@@ -471,7 +520,7 @@ def test_decompile_direct_explore_and_measure_tree():
 
     assert res["target_type"] == "explore"
     assert res["cross_explore_overlaps"] == []
-    tgt = res["targets"][0]
+    tgt = _kda(res)["targets"][0]
     assert tgt["data_source"] == {
         "model_name": "thelook",
         "explore_name": "order_items",
@@ -538,20 +587,21 @@ def test_decompile_direct_explore_and_measure_tree():
         assert d not in cands["secondary_flag_and_tier_dimensions"]
 
 
-def test_unmodeled_component_warning_when_sum_cost_missing():
+def test_unmodeled_component_warning_when_sum_cost_missing() -> None:
     sdk = _make_sdk()
     exp_no_cost = copy.deepcopy(ORDER_ITEMS_EXPLORE)
-    exp_no_cost["fields"]["measures"] = [
-        m
-        for m in exp_no_cost["fields"]["measures"]
-        if m["name"] != "inventory_items.total_cost"
+    fields = cast("dict[str, list[dict[str, object]]]", exp_no_cost["fields"])
+    fields["measures"] = [
+        m for m in fields["measures"] if m["name"] != "inventory_items.total_cost"
     ]
     sdk.lookml_model_explore = MagicMock(return_value=exp_no_cost)
 
-    res = sdk.decompile_kda_target(
-        model_name="thelook",
-        explore_name="order_items",
-        fields=["order_items.total_gross_margin"],
+    res = _kda(
+        sdk.decompile_kda_target(
+            model_name="thelook",
+            explore_name="order_items",
+            fields=["order_items.total_gross_margin"],
+        )
     )
     tgm = res["targets"][0]["measures"]["order_items.total_gross_margin"]
     assert tgm["recommended_kda_measures"] == [
@@ -565,14 +615,16 @@ def test_unmodeled_component_warning_when_sum_cost_missing():
     assert warn["dynamic_field_hint"]["based_on"] == "inventory_items.cost"
 
 
-def test_conditional_join_isolation_on_events():
+def test_conditional_join_isolation_on_events() -> None:
     sdk = _make_sdk()
     sdk.lookml_model_explore = MagicMock(return_value=EVENTS_EXPLORE)
 
-    res = sdk.decompile_kda_target(
-        model_name="thelook",
-        explore_name="events",
-        fields=["events.count"],
+    res = _kda(
+        sdk.decompile_kda_target(
+            model_name="thelook",
+            explore_name="events",
+            fields=["events.count"],
+        )
     )
     cands = res["targets"][0]["candidate_dimensions"]
     cond_dims = [c["dimension"] for c in cands["conditional_join_dimensions"]]
@@ -582,10 +634,10 @@ def test_conditional_join_isolation_on_events():
     assert "product_viewed.brand" not in res["targets"][0]["recommended_pass1_dimensions"]
 
 
-def test_all_target_url_and_id_variants():
+def test_all_target_url_and_id_variants() -> None:
     sdk = _make_sdk()
 
-    def _mock_explore(model: str, explore: str):
+    def _mock_explore(model: str, explore: str) -> object:
         return EVENTS_EXPLORE if explore == "events" else ORDER_ITEMS_EXPLORE
 
     sdk.lookml_model_explore = MagicMock(side_effect=_mock_explore)
@@ -739,7 +791,7 @@ def test_all_target_url_and_id_variants():
     # 1. Raw query slug
     r_slug = sdk.decompile_kda_target(target="8CDyM4D")
     assert r_slug["target_type"] == "query"
-    assert r_slug["targets"][0]["data_source"] == {
+    assert _kda(r_slug)["targets"][0]["data_source"] == {
         "model_name": "thelook",
         "explore_name": "order_items",
     }
@@ -748,28 +800,28 @@ def test_all_target_url_and_id_variants():
     r_exp_qid = sdk.decompile_kda_target(
         target="https://looker.example.com/explore/thelook/order_items?qid=8CDyM4D&f%5Busers.country%5D=UK"
     )
-    assert r_exp_qid["targets"][0]["base_filters"] == {"users.country": "UK"}
+    assert _kda(r_exp_qid)["targets"][0]["base_filters"] == {"users.country": "UK"}
 
     r_exp_flds = sdk.decompile_kda_target(
         target="https://looker.example.com/explore/thelook/order_items?fields=order_items.total_gross_margin&f[users.country]=France"
     )
-    assert r_exp_flds["targets"][0]["base_filters"] == {"users.country": "France"}
-    assert "order_items.total_gross_margin" in r_exp_flds["targets"][0]["measures"]
+    assert _kda(r_exp_flds)["targets"][0]["base_filters"] == {"users.country": "France"}
+    assert "order_items.total_gross_margin" in _kda(r_exp_flds)["targets"][0]["measures"]
 
     # 3. Look URL
     r_look = sdk.decompile_kda_target(
         target="https://looker.example.com/looks/247?f[users.country]=Germany"
     )
     assert r_look["target_type"] == "look"
-    assert r_look["targets"][0]["title"] == "Margin Look"
-    assert r_look["targets"][0]["base_filters"] == {"users.country": "Germany"}
+    assert _kda(r_look)["targets"][0]["title"] == "Margin Look"
+    assert _kda(r_look)["targets"][0]["base_filters"] == {"users.country": "Germany"}
 
     # 4. Dashboard with standard + Merge Result tiles and cross-explore overlaps
     r_dash = sdk.decompile_kda_target(target="thelook::business_pulse")
     assert r_dash["target_type"] == "dashboard"
-    assert len(r_dash["targets"]) == 3
-    assert len(r_dash["cross_explore_overlaps"]) == 1
-    ov = r_dash["cross_explore_overlaps"][0]
+    assert len(_kda(r_dash)["targets"]) == 3
+    assert len(_kda(r_dash)["cross_explore_overlaps"]) == 1
+    ov = _kda(r_dash)["cross_explore_overlaps"][0]
     assert ov["explores"] == ["thelook::events", "thelook::order_items"]
     assert "users" in ov["shared_views"]
     assert "users.traffic_source" in ov["shared_dimensions"]
@@ -782,24 +834,24 @@ def test_all_target_url_and_id_variants():
     r_dash_filtered = sdk.decompile_kda_target(
         target="thelook::business_pulse", tile_filter="Total Gross Margin"
     )
-    assert len(r_dash_filtered["targets"]) == 1
+    assert len(_kda(r_dash_filtered)["targets"]) == 1
 
     # 5. Standalone Merge Result URL
     r_merge = sdk.decompile_kda_target(target="/merge?mid=m123")
     assert r_merge["target_type"] == "merge_result"
-    assert len(r_merge["targets"]) == 2
+    assert len(_kda(r_merge)["targets"]) == 2
 
     # 6. Conversational Analytics 32-char UUID (Fix #3)
     r_ca = sdk.decompile_kda_target(target="b891cf86aa2c4258b3f173cd17c8d8c1")
     assert r_ca["target_type"] == "conversation"
-    assert r_ca["targets"][0]["title"] == "Why did gross margin drop?"
-    assert r_ca["targets"][0]["base_filters"] == {"users.country": "USA"}
-    assert r_ca["targets"][0]["colliding_time_filters"] == {
+    assert _kda(r_ca)["targets"][0]["title"] == "Why did gross margin drop?"
+    assert _kda(r_ca)["targets"][0]["base_filters"] == {"users.country": "USA"}
+    assert _kda(r_ca)["targets"][0]["colliding_time_filters"] == {
         "order_items.created_year": "2025"
     }
 
 
-def test_run_key_driver_analysis_slug_rewrite_and_422_fallback():
+def test_run_key_driver_analysis_slug_rewrite_and_422_fallback() -> None:
     sdk = _make_sdk()
     sdk.query_for_slug = MagicMock(
         return_value={

@@ -2,7 +2,7 @@ import copy
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 import pytest
 from typer.testing import CliRunner
@@ -14,39 +14,51 @@ import lkr.schema.fields as _fields
 import lkr.schema.filter_expressions as _filter_exprs
 from lkr.main import app
 
-build_explore_query_schema: Any = _schema.build_explore_query_schema
-build_schema_context: Any = _schema.build_schema_context
-execute_looker_query: Any = _schema.execute_looker_query
-validate_merge_query: Any = _schema.validate_merge_query
-validate_query: Any = _schema.validate_query
-build_query_body_schema: Any = _builder.build_query_body_schema
-build_custom_dimension_schema: Any = _dyn_fields.build_custom_dimension_schema
-build_custom_measure_schema: Any = _dyn_fields.build_custom_measure_schema
-build_dynamic_fields_schema: Any = _dyn_fields.build_dynamic_fields_schema
-build_table_calculation_schema: Any = _dyn_fields.build_table_calculation_schema
-build_fields_schema: Any = _fields.build_fields_schema
-build_fill_fields_schema: Any = _fields.build_fill_fields_schema
-build_pivots_schema: Any = _fields.build_pivots_schema
-build_sorts_schema: Any = _fields.build_sorts_schema
-build_subtotals_schema: Any = _fields.build_subtotals_schema
-extract_visible_explore_fields: Any = _fields.extract_visible_explore_fields
-is_visible_field: Any = _fields.is_visible_field
-FILTER_EXPRESSION_DEFS: Any = _filter_exprs.FILTER_EXPRESSION_DEFS
-build_filter_property_schema: Any = _filter_exprs.build_filter_property_schema
-build_filters_schema: Any = _filter_exprs.build_filters_schema
-classify_filter_expression_ref: Any = _filter_exprs.classify_filter_expression_ref
-extract_enum_values: Any = _filter_exprs.extract_enum_values
+build_explore_query_schema = _schema.build_explore_query_schema
+build_schema_context = _schema.build_schema_context
+execute_looker_query = _schema.execute_looker_query
+validate_merge_query = _schema.validate_merge_query
+validate_query = _schema.validate_query
+build_query_body_schema = _builder.build_query_body_schema
+build_custom_dimension_schema = _dyn_fields.build_custom_dimension_schema
+build_custom_measure_schema = _dyn_fields.build_custom_measure_schema
+build_dynamic_fields_schema = _dyn_fields.build_dynamic_fields_schema
+build_table_calculation_schema = _dyn_fields.build_table_calculation_schema
+build_fields_schema = _fields.build_fields_schema
+build_fill_fields_schema = _fields.build_fill_fields_schema
+build_pivots_schema = _fields.build_pivots_schema
+build_sorts_schema = _fields.build_sorts_schema
+build_subtotals_schema = _fields.build_subtotals_schema
+extract_visible_explore_fields = _fields.extract_visible_explore_fields
+is_visible_field = _fields.is_visible_field
+FILTER_EXPRESSION_DEFS = _filter_exprs.FILTER_EXPRESSION_DEFS
+build_filter_property_schema = _filter_exprs.build_filter_property_schema
+build_filters_schema = _filter_exprs.build_filters_schema
+classify_filter_expression_ref = _filter_exprs.classify_filter_expression_ref
+extract_enum_values = _filter_exprs.extract_enum_values
 
 runner = CliRunner()
 
 
-def test_is_visible_field_and_extract_visible_explore_fields():
+def _dig(obj: object, *keys: str | int) -> object:
+    cur = obj
+    for k in keys:
+        if isinstance(k, int):
+            assert isinstance(cur, list)
+            cur = cur[k]
+        else:
+            assert isinstance(cur, dict)
+            cur = cur[k]
+    return cur
+
+
+def test_is_visible_field_and_extract_visible_explore_fields() -> None:
     assert is_visible_field({"name": "users.id", "hidden": False}) is True
     assert is_visible_field({"name": "users.id", "hidden": True}) is False
     assert is_visible_field({"name": "", "hidden": False}) is False
     assert is_visible_field({}) is False
 
-    raw = {
+    raw: dict[str, object] = {
         "fields": {
             "dimensions": [
                 {"name": "d1", "hidden": False},
@@ -74,22 +86,25 @@ def test_is_visible_field_and_extract_visible_explore_fields():
     assert [p["name"] for p in visible.parameters] == ["p1"]
 
 
-def test_build_fields_pivots_sorts_fill_and_subtotals_schema():
+def test_build_fields_pivots_sorts_fill_and_subtotals_schema() -> None:
     fields_schema = build_fields_schema(["d1", "d2"], ["m1"])
-    assert fields_schema["items"]["enum"] == ["d1", "d2", "m1"]
+    assert _dig(fields_schema, "items", "enum") == ["d1", "d2", "m1"]
 
     pivots_schema = build_pivots_schema(["d1", "d2"])
-    assert pivots_schema["items"]["enum"] == ["d1", "d2"]
-    assert "m1" not in pivots_schema["items"]["enum"]
+    pivots_enum = _dig(pivots_schema, "items", "enum")
+    assert pivots_enum == ["d1", "d2"]
+    assert isinstance(pivots_enum, list) and "m1" not in pivots_enum
 
     fill_schema = build_fill_fields_schema(["d1", "d2"])
-    assert fill_schema["items"]["enum"] == ["d1", "d2"]
+    assert _dig(fill_schema, "items", "enum") == ["d1", "d2"]
 
     subtotals_schema = build_subtotals_schema(["d1", "d2"])
-    assert subtotals_schema["items"]["enum"] == ["d1", "d2"]
+    assert _dig(subtotals_schema, "items", "enum") == ["d1", "d2"]
 
     sorts_schema = build_sorts_schema(["d1", "m1"])
-    sort_pat = re.compile(sorts_schema["items"]["pattern"])
+    sort_pat_raw = _dig(sorts_schema, "items", "pattern")
+    assert isinstance(sort_pat_raw, str)
+    sort_pat = re.compile(sort_pat_raw)
     assert sort_pat.match("d1")
     assert sort_pat.match("d1 desc")
     assert sort_pat.match("m1 desc 0")
@@ -97,7 +112,7 @@ def test_build_fields_pivots_sorts_fill_and_subtotals_schema():
     assert not sort_pat.match("unknown_field desc")
 
 
-def test_extract_enum_values_and_classify_filter_expression_ref():
+def test_extract_enum_values_and_classify_filter_expression_ref() -> None:
     assert extract_enum_values(
         {
             "enumerations": [
@@ -136,27 +151,23 @@ def test_extract_enum_values_and_classify_filter_expression_ref():
             assert classify_filter_expression_ref({"type": t}) == f"#/$defs/{ref}"
 
 
-def test_filter_expression_patterns():
-    dt_pattern = re.compile(
-        FILTER_EXPRESSION_DEFS["DateTimeFilterExpression"]["pattern"]
-    )
-    for ex in FILTER_EXPRESSION_DEFS["DateTimeFilterExpression"]["examples"]:
-        assert dt_pattern.match(ex), f"DateTime pattern failed on {ex}"
-
-    num_pattern = re.compile(
-        FILTER_EXPRESSION_DEFS["NumberFilterExpression"]["pattern"]
-    )
-    for ex in FILTER_EXPRESSION_DEFS["NumberFilterExpression"]["examples"]:
-        assert num_pattern.match(ex), f"Number pattern failed on {ex}"
-
-    loc_pattern = re.compile(
-        FILTER_EXPRESSION_DEFS["LocationFilterExpression"]["pattern"]
-    )
-    for ex in FILTER_EXPRESSION_DEFS["LocationFilterExpression"]["examples"]:
-        assert loc_pattern.match(ex), f"Location pattern failed on {ex}"
+def test_filter_expression_patterns() -> None:
+    for name in (
+        "DateTimeFilterExpression",
+        "NumberFilterExpression",
+        "LocationFilterExpression",
+    ):
+        pat_raw = _dig(FILTER_EXPRESSION_DEFS, name, "pattern")
+        examples = _dig(FILTER_EXPRESSION_DEFS, name, "examples")
+        assert isinstance(pat_raw, str) and isinstance(examples, list)
+        pat = re.compile(pat_raw)
+        for ex in examples:
+            assert isinstance(ex, str) and pat.match(ex), (
+                f"{name} pattern failed on {ex}"
+            )
 
 
-def test_build_filter_property_and_filters_schema():
+def test_build_filter_property_and_filters_schema() -> None:
     param_prop = build_filter_property_schema(
         {
             "name": "p1",
@@ -199,29 +210,34 @@ def test_build_filter_property_and_filters_schema():
         ],
     )
     props = filters_schema["properties"]
+    assert isinstance(props, dict)
     assert set(props.keys()) == {"d1", "m1", "f1", "p1"}
-    assert props["d1"]["$ref"] == "#/$defs/StringFilterExpression"
-    assert props["m1"]["$ref"] == "#/$defs/NumberFilterExpression"
-    assert props["f1"]["$ref"] == "#/$defs/DateTimeFilterExpression"
-    assert props["p1"]["enum"] == ["1"]
+    assert _dig(props, "d1", "$ref") == "#/$defs/StringFilterExpression"
+    assert _dig(props, "m1", "$ref") == "#/$defs/NumberFilterExpression"
+    assert _dig(props, "f1", "$ref") == "#/$defs/DateTimeFilterExpression"
+    assert _dig(props, "p1", "enum") == ["1"]
 
 
-def test_build_dynamic_fields_schema():
+def test_build_dynamic_fields_schema() -> None:
     cd = build_custom_dimension_schema()
-    assert "dimension" in cd["required"]
+    assert isinstance(cd["required"], list) and "dimension" in cd["required"]
 
     cm = build_custom_measure_schema(["d1", "d2"])
-    assert cm["properties"]["based_on"]["enum"] == ["d1", "d2"]
-    assert "measure" in cm["required"]
+    assert _dig(cm, "properties", "based_on", "enum") == ["d1", "d2"]
+    assert isinstance(cm["required"], list) and "measure" in cm["required"]
 
     tc = build_table_calculation_schema()
-    assert "table_calculation" in tc["required"]
+    assert (
+        isinstance(tc["required"], list)
+        and "table_calculation" in tc["required"]
+    )
 
     df = build_dynamic_fields_schema(["d1"])
-    assert len(df["items"]["oneOf"]) == 3
+    one_of = _dig(df, "items", "oneOf")
+    assert isinstance(one_of, list) and len(one_of) == 3
 
 
-def test_schema_generate_and_validate_pipeline(tmp_path: Path):
+def test_schema_generate_and_validate_pipeline(tmp_path: Path) -> None:
     order_items_path = Path("tmp/order_items.json")
     if not order_items_path.exists():
         order_items_path = tmp_path / "order_items.json"
@@ -249,15 +265,15 @@ def test_schema_generate_and_validate_pipeline(tmp_path: Path):
 
     data = json.loads(order_items_path.read_text(encoding="utf-8"))
     body_schema = build_query_body_schema("thelook", "order_items", data)
-    assert body_schema["properties"]["model"]["const"] == "thelook"
-    assert body_schema["properties"]["view"]["const"] == "order_items"
-    assert body_schema["properties"]["limit"]["default"] == "500"
+    assert _dig(body_schema, "properties", "model", "const") == "thelook"
+    assert _dig(body_schema, "properties", "view", "const") == "order_items"
+    assert _dig(body_schema, "properties", "limit", "default") == "500"
 
     schema = build_explore_query_schema("thelook", "order_items", data)
-    assert schema["properties"]["limit"]["default"] == 500
+    assert _dig(schema, "properties", "limit", "default") == 500
 
     # Valid query with dynamic_fields (both CustomDimension in pivots/fields and TableCalculation in fields)
-    valid_payload = {
+    valid_payload: dict[str, object] = {
         "model": "thelook",
         "view": "order_items",
         "fields": [
@@ -291,11 +307,11 @@ def test_schema_generate_and_validate_pipeline(tmp_path: Path):
     assert valid_res.valid is True, f"Unexpected errors: {valid_res.errors}"
     assert valid_res.normalized_query is not None
     assert isinstance(
-        valid_res.normalized_query["body"]["dynamic_fields"], str
+        _dig(valid_res.normalized_query, "body", "dynamic_fields"), str
     )
 
     # Multi-error payload: pipeline must collect EVERY error without stopping early
-    invalid_payload = {
+    invalid_payload: dict[str, object] = {
         "model": "wrong_model",
         "view": "wrong_view",
         "fields": ["order_items.nonexistent_field"],
@@ -376,7 +392,7 @@ def test_schema_generate_and_validate_pipeline(tmp_path: Path):
     assert len(fail_out["errors"]) >= 9
 
 
-MOCK_EXPLORE = {
+MOCK_EXPLORE: dict[str, object] = {
     "fields": {
         "dimensions": [
             {"name": "order_items.status", "type": "string", "hidden": False},
@@ -405,7 +421,7 @@ def test_real_world_dynamic_fields_and_history_shapes() -> None:
     #    - CustomDimension with ${view.field} expression reference
     #    - Tier sort companion (<dimension>__sort_) + pivoted sort (<field> 0)
     #    - Dashboard empty string "" filter value
-    payload = {
+    payload: dict[str, object] = {
         "body": {
             "model": "thelook",
             "view": "order_items",
@@ -460,7 +476,7 @@ def test_real_world_dynamic_fields_and_history_shapes() -> None:
     assert res.valid is True, f"Unexpected errors: {res.errors}"
 
     # 2. Invalid ${unknown.field} reference inside expression and invalid custom measure filters
-    bad_dyn_payload = {
+    bad_dyn_payload: dict[str, object] = {
         "body": {
             "model": "thelook",
             "view": "order_items",
@@ -585,14 +601,14 @@ def test_history_pipeline_and_real_queries() -> None:
 def test_rust_validator_and_batch() -> None:
     import lkr.schema.validator as _val
 
-    get_rust_validator: Any = _val.get_rust_validator
-    validate_batch_queries: Any = _val.validate_batch_queries
+    get_rust_validator = _val.get_rust_validator
+    validate_batch_queries = _val.validate_batch_queries
 
     schema = build_explore_query_schema("thelook", "order_items", MOCK_EXPLORE)
     rust_val = get_rust_validator(schema)
     assert rust_val is not None
 
-    valid_q = {
+    valid_q: dict[str, object] = {
         "body": {
             "model": "thelook",
             "view": "order_items",
@@ -600,7 +616,7 @@ def test_rust_validator_and_batch() -> None:
             "subtotals": ["order_items.status"],
         }
     }
-    invalid_q = {
+    invalid_q: dict[str, object] = {
         "body": {
             "model": "wrong",
             "view": "order_items",
@@ -612,7 +628,7 @@ def test_rust_validator_and_batch() -> None:
     res_ok = validate_query(valid_q, schema)
     assert res_ok.valid is True
     assert res_ok.normalized_query is not None
-    assert res_ok.normalized_query["body"]["subtotals"] == ["order_items.status"]
+    assert _dig(res_ok.normalized_query, "body", "subtotals") == ["order_items.status"]
 
     res_bad = validate_query(invalid_q, schema)
     assert res_bad.valid is False
@@ -626,7 +642,7 @@ def test_rust_validator_and_batch() -> None:
 
 def test_expression_and_custom_filter_field_validator_on_small_schema() -> None:
     # 1. Small JSON Schema for system__activity::history (testing eiMJQXpAgoXow2JId7whVy)
-    small_history_explore = {
+    small_history_explore: dict[str, object] = {
         "fields": {
             "dimensions": [
                 {"name": "query.id", "type": "number", "hidden": False},
@@ -649,7 +665,7 @@ def test_expression_and_custom_filter_field_validator_on_small_schema() -> None:
     )
 
     # Valid query matching eiMJQXpAgoXow2JId7whVy + filter_expression: length(${query.dynamic_fields}) > 2
-    valid_history_query = {
+    valid_history_query: dict[str, object] = {
         "body": {
             "model": "system__activity",
             "view": "history",
@@ -667,7 +683,7 @@ def test_expression_and_custom_filter_field_validator_on_small_schema() -> None:
     assert res_hist_ok.valid is True, f"Unexpected errors: {res_hist_ok.errors}"
 
     # Invalid filter_expression referencing unknown field ${query.filter_expression}
-    invalid_history_query = {
+    invalid_history_query: dict[str, object] = {
         "body": {
             "model": "system__activity",
             "view": "history",
@@ -686,7 +702,7 @@ def test_expression_and_custom_filter_field_validator_on_small_schema() -> None:
     small_order_schema = build_explore_query_schema(
         "thelook", "order_items", MOCK_EXPLORE
     )
-    chained_valid_query = {
+    chained_valid_query: dict[str, object] = {
         "body": {
             "model": "thelook",
             "view": "order_items",
@@ -721,7 +737,7 @@ def test_expression_and_custom_filter_field_validator_on_small_schema() -> None:
     assert res_chain_ok.valid is True, f"Unexpected errors: {res_chain_ok.errors}"
 
     # Invalid ${...} cases: empty ${}, self-reference, unknown field, and table_calculation inside body.filter_expression
-    bad_refs_query = {
+    bad_refs_query: dict[str, object] = {
         "body": {
             "model": "thelook",
             "view": "order_items",
@@ -818,18 +834,26 @@ def test_vgr_edge_cases(tmp_path: Path) -> None:
         "order_items",
         {"all_lookml_models": [], "lookml_model_explores": {"thelook::order_items": MOCK_EXPLORE}},
     )
-    assert "order_items.total_sale_price" in (
-        wrapped_schema["properties"]["body"]["properties"]["fields"]["items"]["enum"]
+    fields_enum = _dig(
+        wrapped_schema,
+        "properties",
+        "body",
+        "properties",
+        "fields",
+        "items",
+        "enum",
     )
+    assert isinstance(fields_enum, list)
+    assert "order_items.total_sale_price" in fields_enum
     assert any(
         "$.body.dynamic_fields[0].filters: expected object" in e
         for e in non_obj_filters_res.errors
     )
 
     # 4. DateTimeFilterExpression multi-comma input completes without backtracking
-    dt_pat = re.compile(
-        FILTER_EXPRESSION_DEFS["DateTimeFilterExpression"]["pattern"]
-    )
+    dt_pat_raw = _dig(FILTER_EXPRESSION_DEFS, "DateTimeFilterExpression", "pattern")
+    assert isinstance(dt_pat_raw, str)
+    dt_pat = re.compile(dt_pat_raw)
     assert dt_pat.match("today, yesterday, 7 days, this month")
     assert not dt_pat.match("invalid_prefix," + "a," * 40 + "!")
 
@@ -874,14 +898,16 @@ def test_vgr_edge_cases(tmp_path: Path) -> None:
     assert arr_fail_data[1]["valid"] is False
 
 
-def test_py_explore_validator_windows_fallback_and_parity(monkeypatch, tmp_path: Path) -> None:
+def test_py_explore_validator_windows_fallback_and_parity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     import lkr.mcp.utils as mcp_utils
     import lkr.schema.validator as val_mod
     from lkr.schema.validator import _PyExploreValidator
 
-    explore = {
+    explore: dict[str, object] = {
         "fields": {
-            **MOCK_EXPLORE["fields"],
+            **cast("dict[str, object]", MOCK_EXPLORE["fields"]),
             "parameters": [
                 {
                     "name": "order_items.metric_param",
@@ -1014,7 +1040,7 @@ def test_py_explore_validator_windows_fallback_and_parity(monkeypatch, tmp_path:
         res = validate_query({"fields": ["order_items.status"]}, schema)
         assert res.valid is True
         assert res.normalized_query is not None
-        assert res.normalized_query["body"]["model"] == "thelook"
+        assert _dig(res.normalized_query, "body", "model") == "thelook"
     finally:
         val_mod._compile_validator.cache_clear()
 
@@ -1026,10 +1052,10 @@ def test_py_explore_validator_windows_fallback_and_parity(monkeypatch, tmp_path:
     assert ":" not in p_reg.name and "/" not in p_reg.name
 
 
-def test_dynamic_fields_sync_and_filter_coercion_parity():
+def test_dynamic_fields_sync_and_filter_coercion_parity() -> None:
     import lkr.schema.validator as val_mod
 
-    explore_data = {
+    explore_data: dict[str, object] = {
         "fields": {
             "dimensions": [
                 {"name": "order_items.status", "type": "string", "hidden": False},
@@ -1048,7 +1074,7 @@ def test_dynamic_fields_sync_and_filter_coercion_parity():
     schema_json = json.dumps(schema, sort_keys=True)
     py_val = val_mod._PyExploreValidator(schema_json)
 
-    query_payload = {
+    query_payload: dict[str, object] = {
         "fields": ["pct_of_rev"],
         "filters": {
             "order_items.created_year": ">=2024",
@@ -1081,6 +1107,7 @@ def test_dynamic_fields_sync_and_filter_coercion_parity():
     assert res.valid is True, res.errors
     assert res.normalized_query is not None
     body = res.normalized_query["body"]
+    assert isinstance(body, dict)
     # TableCalculation removed from fields; CustomDimension, CustomMeasure, and referenced static measure auto-injected
     assert body["fields"] == ["price_bucket", "returned_rev", "order_items.total_sale_price"]
     assert body["filters"] == {
@@ -1088,6 +1115,7 @@ def test_dynamic_fields_sync_and_filter_coercion_parity():
         "order_items.sale_price": "[10, 50]",
         "order_items.status": "-NULL",
     }
+    assert isinstance(body["dynamic_fields"], str)
     dyn = json.loads(body["dynamic_fields"])
     assert dyn[0]["label"] == "price_bucket"
     assert dyn[1]["label"] == "returned_rev"
@@ -1112,7 +1140,7 @@ def test_dynamic_fields_sync_and_filter_coercion_parity():
     )
     assert res2.valid is True, res2.errors
     assert res2.normalized_query is not None
-    assert res2.normalized_query["body"]["filters"] == {
+    assert _dig(res2.normalized_query, "body", "filters") == {
         "order_items.created_date": "2024-01-01 to 2024-06-30",
         "order_items.sale_price": "[5, 25.5]",
         "order_items.status": "-NULL",
@@ -1132,8 +1160,8 @@ def test_dynamic_fields_sync_and_filter_coercion_parity():
             assert json.loads(p_norm) == json.loads(r_norm)
 
 
-def test_validate_merge_query_and_execute_looker_query():
-    explores_map = {
+def test_validate_merge_query_and_execute_looker_query() -> None:
+    explores_map: dict[str, object] = {
         "order_items": {
             "name": "order_items",
             "view_name": "order_items",
@@ -1172,10 +1200,10 @@ def test_validate_merge_query_and_execute_looker_query():
     )
     assert single_res.valid is True
     assert single_res.normalized_query is not None
-    assert single_res.normalized_query["body"]["view"] == "inventory_items"
+    assert _dig(single_res.normalized_query, "body", "view") == "inventory_items"
 
     # 2. Multi-Explore source_queries validation with shared-key inference & auto-injection
-    merge_payload = {
+    merge_payload: dict[str, object] = {
         "source_queries": [
             {
                 "name": "sales",
@@ -1201,13 +1229,17 @@ def test_validate_merge_query_and_execute_looker_query():
     assert norm is not None
     assert norm["limit"] == "5" and norm["column_limit"] == "50"
     assert norm["total"] is True
-    assert all(sq["query"].get("total") is True for sq in norm["source_queries"])
-    assert norm["source_queries"][1]["merge_fields"] == [
+    assert isinstance(norm["source_queries"], list)
+    assert all(
+        _dig(sq, "query", "total") is True for sq in norm["source_queries"]
+    )
+    assert _dig(norm, "source_queries", 1, "merge_fields") == [
         {"source_field_name": "products.category", "field_name": "products.category"}
     ]
 
     # 3. Mode 1: Zero queries raises ValueError; single query calls run_inline_query("json", ...)
-    for empty_spec in ({}, {"body": {}}, {"source_queries": []}):
+    empty_specs: tuple[dict[str, object], ...] = ({}, {"body": {}}, {"source_queries": []})
+    for empty_spec in empty_specs:
         with pytest.raises(ValueError, match="At least one query"):
             execute_looker_query(object(), empty_spec)
 
@@ -1222,20 +1254,22 @@ def test_validate_merge_query_and_execute_looker_query():
     # 4. Mode 2, 3, & 4: SQL Runner CTE merge (no final TCs vs. with final TCs via sql__{slug})
     class SqlRunnerSDK:
         def __init__(self) -> None:
-            self.created_sql: list[dict[str, Any]] = []
-            self.inline_calls: list[tuple[str, dict[str, Any]]] = []
+            self.created_sql: list[dict[str, object]] = []
+            self.inline_calls: list[tuple[str, dict[str, object]]] = []
             self.fail_model_create = False
 
-        def lookml_model_explore(self, model_name, explore_name, fields=None):
+        def lookml_model_explore(
+            self, model_name: str, explore_name: str, fields: str | None = None
+        ) -> dict[str, str]:
             return {"connection_name": "bq_conn"}
 
-        def create_sql_query(self, body):
+        def create_sql_query(self, body: dict[str, object]) -> dict[str, str]:
             if self.fail_model_create and "model_name" in body:
                 raise RuntimeError("Model has errors")
             self.created_sql.append(body)
             return {"slug": "slug123"}
 
-        def run_sql_query(self, slug, result_format):
+        def run_sql_query(self, slug: str, result_format: str) -> str:
             assert slug == "slug123" and result_format == "json"
             return json.dumps([
                 {
@@ -1250,7 +1284,12 @@ def test_validate_merge_query_and_execute_looker_query():
                 },
             ])
 
-        def run_inline_query(self, result_format, body, limit=None):
+        def run_inline_query(
+            self,
+            result_format: str,
+            body: dict[str, object],
+            limit: int | None = None,
+        ) -> str:
             self.inline_calls.append((result_format, body))
             if result_format == "sql":
                 if body["view"] == "order_items":
@@ -1283,13 +1322,16 @@ def test_validate_merge_query_and_execute_looker_query():
 
     # Mode 2 + 3: Multi-query CTE generation, -1 LIMIT 100000 stripping, source-query TC warning, SQL Runner execution
     spec_with_src_tc = copy.deepcopy(norm)
-    spec_with_src_tc["source_queries"][0]["query"]["limit"] = "-1"
-    spec_with_src_tc["source_queries"][0]["query"]["dynamic_fields"] = json.dumps([
+    src_q0 = _dig(spec_with_src_tc, "source_queries", 0, "query")
+    assert isinstance(src_q0, dict)
+    src_q0["limit"] = "-1"
+    src_q0["dynamic_fields"] = json.dumps([
         {"dimension": "custom_cat", "expression": "${products.category}"},
         {"table_calculation": "ignored_src_tc", "expression": "${order_items.total_sale_price} * 2"},
     ])
-    spec_with_src_tc["source_queries"][0]["query"]["fields"].append("ignored_src_tc")
-    spec_with_src_tc["source_queries"][0]["query"]["sorts"] = ["ignored_src_tc desc"]
+    assert isinstance(src_q0["fields"], list)
+    src_q0["fields"].append("ignored_src_tc")
+    src_q0["sorts"] = ["ignored_src_tc desc"]
 
     with pytest.warns(UserWarning, match="Table calculations on source queries are ignored"):
         cte_rows = execute_looker_query(sql_sdk, spec_with_src_tc)
@@ -1301,6 +1343,7 @@ def test_validate_merge_query_and_execute_looker_query():
         "inventory_items.count": 50,
     }
     gen_sql = sql_sdk.created_sql[-1]["sql"]
+    assert isinstance(gen_sql, str)
     assert "WITH cte_0 AS (" in gen_sql
     assert "LIMIT 100000" not in gen_sql  # Stripped on limit="-1"
     assert "LIMIT 500" in gen_sql  # Preserved oncte_1 without -1 limit
@@ -1336,12 +1379,20 @@ def test_validate_merge_query_and_execute_looker_query():
     assert sql_explore_body["model"] == "sql__slug123"
     assert sql_explore_body["view"] == "sql_runner_query"
     assert sql_explore_body["total"] is True
-    assert "${sql_runner_query.order_items_total_sale_price} / ${sql_runner_query.inventory_items_count:total}" in sql_explore_body["dynamic_fields"]
+    assert isinstance(sql_explore_body["dynamic_fields"], str)
+    assert "${sql_runner_query.order_items_total_sale_price} / ${sql_runner_query.inventory_items_count:total}" in (
+        sql_explore_body["dynamic_fields"]
+    )
     assert sql_explore_body["sorts"] == ["sql_runner_query.order_items_total_sale_price desc", "rev_per_unit desc"]
 
     # 5. Fallback when user lacks SQL Runner permissions: warns about row limits & unprocessed table calculations
     class NoSqlRunnerPermissionsSDK:
-        def run_inline_query(self, result_format, body, limit=None):
+        def run_inline_query(
+            self,
+            result_format: str,
+            body: dict[str, object],
+            limit: int | None = None,
+        ) -> str:
             view = body["view"]
             if view == "order_items":
                 return json.dumps([
@@ -1391,8 +1442,8 @@ def test_validate_merge_query_and_execute_looker_query():
     assert any("join_type" in e for e in bad_merge.errors)
 
 
-def test_build_schema_context_and_cli_commands(tmp_path: Path):
-    explores_list = [
+def test_build_schema_context_and_cli_commands(tmp_path: Path) -> None:
+    explores_list: list[dict[str, object]] = [
         {
             "name": "order_items",
             "label": "Order Items",
@@ -1433,9 +1484,12 @@ def test_build_schema_context_and_cli_commands(tmp_path: Path):
 
     ctx = build_schema_context("thelook", explores_list, prompt="revenue and warehouse inventory count by category")
     assert ctx["model"] == "thelook"
-    assert len(ctx["explores"]) == 2
-    assert {"field_name": "products.category", "source_field_name": "products.category"} in ctx["candidate_merge_keys"]
-    assert ctx["explores"]["order_items"]["base_view"] == "order_items"
+    assert isinstance(ctx["explores"], dict) and len(ctx["explores"]) == 2
+    assert isinstance(ctx["candidate_merge_keys"], list)
+    assert {"field_name": "products.category", "source_field_name": "products.category"} in (
+        ctx["candidate_merge_keys"]
+    )
+    assert _dig(ctx, "explores", "order_items", "base_view") == "order_items"
 
     explores_file = tmp_path / "explores.json"
     explores_file.write_text(json.dumps(explores_list))

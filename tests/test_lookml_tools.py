@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,19 +11,19 @@ runner = CliRunner()
 
 
 @pytest.fixture
-def mock_sdk():
+def mock_sdk() -> MagicMock:
     sdk = MagicMock(spec=ExtendedLooker40SDK)
     return sdk
 
 
 @pytest.fixture
-def mock_auth(mock_sdk):
+def mock_auth(mock_sdk: MagicMock) -> MagicMock:
     auth = MagicMock()
     auth.get_current_sdk.return_value = mock_sdk
     return auth
 
 
-def test_push_command(tmp_path, mock_sdk, mock_auth):
+def test_push_command(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     # Setup local folder and files
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
@@ -62,7 +63,7 @@ def test_push_command(tmp_path, mock_sdk, mock_auth):
     mock_sdk.deploy_to_production.assert_called_once_with(project_id="test_project")
 
 
-def test_pull_command(tmp_path, mock_sdk, mock_auth):
+def test_pull_command(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
@@ -94,7 +95,7 @@ def test_pull_command(tmp_path, mock_sdk, mock_auth):
     mock_sdk.deploy_to_production.assert_called_once_with(project_id="test_project")
 
 
-def test_pull_ghost_file(tmp_path, mock_sdk, mock_auth):
+def test_pull_ghost_file(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
@@ -117,7 +118,7 @@ def test_pull_ghost_file(tmp_path, mock_sdk, mock_auth):
     assert not affinity_file.exists()
 
 
-def test_deploy_command(mock_sdk, mock_auth):
+def test_deploy_command(mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
         result = runner.invoke(app, ["tools", "lookml", "deploy", "my_deploy_project"])
         assert result.exit_code == 0
@@ -128,7 +129,7 @@ def test_deploy_command(mock_sdk, mock_auth):
     )
 
 
-def test_push_warning(tmp_path, mock_sdk, mock_auth):
+def test_push_warning(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
@@ -157,7 +158,7 @@ def test_push_warning(tmp_path, mock_sdk, mock_auth):
         mock_sdk.delete_file.assert_not_called()
 
 
-def test_pull_warning(tmp_path, mock_sdk, mock_auth):
+def test_pull_warning(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
@@ -188,7 +189,7 @@ def test_pull_warning(tmp_path, mock_sdk, mock_auth):
         assert unsupported_local.exists()
 
 
-def test_pull_path_traversal(tmp_path, mock_sdk, mock_auth):
+def test_pull_path_traversal(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
     outside_dir = tmp_path / "outside"
@@ -214,7 +215,7 @@ def test_pull_path_traversal(tmp_path, mock_sdk, mock_auth):
         )
 
 
-def test_push_orphan_cleanup_after_upload(tmp_path, mock_sdk, mock_auth):
+def test_push_orphan_cleanup_after_upload(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
@@ -238,7 +239,9 @@ def test_push_orphan_cleanup_after_upload(tmp_path, mock_sdk, mock_auth):
     )
 
 
-def test_push_create_directory_recursively_fallback(tmp_path, mock_sdk, mock_auth):
+def test_push_create_directory_recursively_fallback(
+    tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock
+) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
@@ -265,7 +268,7 @@ def test_push_create_directory_recursively_fallback(tmp_path, mock_sdk, mock_aut
     assert mock_sdk.create_file.call_count == 2
 
 
-def test_push_single_file_option(tmp_path, mock_sdk, mock_auth):
+def test_push_single_file_option(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
@@ -302,7 +305,7 @@ def test_push_single_file_option(tmp_path, mock_sdk, mock_auth):
     mock_sdk.delete_file.assert_not_called()
 
 
-def test_push_single_file_js_bundle(tmp_path, mock_sdk, mock_auth):
+def test_push_single_file_js_bundle(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
@@ -329,7 +332,7 @@ def test_push_single_file_js_bundle(tmp_path, mock_sdk, mock_auth):
     )
 
 
-def test_push_file_as_argument(tmp_path, mock_sdk, mock_auth):
+def test_push_file_as_argument(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
@@ -352,7 +355,7 @@ def test_push_file_as_argument(tmp_path, mock_sdk, mock_auth):
     mock_sdk.all_project_files.assert_not_called()
 
 
-def test_pull_single_file_option(tmp_path, mock_sdk, mock_auth):
+def test_pull_single_file_option(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
@@ -384,7 +387,7 @@ def test_pull_single_file_option(tmp_path, mock_sdk, mock_auth):
     mock_sdk.all_project_files.assert_not_called()
 
 
-def test_push_single_file_path_traversal(tmp_path, mock_sdk, mock_auth):
+def test_push_single_file_path_traversal(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
@@ -409,7 +412,7 @@ def test_push_single_file_path_traversal(tmp_path, mock_sdk, mock_auth):
         )
 
 
-def test_pull_single_file_path_traversal(tmp_path, mock_sdk, mock_auth):
+def test_pull_single_file_path_traversal(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
 
@@ -434,7 +437,7 @@ def test_pull_single_file_path_traversal(tmp_path, mock_sdk, mock_auth):
         )
 
 
-def test_push_reset_and_new_model(tmp_path, mock_sdk, mock_auth):
+def test_push_reset_and_new_model(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
     model_file = project_dir / "my_new.model.lkml"
@@ -460,7 +463,7 @@ def test_push_reset_and_new_model(tmp_path, mock_sdk, mock_auth):
     assert created_body.allowed_db_connection_names == ["new_conn"]
 
 
-def test_push_no_reset(tmp_path, mock_sdk, mock_auth):
+def test_push_no_reset(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
     view_file = project_dir / "orders.view.lkml"
@@ -477,7 +480,9 @@ def test_push_no_reset(tmp_path, mock_sdk, mock_auth):
     mock_sdk.reset_project_to_production.assert_not_called()
 
 
-def test_push_update_lookml_model_on_connection_change(tmp_path, mock_sdk, mock_auth):
+def test_push_update_lookml_model_on_connection_change(
+    tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock
+) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
     model_file = project_dir / "existing.model.lkml"
@@ -505,8 +510,8 @@ def test_push_update_lookml_model_on_connection_change(tmp_path, mock_sdk, mock_
 
 
 def test_push_and_pull_include_snap_strings_json_and_skip_generic_json(
-    tmp_path, mock_sdk, mock_auth
-):
+    tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock
+) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
     (project_dir / "orders.view.lkml").write_text("view: orders {}")
@@ -539,8 +544,8 @@ def test_push_and_pull_include_snap_strings_json_and_skip_generic_json(
 
 
 def test_push_and_pull_skip_dot_directories_unless_sync_hidden(
-    tmp_path, mock_sdk, mock_auth
-):
+    tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock
+) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
     (project_dir / "main.view.lkml").write_text("view: main {}")
@@ -605,7 +610,9 @@ def test_push_and_pull_skip_dot_directories_unless_sync_hidden(
         assert (pull_dir / ".agents" / "skills" / "remote_doc.md").exists()
 
 
-def test_push_only_changed_and_skills_lock_ignored(tmp_path, mock_sdk, mock_auth):
+def test_push_only_changed_and_skills_lock_ignored(
+    tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock
+) -> None:
     project_dir = tmp_path / "sync_project"
     project_dir.mkdir()
     (project_dir / "skills-lock.json").write_text('{"skills": {}}')
@@ -689,8 +696,8 @@ def test_push_only_changed_and_skills_lock_ignored(tmp_path, mock_sdk, mock_auth
 
 
 def test_pull_retries_transient_502_and_aborts_before_orphan_delete(
-    tmp_path, mock_sdk, mock_auth
-):
+    tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock
+) -> None:
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
     local_file = project_dir / "silver.view.lkml"

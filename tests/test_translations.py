@@ -12,7 +12,7 @@ from lkr.parse import (
 runner = CliRunner()
 
 
-def test_translations_manifest_settings(tmp_path: Path):
+def test_translations_manifest_settings(tmp_path: Path) -> None:
     manifest = tmp_path / "manifest.lkml"
     manifest.write_text(
         """
@@ -50,7 +50,7 @@ view: users {
     assert result.total_missing_strings_count == 0
 
 
-def test_translations_missing_explicit_label_and_titleize(tmp_path: Path):
+def test_translations_missing_explicit_label_and_titleize(tmp_path: Path) -> None:
     (tmp_path / "en.strings.json").write_text(
         json.dumps({"Order Items": "Order Items", "Sale Price": "Sale Price"}),
         encoding="utf-8",
@@ -95,7 +95,7 @@ explore: order_items {}
     assert unlabeled_objs["order_items.sale_price"].property == "label"
 
 
-def test_translations_bypassed_in_foreign_locale(tmp_path: Path):
+def test_translations_bypassed_in_foreign_locale(tmp_path: Path) -> None:
     # String "Dealership Name" is defined in fr_CA, but missing in default locale en
     (tmp_path / "en.strings.json").write_text(
         json.dumps({"Users": "Users"}), encoding="utf-8"
@@ -131,7 +131,7 @@ view: dealership {
     assert fr_summary.bypassed_due_to_missing_default_locale_count == 1
 
 
-def test_translations_unused_keys(tmp_path: Path):
+def test_translations_unused_keys(tmp_path: Path) -> None:
     (tmp_path / "en.strings.json").write_text(
         json.dumps({"Active Users": "Active Users", "legacy_unused_key": "Unused"}),
         encoding="utf-8",
@@ -156,7 +156,7 @@ view: test {
     assert "Active Users" not in unused_key_names
 
 
-def test_translations_hidden_fields_skipped(tmp_path: Path):
+def test_translations_hidden_fields_skipped(tmp_path: Path) -> None:
     (tmp_path / "en.strings.json").write_text(
         json.dumps({"Visible View": "Visible View", "Visible Dim": "Visible Dim"}),
         encoding="utf-8",
@@ -190,7 +190,7 @@ view: partial_view {
     assert "Also Should Not Be Flagged" not in all_usage_strings
 
 
-def test_translations_liquid_localization_references(tmp_path: Path):
+def test_translations_liquid_localization_references(tmp_path: Path) -> None:
     (tmp_path / "en.strings.json").write_text(
         json.dumps({"My View": "My View"}), encoding="utf-8"
     )
@@ -212,7 +212,7 @@ view: liquid_test {
     assert "flag_inactive" in missing_strings
 
 
-def test_translations_cli_json_format(tmp_path: Path):
+def test_translations_cli_json_format(tmp_path: Path) -> None:
     (tmp_path / "en.strings.json").write_text('{"Orders": "Orders"}', encoding="utf-8")
     (tmp_path / "fr_CA.strings.json").write_text("{}", encoding="utf-8")
     (tmp_path / "orders.view.lkml").write_text(
@@ -247,7 +247,7 @@ view: orders {
     assert any(m["string"] == "Orders" for m in payload["missing_translations"])
 
 
-def test_translations_cli_text_format(tmp_path: Path):
+def test_translations_cli_text_format(tmp_path: Path) -> None:
     (tmp_path / "en.strings.json").write_text("{}", encoding="utf-8")
     (tmp_path / "test.view.lkml").write_text(
         """
@@ -281,7 +281,7 @@ view: test {
     assert "Beta String" in lines
 
 
-def test_translations_cli_output_file(tmp_path: Path):
+def test_translations_cli_output_file(tmp_path: Path) -> None:
     (tmp_path / "en.strings.json").write_text('{"Hello": "World"}', encoding="utf-8")
     (tmp_path / "sample.view.lkml").write_text(
         """
@@ -316,7 +316,7 @@ view: sample {
     assert data["default_locale"] == "en"
 
 
-def test_translations_cli_strict_and_validate(tmp_path: Path):
+def test_translations_cli_strict_and_validate(tmp_path: Path) -> None:
     (tmp_path / "en.strings.json").write_text("{}", encoding="utf-8")
     (tmp_path / "orders.view.lkml").write_text(
         """
@@ -352,7 +352,7 @@ view: orders {
     assert res_validate.exit_code == 1
 
 
-def test_translations_cli_no_strings_found_error(tmp_path: Path):
+def test_translations_cli_no_strings_found_error(tmp_path: Path) -> None:
     (tmp_path / "orders.view.lkml").write_text("view: orders {}", encoding="utf-8")
     res = runner.invoke(
         app,
@@ -362,7 +362,7 @@ def test_translations_cli_no_strings_found_error(tmp_path: Path):
     assert "No strings JSON files were found" in res.stdout or res.exit_code == 1
 
 
-def test_translations_cli_locale_filter_and_not_found(tmp_path: Path):
+def test_translations_cli_locale_filter_and_not_found(tmp_path: Path) -> None:
     (tmp_path / "en.strings.json").write_text('{"Orders": "Orders"}', encoding="utf-8")
     (tmp_path / "es_ES.strings.json").write_text(
         '{"Orders": "Pedidos"}', encoding="utf-8"

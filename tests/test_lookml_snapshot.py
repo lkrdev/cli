@@ -15,7 +15,7 @@ runner = CliRunner()
 
 
 @pytest.fixture(autouse=True)
-def clean_ci_env(monkeypatch: pytest.MonkeyPatch):
+def clean_ci_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CI", raising=False)
 
 
@@ -68,7 +68,7 @@ def sample_lookml_project(tmp_path: Path) -> Path:
     return proj_dir
 
 
-def test_snapshot_first_run_writes_files(sample_lookml_project: Path):
+def test_snapshot_first_run_writes_files(sample_lookml_project: Path) -> None:
     res = runner.invoke(app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project)])
     assert res.exit_code == 0
     assert "4 snapshots written" in res.output
@@ -86,7 +86,7 @@ def test_snapshot_first_run_writes_files(sample_lookml_project: Path):
     assert conn_data["shop"]["connection"] == "snowflake_prod"
 
 
-def test_snapshot_verify_passes(sample_lookml_project: Path):
+def test_snapshot_verify_passes(sample_lookml_project: Path) -> None:
     # First write
     res1 = runner.invoke(app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project)])
     assert res1.exit_code == 0
@@ -97,7 +97,7 @@ def test_snapshot_verify_passes(sample_lookml_project: Path):
     assert "5 snapshots passed" in res2.output
 
 
-def test_snapshot_line_shift_insensitivity(sample_lookml_project: Path):
+def test_snapshot_line_shift_insensitivity(sample_lookml_project: Path) -> None:
     runner.invoke(app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project)])
 
     # Prepend empty lines and comments to shift line numbers
@@ -111,7 +111,9 @@ def test_snapshot_line_shift_insensitivity(sample_lookml_project: Path):
     assert "5 snapshots passed" in res.output
 
 
-def test_snapshot_sql_normalization_and_set_sorting(sample_lookml_project: Path):
+def test_snapshot_sql_normalization_and_set_sorting(
+    sample_lookml_project: Path,
+) -> None:
     runner.invoke(app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project)])
 
     # Invert required_access_grants list order and add erratic SQL whitespace
@@ -138,7 +140,7 @@ def test_snapshot_sql_normalization_and_set_sorting(sample_lookml_project: Path)
     assert "5 snapshots passed" in res.output
 
 
-def test_snapshot_mismatch_fails_with_jest_diff(sample_lookml_project: Path):
+def test_snapshot_mismatch_fails_with_jest_diff(sample_lookml_project: Path) -> None:
     runner.invoke(app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project)])
 
     # Mutate test assertion
@@ -154,7 +156,9 @@ def test_snapshot_mismatch_fails_with_jest_diff(sample_lookml_project: Path):
     assert "1 snapshot failed" in res.output
 
 
-def test_snapshot_ci_flag_fails_on_missing_and_mismatch(sample_lookml_project: Path):
+def test_snapshot_ci_flag_fails_on_missing_and_mismatch(
+    sample_lookml_project: Path,
+) -> None:
     # 1. CI fails when snapshot file missing without writing files
     res_missing = runner.invoke(app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project), "--ci"])
     assert res_missing.exit_code == 1
@@ -178,7 +182,7 @@ def test_snapshot_ci_flag_fails_on_missing_and_mismatch(sample_lookml_project: P
     assert "FAIL connections" in res_fail.output
 
 
-def test_snapshot_ci_env_var(sample_lookml_project: Path):
+def test_snapshot_ci_env_var(sample_lookml_project: Path) -> None:
     res = runner.invoke(
         app,
         ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project)],
@@ -188,7 +192,7 @@ def test_snapshot_ci_env_var(sample_lookml_project: Path):
     assert "missing in CI mode" in res.output
 
 
-def test_snapshot_update_mode(sample_lookml_project: Path):
+def test_snapshot_update_mode(sample_lookml_project: Path) -> None:
     runner.invoke(app, ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project)])
 
     # Change connection in model
@@ -211,7 +215,7 @@ def test_snapshot_update_mode(sample_lookml_project: Path):
     assert data["shop"]["connection"] == "bigquery_analytics"
 
 
-def test_snapshot_only_filter(sample_lookml_project: Path):
+def test_snapshot_only_filter(sample_lookml_project: Path) -> None:
     res = runner.invoke(
         app,
         ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project), "--only", "tests,access"],
@@ -226,7 +230,7 @@ def test_snapshot_only_filter(sample_lookml_project: Path):
     assert not (snap_dir / "manifest.snap.json.md").exists()
 
 
-def test_snapshot_only_invalid_object(sample_lookml_project: Path):
+def test_snapshot_only_invalid_object(sample_lookml_project: Path) -> None:
     res = runner.invoke(
         app,
         ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project), "--only", "invalid_obj"],
@@ -235,7 +239,7 @@ def test_snapshot_only_invalid_object(sample_lookml_project: Path):
     assert "Invalid snapshot object 'invalid_obj'" in res.output
 
 
-def test_snapshot_model_filter(sample_lookml_project: Path):
+def test_snapshot_model_filter(sample_lookml_project: Path) -> None:
     # Add a second model
     (sample_lookml_project / "other.model.lkml").write_text(
         'connection: "postgres_db"\n'
@@ -255,7 +259,7 @@ def test_snapshot_model_filter(sample_lookml_project: Path):
     assert "other" not in data
 
 
-def test_snapshot_format_json(sample_lookml_project: Path):
+def test_snapshot_format_json(sample_lookml_project: Path) -> None:
     res = runner.invoke(
         app,
         ["parse", "lookml", "snapshot", "--path", str(sample_lookml_project), "--format", "json"],
@@ -269,7 +273,9 @@ def test_snapshot_format_json(sample_lookml_project: Path):
     assert "tests" in parsed["snapshots"]
 
 
-def test_snapshot_output_file(sample_lookml_project: Path, tmp_path: Path):
+def test_snapshot_output_file(
+    sample_lookml_project: Path, tmp_path: Path
+) -> None:
     out_file = tmp_path / "out_report.txt"
     res = runner.invoke(
         app,
@@ -280,14 +286,14 @@ def test_snapshot_output_file(sample_lookml_project: Path, tmp_path: Path):
     assert "4 snapshots written" in out_file.read_text(encoding="utf-8")
 
 
-def test_snapshot_missing_directory(tmp_path: Path):
+def test_snapshot_missing_directory(tmp_path: Path) -> None:
     non_existent = tmp_path / "does_not_exist"
     res = runner.invoke(app, ["parse", "lookml", "snapshot", "--path", str(non_existent)])
     assert res.exit_code == 1
     assert "LookML directory not found" in res.output
 
 
-def test_snapshot_pure_helpers():
+def test_snapshot_pure_helpers() -> None:
     assert normalize_sql("  SELECT   a,\n  b \n FROM   c  ") == "SELECT a, b FROM c"
     assert normalize_sql(None) is None
 
@@ -307,7 +313,7 @@ def test_snapshot_pure_helpers():
     }
 
 
-def test_run_lookml_snapshot_python_api(sample_lookml_project: Path):
+def test_run_lookml_snapshot_python_api(sample_lookml_project: Path) -> None:
     result, text = run_lookml_snapshot(path=sample_lookml_project)
     assert result.success is True
     assert result.written == 4
@@ -316,7 +322,7 @@ def test_run_lookml_snapshot_python_api(sample_lookml_project: Path):
 
 def test_snapshot_allow_additions_passes_on_new_tests_asserts_columns_and_measure_labels(
     sample_lookml_project: Path,
-):
+) -> None:
     # Initialize baseline with an unlabeled measure and a labeled measure
     (sample_lookml_project / "users.view.lkml").write_text(
         "view: users {\n"
@@ -447,7 +453,7 @@ def test_snapshot_allow_additions_passes_on_new_tests_asserts_columns_and_measur
 
 def test_snapshot_allow_additions_fails_on_material_changes(
     sample_lookml_project: Path,
-):
+) -> None:
     # Setup baseline with measure label, test assert, test column, and connection
     (sample_lookml_project / "users.view.lkml").write_text(
         "view: users {\n"
@@ -532,7 +538,7 @@ def test_snapshot_allow_additions_fails_on_material_changes(
 
 def test_snapshot_base_path_comparison_and_update_guard(
     sample_lookml_project: Path, tmp_path: Path
-):
+) -> None:
     import shutil
 
     base_dir = tmp_path / "base_lookml"
@@ -585,7 +591,7 @@ def test_snapshot_base_path_comparison_and_update_guard(
 
 def test_snapshot_codeowners_resolution_on_material_changes(
     sample_lookml_project: Path,
-):
+) -> None:
     gh_dir = sample_lookml_project / ".github"
     gh_dir.mkdir(parents=True, exist_ok=True)
     (gh_dir / "CODEOWNERS").write_text(
@@ -650,7 +656,7 @@ def test_snapshot_codeowners_resolution_on_material_changes(
     ]
 
 
-def test_snapshot_measures_separate_and_skips_empty_access(tmp_path: Path):
+def test_snapshot_measures_separate_and_skips_empty_access(tmp_path: Path) -> None:
     proj_dir = tmp_path / "no_grants"
     proj_dir.mkdir()
     (proj_dir / "orders.view.lkml").write_text(
@@ -706,7 +712,7 @@ def test_snapshot_measures_separate_and_skips_empty_access(tmp_path: Path):
 
 def test_snapshot_measures_indexed_by_explore_with_join_aliases_and_field_scoping(
     tmp_path: Path,
-):
+) -> None:
     proj_dir = tmp_path / "explore_scoping"
     proj_dir.mkdir()
     (proj_dir / "orders.view.lkml").write_text(
@@ -761,7 +767,7 @@ def test_snapshot_measures_indexed_by_explore_with_join_aliases_and_field_scopin
     }
 
 
-def test_access_snapshot_tracks_pii_tags_and_refinements(tmp_path: Path):
+def test_access_snapshot_tracks_pii_tags_and_refinements(tmp_path: Path) -> None:
     proj_dir = tmp_path / "pii_proj"
     (proj_dir / "bronze").mkdir(parents=True)
     (proj_dir / "bronze" / "users.view.lkml").write_text(
@@ -809,7 +815,9 @@ def test_access_snapshot_tracks_pii_tags_and_refinements(tmp_path: Path):
     assert any("shop.users.email.hidden" in c for c in res2.material_changes)
 
 
-def test_access_snapshot_tracks_liquid_user_attributes_in_sql(tmp_path: Path):
+def test_access_snapshot_tracks_liquid_user_attributes_in_sql(
+    tmp_path: Path,
+) -> None:
     proj_dir = tmp_path / "liquid_ua_proj"
     proj_dir.mkdir(parents=True)
     view_file = proj_dir / "users.view.lkml"

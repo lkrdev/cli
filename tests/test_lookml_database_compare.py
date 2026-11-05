@@ -107,7 +107,7 @@ view: products {
 """
 
 
-def test_basic_ast_compilation():
+def test_basic_ast_compilation() -> None:
     result = parse_lookml_database_compare(lookml=SAMPLE_LOOKML, columns=True)
     assert isinstance(result, LookmlDatabaseCompareResult)
     assert len(result.warnings) > 0
@@ -133,7 +133,7 @@ def test_basic_ast_compilation():
     assert set(users_tbl.columns) == {"id", "name"}
 
 
-def test_columns_flag_toggle():
+def test_columns_flag_toggle() -> None:
     res_no_cols = parse_lookml_database_compare(lookml=SAMPLE_LOOKML, columns=False)
     for t in res_no_cols.tables:
         assert t.columns == []
@@ -143,7 +143,7 @@ def test_columns_flag_toggle():
         assert len(t.columns) > 0
 
 
-def test_filter_models_and_explores():
+def test_filter_models_and_explores() -> None:
     result = parse_lookml_database_compare(
         lookml=SAMPLE_LOOKML,
         explore=["orders"],
@@ -156,7 +156,7 @@ def test_filter_models_and_explores():
     assert "products" not in tables
 
 
-def test_chained_sql_table_name_resolution():
+def test_chained_sql_table_name_resolution() -> None:
     chained_lookml = """
     connection: "pg_conn"
     explore: sales {}
@@ -181,7 +181,7 @@ def test_chained_sql_table_name_resolution():
     assert set(t.columns) == {"amount", "id"}
 
 
-def test_validation_against_mock_schema_file(tmp_path: Path):
+def test_validation_against_mock_schema_file(tmp_path: Path) -> None:
     schema_data = {
         "tables": [
             {
@@ -233,7 +233,7 @@ def test_validation_against_mock_schema_file(tmp_path: Path):
     assert "email" in unmodeled_cols_by_table["thelook.users"]
 
 
-def test_database_catalog_formats(tmp_path: Path):
+def test_database_catalog_formats(tmp_path: Path) -> None:
     # Flat dictionary format
     flat_data = {
         "thelook.orders": ["id", "status"],
@@ -260,7 +260,7 @@ def test_database_catalog_formats(tmp_path: Path):
     assert cat2.find_table("orders", "thelook", "my_project") is not None
 
 
-def test_cli_command_json_and_output(tmp_path: Path):
+def test_cli_command_json_and_output(tmp_path: Path) -> None:
     out_file = tmp_path / "result.json"
     cmd_args = [
         "parse",
@@ -287,7 +287,7 @@ def test_cli_command_json_and_output(tmp_path: Path):
     assert "users" in table_names
 
 
-def test_cli_command_console_output():
+def test_cli_command_console_output() -> None:
     cmd_args = [
         "parse",
         "lookml-database-compare",
@@ -306,7 +306,7 @@ def test_cli_command_console_output():
     assert "thelook.users" in result.output
 
 
-def test_format_compare_result_clean_validation():
+def test_format_compare_result_clean_validation() -> None:
     res = LookmlDatabaseCompareResult(
         warnings=["Some warning"],
         tables=[
@@ -325,7 +325,7 @@ def test_format_compare_result_clean_validation():
     assert "Some warning" in txt
 
 
-def test_mock_looker_sdk_inline_query():
+def test_mock_looker_sdk_inline_query() -> None:
     mock_sdk = MagicMock()
     mock_sql = """
     SELECT

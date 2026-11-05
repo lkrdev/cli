@@ -1,22 +1,28 @@
+from __future__ import annotations
+
 import json
 import warnings
-from typing import Any
+from collections.abc import Callable
+from typing import cast
 
 from lkr.codemode.type import to_primitive
 from lkr.logger import logger
 
-query: Any = None
-query_for_slug: Any = None
-merge_query: Any = None
-dashboard: Any = None
-look: Any = None
-get_conversation: Any = None
-all_conversation_messages: Any = None
-lookml_model_explore: Any = None
-run_inline_query: Any = None
-create_sql_query: Any = None
-run_sql_query: Any = None
-_raw_run_key_driver_analysis: Any = None
+_DictFn = Callable[..., dict[str, object]]
+_ListDictFn = Callable[..., list[dict[str, object]]]
+
+query: _DictFn = cast(_DictFn, None)
+query_for_slug: _DictFn = cast(_DictFn, None)
+merge_query: _DictFn = cast(_DictFn, None)
+dashboard: _DictFn = cast(_DictFn, None)
+look: _DictFn = cast(_DictFn, None)
+get_conversation: _DictFn = cast(_DictFn, None)
+all_conversation_messages: _ListDictFn = cast(_ListDictFn, None)
+lookml_model_explore: _DictFn = cast(_DictFn, None)
+run_inline_query: Callable[..., object] = cast(Callable[..., object], None)
+create_sql_query: _DictFn | None = None
+run_sql_query: Callable[..., object] | None = None
+_raw_run_key_driver_analysis: _DictFn = cast(_DictFn, None)
 
 
 def _warn_sdk_query(msg: str) -> None:
@@ -24,54 +30,63 @@ def _warn_sdk_query(msg: str) -> None:
     logger.warning(msg)
 
 
-def _bind_sdk(sdk: Any, transport_options: Any = None) -> None:
+def _bind_sdk(sdk: object, transport_options: object = None) -> None:
     global query, query_for_slug, merge_query, dashboard, look
     global get_conversation, all_conversation_messages, lookml_model_explore
     global run_inline_query, create_sql_query, run_sql_query, _raw_run_key_driver_analysis
 
-    def _wrap(attr: str) -> Any:
+    def _wrap(attr: str, *, raw: bool = False) -> Callable[..., object] | None:
         fn = getattr(sdk, attr, None)
         if fn is None:
             return None
 
-        def _inner(*a: Any, **kw: Any) -> Any:
+        def _inner(*a: object, **kw: object) -> object:
             if transport_options is not None and "transport_options" not in kw:
                 kw["transport_options"] = transport_options
-            return to_primitive(fn(*a, **kw))
+            res = fn(*a, **kw)
+            return res if raw else to_primitive(res)
 
         return _inner
 
-    query = _wrap("query")
-    query_for_slug = _wrap("query_for_slug")
-    merge_query = _wrap("merge_query")
-    dashboard = _wrap("dashboard")
-    look = _wrap("look")
-    get_conversation = _wrap("get_conversation")
-    all_conversation_messages = _wrap("all_conversation_messages")
-    lookml_model_explore = _wrap("lookml_model_explore")
-    create_sql_query = _wrap("create_sql_query")
-    run_sql_query = _wrap("run_sql_query")
+    def _wrap_dict(attr: str) -> _DictFn:
+        return cast(_DictFn, _wrap(attr))
 
-    def _run_inline(result_format: str, body: Any, **kw: Any) -> Any:
-        if transport_options is not None and "transport_options" not in kw:
-            kw["transport_options"] = transport_options
-        raw = sdk.run_inline_query(result_format, body, **kw)
+    query = _wrap_dict("query")
+    query_for_slug = _wrap_dict("query_for_slug")
+    merge_query = _wrap_dict("merge_query")
+    dashboard = _wrap_dict("dashboard")
+    look = _wrap_dict("look")
+    get_conversation = _wrap_dict("get_conversation")
+    all_conversation_messages = cast(_ListDictFn, _wrap("all_conversation_messages"))
+    lookml_model_explore = _wrap_dict("lookml_model_explore")
+    create_sql_query = cast("_DictFn | None", _wrap("create_sql_query"))
+    run_sql_query = _wrap("run_sql_query")
+    raw_inline = _wrap("run_inline_query", raw=True)
+    post_fn = cast("Callable[..., object]", getattr(sdk, "post", None))
+    prep_fn = cast("Callable[[object], object]", getattr(sdk, "_prepare_body", None))
+
+    def _run_inline(result_format: str, body: object, **kw: object) -> object:
+        assert raw_inline is not None
+        raw = raw_inline(result_format, body, **kw)
         if isinstance(raw, str):
-            if result_format != "json":
+            if result_format not in ("json", "json_detail", "json_bi"):
                 return raw
             s = raw.strip()
-            return json.loads(s) if s else []
+            return json.loads(s) if s else ([] if result_format == "json" else {})
         return to_primitive(raw)
 
-    def _raw_kda(body: Any, topts: Any = None) -> Any:
+    def _raw_kda(body: object, topts: object = None) -> dict[str, object]:
         opts = topts if topts is not None else transport_options
-        return to_primitive(
-            sdk.post(
-                path="/internal/kda/analyze",
-                structure=Any,
-                body=sdk._prepare_body(body),
-                transport_options=opts,
-            )
+        return cast(
+            dict[str, object],
+            to_primitive(
+                post_fn(
+                    path="/internal/kda/analyze",
+                    structure=dict,
+                    body=prep_fn(body),
+                    transport_options=opts,
+                )
+            ),
         )
 
     run_inline_query = _run_inline
@@ -164,7 +179,19 @@ BAD_DIM_TOKENS = (
 )
 
 
-def _uniq(seq):
+def _as_dict(v: object) -> dict[str, object]:
+    return v if isinstance(v, dict) else {}
+
+
+def _as_dicts(v: object) -> list[dict[str, object]]:
+    return [x for x in v if isinstance(x, dict)] if isinstance(v, list) else []
+
+
+def _as_strs(v: object) -> list[str]:
+    return [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
+
+
+def _uniq(seq: list[str]) -> list[str]:
     out = []
     for x in seq:
         if x and x not in out:
@@ -172,12 +199,12 @@ def _uniq(seq):
     return out
 
 
-def _is_time_field(field_name):
+def _is_time_field(field_name: object) -> bool:
     s = str(field_name or "")
     return any(s.endswith(suf) for suf in TIME_SUFFIXES)
 
 
-def _extract_refs(sql, default_view):
+def _extract_refs(sql: object, default_view: object) -> list[str]:
     if not sql:
         return []
     refs = []
@@ -196,7 +223,7 @@ def _extract_refs(sql, default_view):
     return refs
 
 
-def _table_col(sql, view):
+def _table_col(sql: object, view: object) -> str | None:
     s = str(sql or "").strip().rstrip(";").strip()
     for pfx in ("${TABLE}.", f"{view}."):
         if s.startswith(pfx):
@@ -206,7 +233,7 @@ def _table_col(sql, view):
     return None
 
 
-def _resolve_query_id_or_slug(qid):
+def _resolve_query_id_or_slug(qid: object) -> dict[str, object]:
     s = str(qid).strip()
     if s.isdigit():
         try:
@@ -218,16 +245,21 @@ def _resolve_query_id_or_slug(qid):
     return query_for_slug(s)
 
 
-def _expand_merge_query(mid, title_prefix="", filterables=None, df_vals=None):
+def _expand_merge_query(
+    mid: object,
+    title_prefix: str = "",
+    filterables: list[dict[str, object]] | None = None,
+    df_vals: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
     mq = merge_query(str(mid)) or {}
     targets = []
     flts_list = filterables or []
     d_vals = df_vals or {}
-    for idx, sq in enumerate(mq.get("source_queries") or []):
+    for idx, sq in enumerate(_as_dicts(mq.get("source_queries"))):
         sq_q = _resolve_query_id_or_slug(sq.get("query_id"))
         if not sq_q or not sq_q.get("model") or not sq_q.get("view"):
             continue
-        tf = dict(sq_q.get("filters") or {})
+        tf = dict(_as_dict(sq_q.get("filters")))
         listens = {}
         matched_flts = (
             [flts_list[idx]]
@@ -239,18 +271,18 @@ def _expand_merge_query(mid, title_prefix="", filterables=None, df_vals=None):
             ]
         )
         for flt in matched_flts:
-            for lsn in flt.get("listen") or []:
+            for lsn in _as_dicts(flt.get("listen")):
                 fn, fld = lsn.get("dashboard_filter_name"), lsn.get("field")
-                if fn and fld:
+                if isinstance(fn, str) and fn and isinstance(fld, str) and fld:
                     listens[fn] = fld
                     if d_vals.get(fn):
                         tf[fld] = d_vals[fn]
         m_dims = [
-            mf.get("source_field_name")
-            for mf in (sq.get("merge_fields") or [])
-            if mf.get("source_field_name")
+            sf
+            for mf in _as_dicts(sq.get("merge_fields"))
+            if isinstance((sf := mf.get("source_field_name")), str) and sf
         ]
-        q_fields = _uniq(m_dims + (sq_q.get("fields") or []))
+        q_fields = _uniq(m_dims + _as_strs(sq_q.get("fields")))
         sq_label = sq.get("name") or f"{sq_q['model']}::{sq_q['view']}"
         targets.append(
             {
@@ -271,13 +303,13 @@ def _expand_merge_query(mid, title_prefix="", filterables=None, df_vals=None):
 
 
 def _resolve_raw_targets(
-    target=None,
-    model_name=None,
-    explore_name=None,
-    fields=None,
-    filters=None,
-    tile_filter=None,
-):
+    target: object = None,
+    model_name: str | None = None,
+    explore_name: str | None = None,
+    fields: list[str] | None = None,
+    filters: dict[str, str] | dict[str, object] | None = None,
+    tile_filter: str | list[str] | None = None,
+) -> tuple[str, list[dict[str, object]]]:
     if model_name and explore_name and not target:
         return (
             "explore",
@@ -319,14 +351,18 @@ def _resolve_raw_targets(
         if k.startswith("f[") and k.endswith("]")
     }
 
-    def _query_to_target(q, title=None, slug_fallback=None):
-        tf = dict(q.get("filters") or {})
+    def _query_to_target(
+        q: dict[str, object],
+        title: str | None = None,
+        slug_fallback: str | None = None,
+    ) -> dict[str, object]:
+        tf = dict(_as_dict(q.get("filters")))
         tf.update(url_flts)
         return {
             "title": title or f"{q['model']}::{q['view']}",
             "model": q["model"],
             "explore": q["view"],
-            "fields": list(q.get("fields") or []),
+            "fields": _as_strs(q.get("fields")),
             "filters": tf,
             "slug": q.get("slug") or q.get("id") or slug_fallback,
             "merge_fields": [],
@@ -346,34 +382,36 @@ def _resolve_raw_targets(
         )
         d = dashboard(did) or {}
         df_vals = {
-            df["name"]: df.get("default_value")
-            for df in (d.get("dashboard_filters") or [])
-            if df.get("name") and df.get("default_value")
+            dn: df.get("default_value")
+            for df in _as_dicts(d.get("dashboard_filters"))
+            if isinstance((dn := df.get("name")), str)
+            and dn
+            and df.get("default_value")
         }
         df_vals.update(url_params)
         tiles = []
-        for e in d.get("dashboard_elements") or []:
-            rm = e.get("result_maker") or {}
+        for e in _as_dicts(d.get("dashboard_elements")):
+            rm = _as_dict(e.get("result_maker"))
             q = e.get("query") or rm.get("query")
             mid = e.get("merge_result_id") or rm.get("merge_result_id")
             if mid and not q:
                 tiles.extend(
                     _expand_merge_query(
                         mid,
-                        title_prefix=e.get("title") or str(e.get("id")),
-                        filterables=rm.get("filterables"),
+                        title_prefix=str(e.get("title") or e.get("id")),
+                        filterables=_as_dicts(rm.get("filterables")),
                         df_vals=df_vals,
                     )
                 )
                 continue
-            if not q or not q.get("model") or not q.get("view"):
+            if not isinstance(q, dict) or not q.get("model") or not q.get("view"):
                 continue
-            tf = dict(q.get("filters") or {})
+            tf = dict(_as_dict(q.get("filters")))
             listens = {}
-            for flt in rm.get("filterables") or []:
-                for lsn in flt.get("listen") or []:
+            for flt in _as_dicts(rm.get("filterables")):
+                for lsn in _as_dicts(flt.get("listen")):
                     fn, fld = lsn.get("dashboard_filter_name"), lsn.get("field")
-                    if fn and fld:
+                    if isinstance(fn, str) and fn and isinstance(fld, str) and fld:
                         listens[fn] = fld
                         if df_vals.get(fn):
                             tf[fld] = df_vals[fn]
@@ -382,7 +420,7 @@ def _resolve_raw_targets(
                     "title": e.get("title") or str(e.get("id")),
                     "model": q["model"],
                     "explore": q["view"],
-                    "fields": list(q.get("fields") or []),
+                    "fields": _as_strs(q.get("fields")),
                     "filters": tf,
                     "slug": q.get("slug") or q.get("id"),
                     "merge_fields": [],
@@ -407,10 +445,15 @@ def _resolve_raw_targets(
         try:
             lk = look(lid)
             if lk and (lk.get("query") or lk.get("query_id")):
-                q = lk.get("query") or _resolve_query_id_or_slug(lk["query_id"])
+                raw_q = lk.get("query")
+                q = (
+                    raw_q
+                    if isinstance(raw_q, dict)
+                    else _resolve_query_id_or_slug(lk["query_id"])
+                )
                 return (
                     "look",
-                    [_query_to_target(q, title=lk.get("title") or f"Look {lid}")],
+                    [_query_to_target(q, title=str(lk.get("title") or f"Look {lid}"))],
                 )
         except Exception:
             if "/looks/" in base_s:
@@ -430,40 +473,45 @@ def _resolve_raw_targets(
         msgs = all_conversation_messages(clean_id)
         turns, cur_q = [], None
         for m in msgs or []:
-            msg = m.get("message") or {}
+            msg = _as_dict(m.get("message"))
             if m.get("type") == "user":
-                cur_q = (msg.get("userMessage") or {}).get("text")
-            gq = ((msg.get("systemMessage") or {}).get("data") or {}).get(
+                cur_q = _as_dict(msg.get("userMessage")).get("text")
+            gq = _as_dict(_as_dict(msg.get("systemMessage")).get("data")).get(
                 "generatedLookerQuery"
             )
-            if gq and gq.get("model") and (gq.get("explore") or gq.get("view")):
+            if (
+                isinstance(gq, dict)
+                and gq.get("model")
+                and (gq.get("explore") or gq.get("view"))
+            ):
                 raw_flts = gq.get("filters") or []
                 if isinstance(raw_flts, dict):
                     flts = dict(raw_flts)
                 else:
                     flts = {
-                        fi["field"]: str(fi.get("value", ""))
-                        for fi in raw_flts
-                        if isinstance(fi, dict) and fi.get("field")
+                        ff: str(fi.get("value", ""))
+                        for fi in _as_dicts(raw_flts)
+                        if isinstance((ff := fi.get("field")), str) and ff
                     }
                 turns.append(
                     {
                         "title": cur_q or f"Turn {len(turns) + 1}",
                         "model": gq["model"],
                         "explore": gq.get("explore") or gq.get("view"),
-                        "fields": list(gq.get("fields") or []),
+                        "fields": _as_strs(gq.get("fields")),
                         "filters": flts,
                         "slug": None,
                         "merge_fields": [],
                         "filter_listens": {},
                     }
                 )
-        if not turns and c and c.get("sources"):
-            src = c["sources"][0]
+        raw_sources = c.get("sources") if c else None
+        if not turns and c and isinstance(raw_sources, list) and raw_sources:
+            src = _as_dict(raw_sources[0])
             turns.append(
                 {
                     "title": c.get("name") or "Conversation",
-                    "model": src["model"],
+                    "model": src.get("model"),
                     "explore": src.get("explore") or src.get("view"),
                     "fields": list(fields or []),
                     "filters": dict(filters or {}),
@@ -514,26 +562,40 @@ def _resolve_raw_targets(
     return ("merge_result", _expand_merge_query(clean_id))
 
 
-def _decompile_single_target(tgt, exp):
-    exp = exp or {}
+def _decompile_single_target(
+    tgt: dict[str, object], exp: dict[str, object] | None
+) -> dict[str, object]:
+    exp = _as_dict(exp)
     model_name, explore_name = tgt["model"], tgt["explore"]
-    base_view = exp.get("view_name") or explore_name
-    flds = exp.get("fields") or {}
-    dims = flds.get("dimensions") or []
-    meas = flds.get("measures") or []
-    joins = exp.get("joins") or []
-    sets_list = exp.get("sets") or []
+    base_view = str(exp.get("view_name") or explore_name)
+    flds = _as_dict(exp.get("fields"))
+    dims = _as_dicts(flds.get("dimensions"))
+    meas = _as_dicts(flds.get("measures"))
+    joins = _as_dicts(exp.get("joins"))
+    sets_list = _as_dicts(exp.get("sets"))
 
-    dims_by_name = {d["name"]: d for d in dims if d.get("name")}
-    meas_by_name = {m["name"]: m for m in meas if m.get("name")}
+    dims_by_name = {
+        dn: d
+        for d in dims
+        if isinstance((dn := d.get("name")), str) and dn
+    }
+    meas_by_name = {
+        mn: m
+        for m in meas
+        if isinstance((mn := m.get("name")), str) and mn
+    }
 
     inner_joins = {
-        j.get("name") for j in joins if j.get("type") == "inner" and j.get("name")
+        jn
+        for j in joins
+        if j.get("type") == "inner" and isinstance((jn := j.get("name")), str) and jn
     }
     liquid_views = {
-        f.get("view")
+        fv
         for f in (dims + meas)
-        if f.get("view") and "{%" in str(f.get("sql") or "")
+        if isinstance((fv := f.get("view")), str)
+        and fv
+        and "{%" in str(f.get("sql") or "")
     }
     bad_views = inner_joins | liquid_views
 
@@ -541,9 +603,11 @@ def _decompile_single_target(tgt, exp):
     conditional_joins = {}
     for j in joins:
         j_name = j.get("name")
-        if not j_name or j_name in bad_views:
+        if not isinstance(j_name, str) or not j_name or j_name in bad_views:
             continue
-        dep_flds = j.get("dependent_fields") or _extract_refs(j.get("sql_on"), j_name)
+        dep_flds = _as_strs(j.get("dependent_fields")) or _extract_refs(
+            j.get("sql_on"), j_name
+        )
         fk_cond = None
         for df in dep_flds:
             if not df.startswith(j_name + "."):
@@ -556,20 +620,20 @@ def _decompile_single_target(tgt, exp):
             conditional_joins[j_name] = fk_cond or f"from: {j.get('from')}"
 
     # Map unfiltered additive measures by referenced dimension or ${TABLE}.col
-    sum_by_dim = {}
-    count_by_view = {}
-    dim_by_table_col = {}
+    sum_by_dim: dict[str, list[str]] = {}
+    count_by_view: dict[str, list[str]] = {}
+    dim_by_table_col: dict[str, list[str]] = {}
     for d in dims:
-        d_name, d_view = d.get("name"), d.get("view") or base_view
+        d_name, d_view = d.get("name"), str(d.get("view") or base_view)
         tc = _table_col(d.get("sql"), d_view)
-        if d_name and tc and not d.get("is_timeframe"):
+        if isinstance(d_name, str) and d_name and tc and not d.get("is_timeframe"):
             dim_by_table_col.setdefault(tc, []).append(d_name)
 
     for m in meas:
         m_name = m.get("name")
-        m_view = m.get("view") or base_view
+        m_view = str(m.get("view") or base_view)
         m_type = m.get("type") or ""
-        if not m_name or m_view in bad_views or m.get("filters"):
+        if not isinstance(m_name, str) or not m_name or m_view in bad_views or m.get("filters"):
             continue
         if m_type == "count":
             count_by_view.setdefault(m_view, []).insert(0, m_name)
@@ -586,13 +650,15 @@ def _decompile_single_target(tgt, exp):
                         sum_by_dim.setdefault(dn, []).append(m_name)
 
     # Identify target measures in query
-    q_fields = list(tgt.get("fields") or [])
+    q_fields = _as_strs(tgt.get("fields"))
     q_measures = [f for f in q_fields if f in meas_by_name]
     if not q_measures:
         default_meas = [
-            m["name"]
+            mn
             for m in meas
-            if not m.get("hidden")
+            if isinstance((mn := m.get("name")), str)
+            and mn
+            and not m.get("hidden")
             and m.get("type") in ("sum", "count", "sum_distinct")
             and m.get("view") not in bad_views
         ]
@@ -600,21 +666,28 @@ def _decompile_single_target(tgt, exp):
 
     # Decompile each measure via recursive ${...} walk
     decompiled_measures = {}
-    all_target_leaf_dims = set()
+    all_target_leaf_dims: set[str] = set()
     touched_views = {base_view}
-    measure_drill_pool = []
+    measure_drill_pool: list[str] = []
 
-    def _walk_refs(sql_expr, cur_view, visited, ref_measures, derived_dims, leaf_dims):
+    def _walk_refs(
+        sql_expr: object,
+        cur_view: object,
+        visited: set[str],
+        ref_measures: list[str],
+        derived_dims: list[dict[str, object]],
+        leaf_dims: list[str],
+    ) -> None:
         for ref in _extract_refs(sql_expr, cur_view):
             if ref in visited:
                 continue
             visited.add(ref)
             if ref in meas_by_name:
                 rm = meas_by_name[ref]
-                rm_view = rm.get("view") or cur_view
+                rm_view = str(rm.get("view") or cur_view)
                 touched_views.add(rm_view)
                 ref_measures.append(ref)
-                measure_drill_pool.extend(rm.get("drill_fields") or [])
+                measure_drill_pool.extend(_as_strs(rm.get("drill_fields")))
                 _walk_refs(
                     rm.get("sql"),
                     rm_view,
@@ -625,7 +698,7 @@ def _decompile_single_target(tgt, exp):
                 )
             elif ref in dims_by_name:
                 rd = dims_by_name[ref]
-                rd_view = rd.get("view") or cur_view
+                rd_view = str(rd.get("view") or cur_view)
                 touched_views.add(rd_view)
                 rd_sql = str(rd.get("sql") or "").strip()
                 sub_refs = [
@@ -654,15 +727,15 @@ def _decompile_single_target(tgt, exp):
 
     for m_name in q_measures:
         m_obj = meas_by_name.get(m_name) or {}
-        m_view = m_obj.get("view") or base_view
+        m_view = str(m_obj.get("view") or base_view)
         m_type = m_obj.get("type") or ""
         m_sql = str(m_obj.get("sql") or "").strip()
         touched_views.add(m_view)
-        measure_drill_pool.extend(m_obj.get("drill_fields") or [])
+        measure_drill_pool.extend(_as_strs(m_obj.get("drill_fields")))
 
-        ref_measures = []
-        derived_dims = []
-        leaf_dims = []
+        ref_measures: list[str] = []
+        derived_dims: list[dict[str, object]] = []
+        leaf_dims: list[str] = []
         _walk_refs(m_sql, m_view, {m_name}, ref_measures, derived_dims, leaf_dims)
         if not leaf_dims and not ref_measures:
             tc = _table_col(m_sql, m_view)
@@ -673,23 +746,23 @@ def _decompile_single_target(tgt, exp):
 
         leaf_entries = []
         unmodeled = []
-        matched_order = []
+        matched_order: list[str] = []
         for dd in derived_dims:
-            all_target_leaf_dims.add(dd["dimension"])
-            for mm in dd.get("matched_additive_measures") or []:
+            all_target_leaf_dims.add(str(dd["dimension"]))
+            for mm in _as_strs(dd.get("matched_additive_measures")):
                 if mm not in matched_order:
                     matched_order.append(mm)
         for ld_name in leaf_dims:
             all_target_leaf_dims.add(ld_name)
             ld_obj = dims_by_name.get(ld_name) or {}
-            ld_view = ld_obj.get("view") or base_view
+            ld_view = str(ld_obj.get("view") or base_view)
             ld_sql = str(ld_obj.get("sql") or "").strip()
             matched = _uniq(sum_by_dim.get(ld_name, []))
             for mm in matched:
                 if mm not in matched_order:
                     matched_order.append(mm)
                 measure_drill_pool.extend(
-                    (meas_by_name.get(mm) or {}).get("drill_fields") or []
+                    _as_strs((meas_by_name.get(mm) or {}).get("drill_fields"))
                 )
             leaf_entries.append(
                 {
@@ -760,7 +833,7 @@ def _decompile_single_target(tgt, exp):
         }
 
     # Transitive dimension ref helper to detect tautological _tier / derived dimensions
-    def _dim_touches_leaf(d_name):
+    def _dim_touches_leaf(d_name: str) -> bool:
         stack = [d_name]
         seen = set()
         while stack:
@@ -778,11 +851,13 @@ def _decompile_single_target(tgt, exp):
                         stack.append(r)
         return False
 
-    def _is_valid_driver_dim(d_name, allow_yesno_tier=False):
+    def _is_valid_driver_dim(
+        d_name: str, allow_yesno_tier: bool = False
+    ) -> bool:
         d = dims_by_name.get(d_name)
         if not d:
             return False
-        dtype = d.get("type") or "string"
+        dtype = str(d.get("type") or "string")
         d_view = d.get("view") or base_view
         if (
             d.get("hidden")
@@ -807,7 +882,7 @@ def _decompile_single_target(tgt, exp):
             and _dim_touches_leaf(d_name)
         )
 
-    def _macro_rank(d_name):
+    def _macro_rank(d_name: str) -> tuple[int, int, str]:
         low = d_name.lower()
         for idx, tok in enumerate(MACRO_TOKENS):
             if low.endswith(("." + tok, "_" + tok)):
@@ -816,7 +891,9 @@ def _decompile_single_target(tgt, exp):
 
     # Timeframes & Filter split
     all_timeframes = [
-        d["name"] for d in dims if d.get("is_timeframe") and d.get("name")
+        dn
+        for d in dims
+        if d.get("is_timeframe") and isinstance((dn := d.get("name")), str) and dn
     ]
     tframe_set = set(all_timeframes)
     avail_tframes = [
@@ -830,7 +907,7 @@ def _decompile_single_target(tgt, exp):
         if any(f.endswith(suf) for suf in PRIMARY_TIME_SUFFIXES)
     ]
 
-    raw_filters = dict(tgt.get("filters") or {})
+    raw_filters = dict(_as_dict(tgt.get("filters")))
     base_filters = {}
     colliding_time_filters = {}
     for k, v in raw_filters.items():
@@ -846,14 +923,18 @@ def _decompile_single_target(tgt, exp):
 
     # Collect drill_fields from measures, query dims, base count measure, and explore["sets"]
     for vm in count_by_view.get(base_view, []):
-        measure_drill_pool.extend((meas_by_name.get(vm) or {}).get("drill_fields") or [])
+        measure_drill_pool.extend(
+            _as_strs((meas_by_name.get(vm) or {}).get("drill_fields"))
+        )
     for qf in q_fields:
-        measure_drill_pool.extend((dims_by_name.get(qf) or {}).get("drill_fields") or [])
+        measure_drill_pool.extend(
+            _as_strs((dims_by_name.get(qf) or {}).get("drill_fields"))
+        )
     for s_entry in sets_list:
         s_name = str(s_entry.get("name") or "")
         s_view = s_name.split(".", 1)[0] if "." in s_name else base_view
         if s_view not in bad_views and s_view not in conditional_joins:
-            measure_drill_pool.extend(s_entry.get("value") or [])
+            measure_drill_pool.extend(_as_strs(s_entry.get("value")))
 
     # Bucket candidate dimensions
     query_dims = _uniq(
@@ -888,9 +969,9 @@ def _decompile_single_target(tgt, exp):
 
     for d in dims:
         dn = d.get("name")
-        if not dn or dn in seen_cands or dn in base_filters:
+        if not isinstance(dn, str) or not dn or dn in seen_cands or dn in base_filters:
             continue
-        dv = d.get("view") or base_view
+        dv = str(d.get("view") or base_view)
         if not _is_valid_driver_dim(dn, allow_yesno_tier=True):
             continue
         if dv in conditional_joins:
@@ -933,7 +1014,7 @@ def _decompile_single_target(tgt, exp):
         "excluded_views": sorted(bad_views),
         "_views": sorted(
             {
-                (d.get("view") or base_view)
+                str(d.get("view") or base_view)
                 for d in dims
                 if (d.get("view") or base_view) not in bad_views
             }
@@ -944,13 +1025,13 @@ def _decompile_single_target(tgt, exp):
 
 
 def decompile_kda_target(
-    target=None,
-    model_name=None,
-    explore_name=None,
-    fields=None,
-    filters=None,
-    tile_filter=None,
-):
+    target: object = None,
+    model_name: str | None = None,
+    explore_name: str | None = None,
+    fields: list[str] | None = None,
+    filters: dict[str, str] | dict[str, object] | None = None,
+    tile_filter: str | list[str] | None = None,
+) -> dict[str, object]:
     """Decompile an Explore URL, Query slug, Look, Dashboard, Merge Result, or Conversation into KDA measures and candidate driver dimensions."""
     t_type, raw_targets = _resolve_raw_targets(
         target=target,
@@ -964,12 +1045,12 @@ def decompile_kda_target(
     compiled_targets = []
     for rt in raw_targets:
         if fields:
-            rt["fields"] = _uniq(list(rt.get("fields") or []) + list(fields))
+            rt["fields"] = _uniq(_as_strs(rt.get("fields")) + list(fields))
         if filters:
-            merged_flts = dict(rt.get("filters") or {})
+            merged_flts = dict(_as_dict(rt.get("filters")))
             merged_flts.update(filters)
             rt["filters"] = merged_flts
-        key = (rt["model"], rt["explore"])
+        key = (str(rt["model"]), str(rt["explore"]))
         if key not in explore_cache:
             explore_cache[key] = lookml_model_explore(rt["model"], rt["explore"])
         compiled_targets.append(_decompile_single_target(rt, explore_cache[key]))
@@ -979,23 +1060,24 @@ def decompile_kda_target(
         views_by_exp = {}
         dims_by_exp = {}
         tframes_by_exp = {}
-        filter_map = {}
+        filter_map: dict[str, dict[str, object]] = {}
         merge_keys = []
         for ct in compiled_targets:
-            ek = f"{ct['data_source']['model_name']}::{ct['data_source']['explore_name']}"
-            cands = ct["candidate_dimensions"]
+            ds_obj = _as_dict(ct.get("data_source"))
+            ek = f"{ds_obj.get('model_name')}::{ds_obj.get('explore_name')}"
+            cands = _as_dict(ct.get("candidate_dimensions"))
             all_d = (
-                cands["query_dimensions"]
-                + cands["drill_dimensions"]
-                + cands["entity_dimensions"]
+                _as_strs(cands.get("query_dimensions"))
+                + _as_strs(cands.get("drill_dimensions"))
+                + _as_strs(cands.get("entity_dimensions"))
             )
             if ek not in views_by_exp:
-                views_by_exp[ek] = list(ct.get("_views") or [])
+                views_by_exp[ek] = _as_strs(ct.get("_views"))
                 dims_by_exp[ek] = list(all_d)
-                tframes_by_exp[ek] = list(ct.get("available_timeframes") or [])
-            for fn, fld in (ct.get("_filter_listens") or {}).items():
+                tframes_by_exp[ek] = _as_strs(ct.get("available_timeframes"))
+            for fn, fld in _as_dict(ct.get("_filter_listens")).items():
                 filter_map.setdefault(fn, {})[ek] = fld
-            for mf in ct.get("_merge_fields") or []:
+            for mf in _as_strs(ct.get("_merge_fields")):
                 if mf not in merge_keys:
                     merge_keys.append(mf)
 
@@ -1039,18 +1121,19 @@ def decompile_kda_target(
 
 
 def _kda_fallback_422(
-    model_name,
-    explore_name,
-    contribution_metric,
-    dimensions,
-    base_filters,
-    baseline_filters,
-    breach_filters,
-    min_support=0.05,
-    top_k=5,
-):
+    model_name: object,
+    explore_name: object,
+    contribution_metric: object,
+    dimensions: list[str] | None,
+    base_filters: dict[str, object] | None,
+    baseline_filters: dict[str, object] | None,
+    breach_filters: dict[str, object] | None,
+    min_support: float = 0.05,
+    top_k: int = 5,
+) -> dict[str, object]:
     # ponytail: BQML-parity fallback for Looker 26.20-26.22 KdaResponse::Success.status 422 bug
     dims = list(dimensions or [])[:6]
+    cm = str(contribution_metric or "")
     base = dict(base_filters or {})
     b_ctrl = dict(baseline_filters or {})
     b_test = dict(breach_filters or {})
@@ -1073,8 +1156,8 @@ def _kda_fallback_422(
         ):
             fold_key = k_c
 
-    def _q(flds, flts):
-        return (
+    def _q(flds: list[str], flts: dict[str, object]) -> list[dict[str, object]]:
+        res = (
             run_inline_query(
                 "json",
                 {
@@ -1087,16 +1170,17 @@ def _kda_fallback_422(
             )
             or []
         )
+        return _as_dicts(res)
 
     if fold_key:
         q_flts = dict(base)
         q_flts[fold_key] = f"{b_ctrl[fold_key]},{b_test[fold_key]}"
-        all_rows = _q(_uniq([fold_key] + dims + [contribution_metric]), q_flts)
+        all_rows = _q(_uniq([fold_key] + dims + [cm]), q_flts)
         vc_str, vt_str = str(b_ctrl[fold_key]).strip(), str(b_test[fold_key]).strip()
         ctrl_rows = [r for r in all_rows if str(r.get(fold_key)) == vc_str]
         test_rows = [r for r in all_rows if str(r.get(fold_key)) == vt_str]
     else:
-        q_fields = _uniq(dims + [contribution_metric])
+        q_fields = _uniq(dims + [cm])
         cf, tf = dict(base), dict(base)
         cf.update(b_ctrl)
         tf.update(b_test)
@@ -1134,7 +1218,9 @@ def _kda_fallback_422(
             k for k, _ in sorted(counts.items(), key=lambda x: x[1], reverse=True)[:60]
         }
 
-    def _prep(rows):
+    def _prep(
+        rows: list[dict[str, object]],
+    ) -> tuple[list[tuple[list[str], float]], float, int]:
         out, tot, dropped = [], 0.0, 0
         for r in rows:
             if any(r.get(d) is None for d in kept_dims):
@@ -1144,7 +1230,7 @@ def _kda_fallback_422(
             for d in kept_dims:
                 val_str = str(r.get(d))
                 vals.append(val_str if val_str in allowed[d] else "__OTHER__")
-            m = float(r.get(contribution_metric) or 0.0)
+            m = float(str(r.get(cm) or 0.0))
             out.append((vals, m))
             tot += m
         return out, tot, dropped
@@ -1289,19 +1375,22 @@ def _kda_fallback_422(
     }
 
 
-def run_key_driver_analysis(body=None, transport_options=None):
+def run_key_driver_analysis(
+    body: dict[str, object] | None = None,
+    transport_options: object = None,
+) -> dict[str, object]:
     """Analyze Key Drivers with automatic API 4.0 query slug resolution, colliding timeframe filter stripping, and Looker 26.20-26.22 HTTP 422 fallback."""
     payload = dict(body or {})
-    ds = dict(payload.get("data_source") or {})
-    base = dict(payload.get("base_filters") or {})
-    baseline = dict(payload.get("baseline_filters") or {})
-    breach = dict(payload.get("breach_filters") or {})
+    ds = dict(_as_dict(payload.get("data_source")))
+    base = dict(_as_dict(payload.get("base_filters")))
+    baseline = dict(_as_dict(payload.get("baseline_filters")))
+    breach = dict(_as_dict(payload.get("breach_filters")))
 
     # Fix #1: Never send string query_id to /internal/kda/analyze
     if ds.get("query_id") and (not ds.get("model_name") or not ds.get("explore_name")):
         q = _resolve_query_id_or_slug(ds["query_id"])
         ds = {"model_name": q["model"], "explore_name": q["view"]}
-        q_flts = dict(q.get("filters") or {})
+        q_flts = dict(_as_dict(q.get("filters")))
         q_flts.update(base)
         base = q_flts
     elif "query_id" in ds and ds.get("model_name") and ds.get("explore_name"):
@@ -1310,10 +1399,11 @@ def run_key_driver_analysis(body=None, transport_options=None):
     if any(_is_time_field(k) for k in list(baseline.keys()) + list(breach.keys())):
         base = {k: v for k, v in base.items() if not _is_time_field(k)}
 
+    clean_dims = _as_strs(payload.get("dimensions"))[:6]
     clean_body = {
         "data_source": ds,
         "contribution_metric": payload.get("contribution_metric"),
-        "dimensions": list(payload.get("dimensions") or [])[:6],
+        "dimensions": clean_dims,
         "base_filters": base,
         "baseline_filters": baseline,
         "breach_filters": breach,
@@ -1336,14 +1426,14 @@ def run_key_driver_analysis(body=None, transport_options=None):
         model_name=ds.get("model_name"),
         explore_name=ds.get("explore_name"),
         contribution_metric=clean_body["contribution_metric"],
-        dimensions=clean_body["dimensions"],
+        dimensions=clean_dims,
         base_filters=base,
         baseline_filters=baseline,
         breach_filters=breach,
     )
 
 
-def _json_dumps(v):
+def _json_dumps(v: object) -> str:
     if v is None or isinstance(v, bool):
         return "null" if v is None else ("true" if v else "false")
     if isinstance(v, (int, float)):
@@ -1358,27 +1448,31 @@ def _json_dumps(v):
     return _json_dumps(str(v))
 
 
-def _json_loads(s):
+def _json_loads(s: str) -> object:
     n = len(s)
 
-    def _ws(i):
+    def _ws(i: int) -> int:
         while i < n and s[i] in " \t\r\n":
             i += 1
         return i
 
-    def _str(i):
+    def _str(i: int) -> tuple[str, int]:
         i += 1
         out = []
         while i < n and s[i] != '"':
             if s[i] == "\\":
                 i += 1
-                out.append({"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}.get(s[i], s[i]))
+                if s[i] == "u" and i + 4 < n:
+                    out.append(chr(int(s[i + 1 : i + 5], 16)))
+                    i += 4
+                else:
+                    out.append({"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}.get(s[i], s[i]))
             else:
                 out.append(s[i])
             i += 1
         return "".join(out), i + 1
 
-    def _val(i):
+    def _val(i: int) -> tuple[object, int]:
         i = _ws(i)
         if s[i] == '"':
             return _str(i)
@@ -1413,13 +1507,13 @@ def _json_loads(s):
     return _val(0)[0]
 
 
-def _clone(x):
+def _clone(x: object) -> object:
     if isinstance(x, dict):
         return {k: _clone(v) for k, v in x.items()}
     return [_clone(v) for v in x] if isinstance(x, list) else x
 
 
-def _parse_dyn_items(raw):
+def _parse_dyn_items(raw: object) -> list[dict[str, object]]:
     if isinstance(raw, str):
         if not (s := raw.strip()):
             return []
@@ -1430,18 +1524,20 @@ def _parse_dyn_items(raw):
     return [dict(d) for d in raw if isinstance(d, dict)] if isinstance(raw, list) else []
 
 
-def _sql_alias(name):
+def _sql_alias(name: object) -> str:
     return "".join(c if (c.isalnum() or c == "_") else "_" for c in str(name))
 
 
-def _strip_trailing_limit(sql):
+def _strip_trailing_limit(sql: str) -> str:
     toks = sql.rstrip().rsplit(None, 2)
     if len(toks) >= 2 and toks[-2].upper() == "LIMIT" and toks[-1].isdigit():
         return sql[: sql.upper().rfind("LIMIT")].rstrip()
     return sql
 
 
-def _rewrite_tc_expr(expr, field_origin):
+def _rewrite_tc_expr(
+    expr: object, field_origin: dict[str, tuple[int, str]]
+) -> str:
     parts = str(expr).split("${")
     out = [parts[0]]
     for part in parts[1:]:
@@ -1456,25 +1552,28 @@ def _rewrite_tc_expr(expr, field_origin):
     return "".join(out)
 
 
-def _warn_query(msg):
+def _warn_query(msg: str) -> None:
     try:
         _warn_sdk_query(msg)
     except Exception:  # noqa: BLE001
-        print("WARNING: " + str(msg))
+        print("WARNING: " + msg)
 
 
-def execute_looker_query(spec, transport_options=None):
+def execute_looker_query(
+    spec: object, transport_options: object = None
+) -> list[dict[str, object]]:
     """Execute one or more Looker queries with SQL CTE joins and SQL Runner / Python fallback."""
     spec_dict = {"source_queries": spec} if isinstance(spec, list) and spec else (spec or {})
 
-    def _parse_rows(raw, ctx=""):
+    def _parse_rows(raw: object, ctx: str = "") -> list[dict[str, object]]:
         res = _json_loads(raw.strip()) if isinstance(raw, str) and raw.strip() else raw
         if isinstance(res, dict) and ("errors" in res or "message" in res):
             raise RuntimeError(f"Looker query error ({ctx}): {res}")
-        return res if isinstance(res, list) else []
+        return _as_dicts(res)
 
-    def _run_json(q):
-        body = q.get("body", q)
+    def _run_json(q: dict[str, object]) -> list[dict[str, object]]:
+        raw_b = q.get("body", q)
+        body = raw_b if isinstance(raw_b, dict) else q
         return _parse_rows(run_inline_query("json", body), str(body.get("view")))
 
     if not isinstance(spec_dict, dict) or not spec_dict:
@@ -1490,13 +1589,15 @@ def execute_looker_query(spec, transport_options=None):
         raise ValueError("At least one query is required in source_queries")
     if len(raw_sqs) == 1:
         sq0 = raw_sqs[0] if isinstance(raw_sqs[0], dict) else {}
-        return _run_json(sq0.get("query", sq0))
+        q0 = sq0.get("query", sq0)
+        return _run_json(q0 if isinstance(q0, dict) else sq0)
 
     q_bodies = []
     warned_src_tc = False
     for sq in raw_sqs:
         q_raw = sq.get("query", sq) if isinstance(sq, dict) else {}
-        qb = _clone(q_raw.get("body", q_raw) if isinstance(q_raw, dict) else {})
+        raw_qb = _clone(q_raw.get("body", q_raw) if isinstance(q_raw, dict) else {})
+        qb = raw_qb if isinstance(raw_qb, dict) else {}
         dyn = _parse_dyn_items(qb.get("dynamic_fields"))
         tc_names = {d["table_calculation"] for d in dyn if isinstance(d.get("table_calculation"), str)}
         if tc_names:
@@ -1505,10 +1606,10 @@ def execute_looker_query(spec, transport_options=None):
                 warned_src_tc = True
             kept = [d for d in dyn if "table_calculation" not in d]
             qb.update(dynamic_fields=_json_dumps(kept)) if kept else qb.pop("dynamic_fields", None)
-            if isinstance(qb.get("fields"), list):
-                qb["fields"] = [f for f in qb["fields"] if f not in tc_names]
-            if isinstance(qb.get("sorts"), list):
-                qb["sorts"] = [s for s in qb["sorts"] if str(s).split()[0] not in tc_names]
+            if isinstance((qb_fields := qb.get("fields")), list):
+                qb["fields"] = [f for f in qb_fields if f not in tc_names]
+            if isinstance((qb_sorts := qb.get("sorts")), list):
+                qb["sorts"] = [s for s in qb_sorts if str(s).split()[0] not in tc_names]
         q_bodies.append(qb)
 
     final_tcs = []
@@ -1524,11 +1625,15 @@ def execute_looker_query(spec, transport_options=None):
         for qb in q_bodies:
             qb["total"] = True
 
-    p0_fields = q_bodies[0].get("fields") or []
+    p0_fields = _as_strs(q_bodies[0].get("fields"))
     joins_meta = [
         (
-            (sq.get("merge_fields") if isinstance(sq, dict) else None)
-            or [{"field_name": f, "source_field_name": f} for f in p0_fields if f in (q_bodies[idx].get("fields") or [])],
+            _as_dicts(sq.get("merge_fields") if isinstance(sq, dict) else None)
+            or [
+                {"field_name": f, "source_field_name": f}
+                for f in p0_fields
+                if f in _as_strs(q_bodies[idx].get("fields"))
+            ],
             str((sq.get("join_type") if isinstance(sq, dict) else None) or spec_dict.get("join_type") or "left").lower(),
         )
         for idx, sq in enumerate(raw_sqs[1:], start=1)
@@ -1539,11 +1644,11 @@ def execute_looker_query(spec, transport_options=None):
             raise RuntimeError("SQL Runner methods unavailable on SDK")
 
         ctes = []
-        field_origin = {}
-        alias_to_field = {}
+        field_origin: dict[str, tuple[int, str]] = {}
+        alias_to_field: dict[str, str] = {}
         for idx, qb in enumerate(q_bodies):
-            for f in qb.get("fields") or []:
-                if isinstance(f, str) and f not in field_origin:
+            for f in _as_strs(qb.get("fields")):
+                if f not in field_origin:
                     alias = _sql_alias(f)
                     field_origin[f] = (idx, alias)
                     alias_to_field[alias] = f
@@ -1566,7 +1671,10 @@ def execute_looker_query(spec, transport_options=None):
             )
             joins.append(f"{'INNER JOIN' if jtype == 'inner' else 'LEFT JOIN'} cte_{idx} ON {on_sql}")
 
-        projected = _uniq([f for f in (spec_dict.get("fields") or []) if f in field_origin] + list(field_origin.keys()))
+        projected = _uniq(
+            [f for f in _as_strs(spec_dict.get("fields")) if f in field_origin]
+            + list(field_origin.keys())
+        )
         select_sql = ", ".join(f"cte_{field_origin[f][0]}.{field_origin[f][1]} AS {field_origin[f][1]}" for f in projected)
         sql_lines = [f"WITH {', '.join(ctes)}", f"SELECT {select_sql}", f"FROM cte_0 {' '.join(joins)}"]
 
@@ -1601,7 +1709,7 @@ def execute_looker_query(spec, transport_options=None):
         if not slug:
             raise RuntimeError("create_sql_query did not return a slug")
 
-        def _remap(rows):
+        def _remap(rows: list[dict[str, object]]) -> list[dict[str, object]]:
             return [{alias_to_field.get(s := k.removeprefix("sql_runner_query."), alias_to_field.get(s.lower(), k)): v for k, v in r.items()} for r in rows]
 
         sql_rows = _parse_rows(run_sql_query(slug=slug, result_format="json"), f"sql:{slug}")
@@ -1676,3 +1784,894 @@ def execute_looker_query(spec, transport_options=None):
 
     limit = int(spec_dict["limit"]) if spec_dict.get("limit") else -1
     return merged_rows[:limit] if limit >= 0 else merged_rows
+
+
+def _cell_val(cell: object) -> object:
+    return cell.get("value") if isinstance(cell, dict) else cell
+
+
+def _to_float(v: object) -> float | None:
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).strip())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _to_int(v: object) -> int:
+    f = _to_float(v)
+    return round(f) if f is not None else 0
+
+
+def _days_to_ymd(days: int) -> str:
+    z = days + 719468
+    era = (z if z >= 0 else z - 146096) // 146097
+    doe = z - era * 146097
+    yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+    y = yoe + era * 400
+    doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
+    mp = (5 * doy + 2) // 153
+    d = doy - (153 * mp + 2) // 5 + 1
+    m = mp + 3 if mp < 10 else mp - 9
+    y += 1 if m <= 2 else 0
+    return f"{y:04d}-{m:02d}-{d:02d}"
+
+
+def _root_field_type(d: dict[str, object]) -> str:
+    dtype = str(d.get("type") or "string")
+    if dtype == "yesno":
+        return "yesno"
+    if (
+        dtype.startswith(("date", "time"))
+        or bool(d.get("is_timeframe"))
+        or (bool(d.get("dimension_group")) and not dtype.startswith("duration"))
+    ):
+        return "datetime"
+    if dtype in ("number", "distance") or dtype.startswith("duration") or bool(d.get("is_numeric")):
+        return "number"
+    return "string"
+
+
+def _is_hex_or_uuid(val: str) -> bool:
+    s = val.strip().lower()
+    hex_chars = "0123456789abcdef"
+    if len(s) == 36 and s[8] == "-" and s[13] == "-" and s[18] == "-" and s[23] == "-":
+        clean = s.replace("-", "")
+        return len(clean) == 32 and all(c in hex_chars for c in clean)
+    return 32 <= len(s) <= 64 and all(c in hex_chars for c in s)
+
+
+def _spikiness_stats(pairs: list[tuple[str, float]]) -> dict[str, object]:
+    clean = [(p, c) for p, c in pairs if p and p != "NULL"]
+    if not clean:
+        return {"period_count": 0}
+    vals = [c for _, c in clean]
+    n = len(vals)
+    mean = sum(vals) / n
+    variance = sum((v - mean) ** 2 for v in vals) / n
+    stddev = variance**0.5
+    peak_p, max_v = max(clean, key=lambda x: x[1])
+    trough_p, min_v = min(clean, key=lambda x: x[1])
+    return {
+        "period_count": n,
+        "min_count": round(min_v, 2),
+        "max_count": round(max_v, 2),
+        "mean_count": round(mean, 2),
+        "stddev_count": round(stddev, 2),
+        "spikiness_ratio": round(max_v / mean, 2) if mean > 0 else 0.0,
+        "cv": round(stddev / mean, 2) if mean > 0 else 0.0,
+        "peak_period": peak_p,
+        "trough_period": trough_p,
+    }
+
+
+def _build_lookml_snippet(
+    short_name: str,
+    rec_hidden: bool,
+    rec_suggestable: bool | None,
+    rec_tags: list[str],
+    rec_desc: str,
+    is_dg: bool = False,
+) -> str:
+    kw = "dimension_group" if is_dg else "dimension"
+    lines = [f"  {kw}: {short_name} {{", f"    hidden: {'yes' if rec_hidden else 'no'}"]
+    if rec_suggestable is not None and not is_dg:
+        lines.append(f"    suggestable: {'yes' if rec_suggestable else 'no'}")
+    if rec_tags:
+        lines.append(f"    tags: [{', '.join(_json_dumps(t) for t in rec_tags)}]")
+    esc = rec_desc.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    lines.append(f'    description: "{esc}"')
+    lines.append("  }")
+    return "\n".join(lines)
+
+
+def _finalize_field_profile(
+    d: dict[str, object],
+    root_type: str,
+    stats: dict[str, object],
+    is_helper: bool,
+) -> dict[str, object]:
+    fname = str(d.get("name") or "")
+    sname = fname.split(".", 1)[-1]
+    low = sname.lower()
+    dtype = str(d.get("type") or "string")
+    sql_expr = str(d.get("sql") or "")
+    val_fmt = str(d.get("value_format") or d.get("value_format_name") or "").lower()
+    base_desc = str(d.get("description") or "").strip()
+    prefix = ((base_desc if base_desc[-1] in ".!?" else base_desc + ".") + " ") if base_desc else ""
+    existing_tags = _uniq(_as_strs(d.get("tags")))
+    is_pk = bool(d.get("primary_key"))
+    is_sys = low.startswith(("_fivetran_", "_airbyte_", "_sdc_", "_baton_", "etl_", "ingest_")) or low.endswith(("_pk", "_fk", "_sk"))
+    is_fk = not is_pk and low.endswith(("_id", "_fk"))
+
+    total_rows = _to_int(stats.get("total_rows"))
+    dist_cnt = _to_int(stats.get("approx_count_distinct"))
+    null_cnt = _to_int(stats.get("null_count"))
+    null_pct = round(100.0 * null_cnt / total_rows, 2) if total_rows > 0 else 0.0
+
+    tags: list[str] = []
+    decisions: list[str] = [f"root_type='{root_type}' from lookml_type='{dtype}'"]
+    if is_fk:
+        tags.append("profile:foreign_key")
+        decisions.append(f"tag 'profile:foreign_key': non-PK field name '{sname}' ends with _id/_fk")
+    if null_cnt > 0:
+        tags.append("profile:nullable")
+        decisions.append(f"tag 'profile:nullable': null_count={null_cnt} ({null_pct}% of {total_rows} rows)")
+    if total_rows > 0 and dist_cnt == total_rows and null_cnt == 0:
+        tags.append("profile:unique_key_candidate")
+        decisions.append(f"tag 'profile:unique_key_candidate': approx_count_distinct={dist_cnt} == total_rows={total_rows} with 0 nulls")
+
+    rec_hidden = bool(d.get("hidden", False)) or is_pk or is_sys or is_helper
+    rec_suggestable: bool | None = None
+    subtype = root_type
+    rec_desc = base_desc or f"{ d.get('label_short') or sname }."
+
+    if root_type == "string":
+        top_vals = _as_dicts(stats.get("top_values"))
+        samples = [str(tv.get("value") or "").strip() for tv in top_vals if tv.get("value") is not None and str(tv.get("value")).strip() != ""]
+        max_len = _to_int(stats.get("max_length"))
+        avg_len = _to_float(stats.get("avg_length")) or 0.0
+        json_hits = sum(1 for v in samples if (v.startswith("{") and v.endswith("}")) or (v.startswith("[") and v.endswith("]")))
+        uuid_hits = sum(1 for v in samples if _is_hex_or_uuid(v))
+        email_hits = sum(1 for v in samples if "@" in v and "." in v.split("@", 1)[-1])
+
+        if dtype in ("tier", "location"):
+            subtype = dtype
+            rec_hidden = is_helper
+            rec_suggestable = dtype == "tier"
+            tags.append(f"profile:{subtype}")
+            decisions.append(f"subtype='{subtype}' + tag 'profile:{subtype}' from lookml_type='{dtype}' (suggestable={rec_suggestable})")
+            vals_preview = ", ".join(f"'{v}'" for v in samples[:8])
+            rec_desc = f"{prefix}Values: {vals_preview}." if vals_preview else f"{prefix}{dtype.capitalize()} dimension."
+        elif "JSON_" in sql_expr.upper() or any(t in low for t in ("json", "payload", "raw_event")) or (samples and json_hits * 2 >= len(samples)):
+            subtype = "json"
+            rec_hidden, rec_suggestable = True, False
+            tags.append("profile:json_payload")
+            decisions.append(f"subtype='json' + tag 'profile:json_payload' (hidden=True, suggestable=False): SQL/name or {json_hits}/{len(samples)} sample values match JSON")
+            rec_desc = f"{prefix}Raw JSON payload; hidden and filter suggestions disabled to prevent full-column scans."
+        elif any(t in low for t in ("uuid", "guid", "hash", "md5", "sha256")) or (samples and uuid_hits * 5 >= len(samples) * 4):
+            subtype = "id_or_code"
+            rec_hidden, rec_suggestable = True, False
+            tags.append("profile:uuid_or_hash")
+            decisions.append(f"subtype='id_or_code' + tag 'profile:uuid_or_hash' (hidden=True, suggestable=False): name or {uuid_hits}/{len(samples)} samples match UUID/hex")
+            rec_desc = f"{prefix}High-cardinality UUID or hash identifier."
+        elif is_pk or is_sys or is_helper or ((low == "id" or low.endswith("_id")) and dist_cnt > 100):
+            subtype = "id_or_code"
+            rec_hidden, rec_suggestable = True, False
+            decisions.append(f"subtype='id_or_code' (hidden=True, suggestable=False): primary_key={is_pk}, system_col={is_sys}, helper={is_helper}, distinct={dist_cnt}")
+            rec_desc = f"{prefix}Internal key or system metadata column not intended for end-user grouping."
+        elif dist_cnt == 0 and total_rows > 0:
+            subtype = "empty_or_null"
+            rec_hidden, rec_suggestable = True, False
+            tags.append("profile:empty_or_null_only")
+            decisions.append(f"subtype='empty_or_null' + tag 'profile:empty_or_null_only' (hidden=True, suggestable=False): approx_count_distinct=0 across {total_rows} rows")
+            rec_desc = f"{prefix}Column contains only NULL or empty values in sampled data."
+        elif max_len > 120 or avg_len > 60.0 or low.endswith(("comment", "comments", "note", "notes", "description", "message", "body", "transcript")):
+            subtype = "free_text"
+            rec_hidden, rec_suggestable = False, False
+            tags.append("profile:opaque_code_or_free_text")
+            decisions.append(f"subtype='free_text' + tag 'profile:opaque_code_or_free_text' (suggestable=False): max_length={max_len} (>120), avg_length={avg_len} (>60), or free-text name suffix")
+            rec_desc = f"{prefix}Free-text string ({dist_cnt}+ distinct values, max length {max_len}); filter suggestions disabled."
+        elif dtype == "zipcode" or low.endswith(("sku", "code", "zip", "postal", "phone", "email", "url", "uri", "ip", "ip_address", "token", "tracking_number")):
+            subtype = "id_or_code"
+            rec_hidden, rec_suggestable = False, False
+            tags.append("profile:opaque_code_or_free_text")
+            decisions.append(f"subtype='id_or_code' + tag 'profile:opaque_code_or_free_text' (suggestable=False): identifier/code suffix on '{sname}' with {dist_cnt} distinct values")
+            ex = ", ".join(f"'{v[:40]}'" for v in samples[:3])
+            rec_desc = f"{prefix}Opaque identifier or code ({dist_cnt}+ distinct values, max length {max_len}); filter suggestions disabled." + (f" Example values: {ex}." if ex else "")
+        elif 1 <= dist_cnt <= 15:
+            subtype = "enum"
+            rec_hidden, rec_suggestable = False, True
+            tags.append("profile:low_cardinality_enum")
+            decisions.append(f"subtype='enum' + tag 'profile:low_cardinality_enum' (suggestable=True): approx_count_distinct={dist_cnt} is in 1..15")
+            vals_str = ", ".join(f"'{v}'" for v in samples[:15])
+            rec_desc = f"{prefix}Values: {vals_str}." if vals_str else f"{prefix}Low-cardinality enum ({dist_cnt} values)."
+        elif dist_cnt <= 100:
+            subtype = "categorical"
+            rec_hidden, rec_suggestable = False, True
+            tags.append("profile:medium_cardinality_categorical")
+            decisions.append(f"subtype='categorical' + tag 'profile:medium_cardinality_categorical' (suggestable=True): approx_count_distinct={dist_cnt} is in 16..100")
+            vals_str = ", ".join(f"'{v}'" for v in samples[:10])
+            rec_desc = f"{prefix}Top values include: {vals_str} ({dist_cnt} distinct values)." if vals_str else f"{prefix}Categorical string ({dist_cnt} distinct values)."
+        else:
+            subtype = "entity_label"
+            rec_hidden, rec_suggestable = False, True
+            tags.append("profile:searchable_entity_label")
+            decisions.append(f"subtype='entity_label' + tag 'profile:searchable_entity_label' (suggestable=True): approx_count_distinct={dist_cnt} > 100")
+            ex = ", ".join(f"'{v[:40]}'" for v in samples[:3])
+            rec_desc = f"{prefix}Searchable entity label ({dist_cnt}+ distinct values)." + (f" Example values: {ex}." if ex else "")
+
+        if "email" in low or (samples and email_hits * 2 >= len(samples)):
+            tags.extend(["profile:pii", "profile:email"])
+            decisions.append(f"tags 'profile:pii', 'profile:email': field name '{sname}' or {email_hits}/{len(samples)} sample values match email format")
+        if any(t in low for t in ("phone", "mobile", "telephone")):
+            tags.extend(["profile:pii", "profile:phone"])
+            decisions.append(f"tags 'profile:pii', 'profile:phone': field name '{sname}' matches phone token")
+        if any(t in low for t in ("ssn", "tax_id", "passport", "first_name", "last_name", "full_name", "street_address", "ip_address")):
+            tags.append("profile:pii")
+            decisions.append(f"tag 'profile:pii': field name '{sname}' matches PII token")
+
+    elif root_type == "number":
+        min_v = _to_float(stats.get("min"))
+        max_v = _to_float(stats.get("max"))
+        avg_v = _to_float(stats.get("average"))
+        med_v = _to_float(stats.get("median"))
+        zero_cnt = _to_int(stats.get("zero_count"))
+        neg_cnt = _to_int(stats.get("negative_count"))
+        all_ints = bool(stats.get("all_integers", False))
+
+        if dist_cnt == 0 and total_rows > 0:
+            subtype = "empty_or_null"
+            rec_hidden = True
+            tags.append("profile:empty_or_null_only")
+            decisions.append(f"subtype='empty_or_null' + tag 'profile:empty_or_null_only' (hidden=True): approx_count_distinct=0 across {total_rows} rows")
+            rec_desc = f"{prefix}Numeric column contains only NULL values."
+        elif is_pk or is_sys or low == "id" or low.endswith(("_id", "_pk", "_fk", "_sk")):
+            subtype = "id_or_key"
+            rec_hidden = True
+            decisions.append(f"subtype='id_or_key' (hidden=True): primary_key={is_pk} or key suffix on '{sname}'")
+            rec_desc = f"{prefix}Internal numeric key not intended for direct aggregation."
+        elif dist_cnt == 1 and total_rows > 0:
+            subtype = "constant"
+            tags.append("profile:constant_value")
+            decisions.append(f"subtype='constant' + tag 'profile:constant_value': approx_count_distinct=1 (value={min_v})")
+            rec_desc = f"{prefix}Constant numeric value ({min_v})."
+        elif dtype.startswith("duration") or any(t in low for t in ("days_", "hours_", "minutes_", "months_", "years_", "_duration", "shelf_age")):
+            subtype = "duration"
+            tags.append("profile:duration")
+            decisions.append(f"subtype='duration' + tag 'profile:duration': lookml_type='{dtype}' or duration token in '{sname}'")
+            rec_desc = f"{prefix}Duration metric (range: {min_v} to {max_v}, avg: {avg_v}, median: {med_v})."
+        elif "%" in val_fmt or any(t in low for t in ("pct", "percent", "rate", "ratio", "share", "z_score")) or (min_v is not None and max_v is not None and 0.0 <= min_v and max_v <= 1.0 and not all_ints):
+            subtype = "percentage_or_ratio"
+            tags.append("profile:percentage_or_ratio")
+            decisions.append(f"subtype='percentage_or_ratio' + tag 'profile:percentage_or_ratio': format='{val_fmt}', rate/pct name, or [0,1] float range ({min_v}..{max_v})")
+            rec_desc = f"{prefix}Ratio or rate dimension (range: {min_v} to {max_v}, avg: {avg_v}, median: {med_v})."
+        elif "$" in val_fmt or "usd" in val_fmt or any(t in low for t in ("price", "cost", "revenue", "amount", "margin", "profit", "spend", "fee")):
+            subtype = "currency_or_decimal"
+            tags.append("profile:currency_or_decimal")
+            decisions.append(f"subtype='currency_or_decimal' + tag 'profile:currency_or_decimal': format='{val_fmt}' or monetary token in '{sname}'")
+            rec_desc = f"{prefix}Monetary or decimal value (range: {min_v} to {max_v}, avg: {avg_v}, median: {med_v})."
+        elif all_ints:
+            subtype = "discrete_integer"
+            tags.append("profile:discrete_integer")
+            decisions.append(f"subtype='discrete_integer' + tag 'profile:discrete_integer': all sampled values are integers ({dist_cnt} distinct, range {min_v}..{max_v})")
+            rec_desc = f"{prefix}Discrete integer (range: {min_v} to {max_v}, avg: {avg_v}, median: {med_v}, {dist_cnt} distinct)."
+        else:
+            subtype = "continuous_number"
+            tags.append("profile:continuous_number")
+            decisions.append(f"subtype='continuous_number' + tag 'profile:continuous_number': non-integer numeric values (range {min_v}..{max_v})")
+            rec_desc = f"{prefix}Continuous number (range: {min_v} to {max_v}, avg: {avg_v}, median: {med_v})."
+
+        if neg_cnt > 0:
+            tags.append("profile:has_negatives")
+            decisions.append(f"tag 'profile:has_negatives': negative_count={neg_cnt} > 0")
+        if zero_cnt > 0:
+            tags.append("profile:has_zeros")
+            decisions.append(f"tag 'profile:has_zeros': zero_count={zero_cnt} > 0")
+        if avg_v is not None and med_v is not None and med_v != 0 and abs(avg_v - med_v) / abs(med_v) >= 0.5:
+            tags.append("profile:skewed_distribution")
+            decisions.append(f"tag 'profile:skewed_distribution': |avg ({avg_v}) - median ({med_v})| / |median| >= 0.5")
+
+    elif root_type == "yesno":
+        t_cnt = _to_int(stats.get("true_count"))
+        f_cnt = _to_int(stats.get("false_count"))
+        t_pct = _to_float(stats.get("true_pct")) or 0.0
+        f_pct = _to_float(stats.get("false_pct")) or 0.0
+        if t_cnt == 0 and f_cnt == 0 and total_rows > 0:
+            subtype = "empty_or_null"
+            rec_hidden = True
+            tags.append("profile:empty_or_null_only")
+            decisions.append(f"subtype='empty_or_null' + tag 'profile:empty_or_null_only' (hidden=True): 0 non-null boolean rows out of {total_rows}")
+            rec_desc = f"{prefix}Boolean flag with only NULL values."
+        elif (t_cnt == 0 or f_cnt == 0) and (t_cnt + f_cnt) > 0:
+            subtype = "constant_boolean"
+            tags.extend(["profile:constant_boolean", "profile:constant_value"])
+            decisions.append(f"subtype='constant_boolean' + tags 'profile:constant_boolean', 'profile:constant_value': single boolean state (Yes={t_cnt}, No={f_cnt})")
+            rec_desc = f"{prefix}Constant boolean flag (Yes: {t_pct}%, No: {f_pct}%)."
+        elif min(t_pct, f_pct) < 5.0 and (t_cnt + f_cnt) > 0:
+            subtype = "rare_or_skewed_boolean"
+            tags.append("profile:rare_or_skewed_boolean")
+            decisions.append(f"subtype='rare_or_skewed_boolean' + tag 'profile:rare_or_skewed_boolean': minority class {min(t_pct, f_pct)}% < 5.0% threshold (Yes={t_pct}%, No={f_pct}%)")
+            rec_desc = f"{prefix}Skewed boolean flag (Yes: {t_pct}%, No: {f_pct}%)."
+        else:
+            subtype = "balanced_boolean"
+            tags.append("profile:balanced_boolean")
+            decisions.append(f"subtype='balanced_boolean' + tag 'profile:balanced_boolean': minority class {min(t_pct, f_pct)}% >= 5.0% threshold (Yes={t_pct}%, No={f_pct}%)")
+            rec_desc = f"{prefix}Boolean flag (Yes: {t_pct}%, No: {f_pct}%)."
+
+    elif root_type == "datetime":
+        min_d = stats.get("min_date")
+        max_d = stats.get("max_date")
+        span_d = stats.get("span_days")
+        spikiness = _as_dict(stats.get("spikiness"))
+        if dist_cnt == 0 and total_rows > 0:
+            subtype = "empty_or_null"
+            rec_hidden = True
+            tags.append("profile:empty_or_null_only")
+            decisions.append(f"subtype='empty_or_null' + tag 'profile:empty_or_null_only' (hidden=True): 0 distinct dates across {total_rows} rows")
+            rec_desc = f"{prefix}Date/time field contains only NULL values."
+        elif dtype in ("date_time", "date_raw", "date_hour", "date_minute", "date_second"):
+            subtype = "timestamp_or_raw"
+            tags.append("profile:timestamp_or_raw")
+            decisions.append(f"subtype='timestamp_or_raw' + tag 'profile:timestamp_or_raw': lookml_type='{dtype}' is sub-day timestamp grain; expanded to [date, hour] with date subtotals")
+        elif dtype == "date_date":
+            subtype = "calendar_date"
+            tags.append("profile:calendar_date")
+            decisions.append("subtype='calendar_date' + tag 'profile:calendar_date': lookml_type='date_date'; expanded to [year, month, date] with [year, month] subtotals")
+        elif dtype in ("date_year", "date_quarter", "date_month", "date_week", "date_fiscal_year", "date_fiscal_quarter"):
+            subtype = "period_grain"
+            tags.append("profile:period_grain")
+            decisions.append(f"subtype='period_grain' + tag 'profile:period_grain': lookml_type='{dtype}' is coarse calendar period; expanded to [year, month, date] with [year, month] subtotals")
+        else:
+            subtype = "calendar_cycle"
+            tags.append("profile:calendar_cycle")
+            decisions.append(f"subtype='calendar_cycle' + tag 'profile:calendar_cycle': lookml_type='{dtype}' is a recurring calendar cycle")
+
+        spiky_notes = []
+        for g_name, g_obj in spikiness.items():
+            gd = _as_dict(g_obj)
+            sr = _to_float(gd.get("spikiness_ratio")) or 0.0
+            cv = _to_float(gd.get("cv")) or 0.0
+            if sr >= 2.0 or cv >= 0.5:
+                tags.append(f"profile:spiky_{g_name}")
+                spiky_notes.append(f"{g_name} peak {gd.get('peak_period')} ({sr}x mean)")
+                decisions.append(
+                    f"tag 'profile:spiky_{g_name}': {g_name} spikiness_ratio={sr} (>=2.0) or cv={cv} (>=0.5), peak={gd.get('peak_period')} ({gd.get('max_count')}) vs mean={gd.get('mean_count')}"
+                )
+            elif 0 < cv < 0.25 and "profile:steady_volume" not in tags:
+                tags.append("profile:steady_volume")
+                decisions.append(f"tag 'profile:steady_volume': {g_name} cv={cv} < 0.25")
+
+        if subtype != "empty_or_null":
+            range_str = f"Range: {min_d} to {max_d} ({span_d} days)" if min_d and max_d else f"{dist_cnt} distinct periods"
+            spike_str = f"; spikiness: {', '.join(spiky_notes)}" if spiky_notes else ""
+            rec_desc = f"{prefix}{range_str}{spike_str}."
+
+    suggested_tags = _uniq(tags)
+    rec_tags = _uniq(existing_tags + suggested_tags)
+    dg_name = d.get("dimension_group")
+    target_short = str(dg_name).split(".", 1)[-1] if dg_name else sname
+    snippet = _build_lookml_snippet(target_short, rec_hidden, rec_suggestable, rec_tags, rec_desc, is_dg=bool(dg_name))
+
+    return {
+        "field": fname,
+        "short_name": sname,
+        "view": d.get("view"),
+        "label": d.get("label"),
+        "label_short": d.get("label_short"),
+        "lookml_type": dtype,
+        "root_type": root_type,
+        "subtype": subtype,
+        "dimension_group": dg_name,
+        "primary_key": is_pk,
+        "total_rows": total_rows,
+        "approx_count_distinct": dist_cnt,
+        "null_count": null_cnt,
+        "null_pct": null_pct,
+        "stats": stats,
+        "suggested_tags": suggested_tags,
+        "decisions": decisions,
+        "curation": {
+            "current_hidden": bool(d.get("hidden", False)),
+            "current_suggestable": bool(d.get("suggestable", True)),
+            "current_description": base_desc,
+            "current_tags": existing_tags,
+            "recommended_hidden": rec_hidden,
+            "recommended_suggestable": rec_suggestable,
+            "recommended_description": rec_desc,
+            "suggested_tags": rec_tags,
+            "lookml_snippet": snippet,
+        },
+    }
+
+
+def profile_fields(
+    body: object = None,
+    model: str | None = None,
+    view: str | None = None,
+    fields: list[str] | None = None,
+    filters: dict[str, str] | None = None,
+    types_only: bool = False,
+    group_fields: bool = False,
+    limit: int | str = 5000,
+    transport_options: object = None,
+) -> dict[str, object]:
+    """Profile Explore fields across string, number, yesno, and datetime types with subtypes, spikiness, and LookML curation tags."""
+    b_dict = _as_dict(body)
+    m_name = str(model or b_dict.get("model") or "").strip()
+    v_name = str(view or b_dict.get("view") or b_dict.get("explore") or "").strip()
+    if not m_name or not v_name:
+        raise ValueError("Both 'model' and 'view' (explore) are required")
+
+    req_fields = list(fields if fields is not None else _as_strs(b_dict.get("fields")))
+    raw_flts = filters if filters is not None else _as_dict(b_dict.get("filters"))
+    base_filters = {str(k): str(v) for k, v in raw_flts.items() if k and v is not None}
+    if "types_only" in b_dict and not types_only:
+        types_only = bool(b_dict["types_only"])
+    if "group_fields" in b_dict and not group_fields:
+        group_fields = bool(b_dict["group_fields"])
+    raw_lim = b_dict.get("limit", limit) if limit == 5000 else limit
+    q_limit = min(max(_to_int(raw_lim) or 5000, 1), 5000)
+
+    exp = _as_dict(lookml_model_explore(m_name, v_name))
+    base_view = str(exp.get("view_name") or v_name)
+    exp_flds = _as_dict(exp.get("fields"))
+    dims = _as_dicts(exp_flds.get("dimensions"))
+    meas = _as_dicts(exp_flds.get("measures"))
+
+    dims_by_name = {str(d["name"]): d for d in dims if d.get("name")}
+    meas_by_name = {str(m["name"]): m for m in meas if m.get("name")}
+    dgs_by_group: dict[str, dict[str, str]] = {}
+    dim_by_table_col: dict[str, list[str]] = {}
+    referenced_by: dict[str, list[str]] = {}
+
+    for d in dims:
+        dn = str(d.get("name") or "")
+        dv = str(d.get("view") or base_view)
+        dg = d.get("dimension_group")
+        if dg and dn.startswith(str(dg) + "_"):
+            sfx = dn[len(str(dg)) + 1 :]
+            dgs_by_group.setdefault(str(dg), {})[sfx] = dn
+        tc = _table_col(d.get("sql"), dv)
+        if dn and tc and not d.get("is_timeframe"):
+            dim_by_table_col.setdefault(tc, []).append(dn)
+        for r in _extract_refs(d.get("sql"), dv):
+            referenced_by.setdefault(r, []).append(dn)
+
+    for m in meas:
+        mn = str(m.get("name") or "")
+        mv = str(m.get("view") or base_view)
+        for r in _extract_refs(m.get("sql"), mv):
+            referenced_by.setdefault(r, []).append(mn)
+
+    if not req_fields:
+        req_fields = [
+            str(d["name"])
+            for d in dims
+            if d.get("name") and not d.get("hidden") and (d.get("view") or base_view) == base_view
+        ] or [str(d["name"]) for d in dims if d.get("name") and not d.get("hidden")]
+
+    target_dims: list[str] = []
+    target_measures: list[str] = []
+    measure_leaf_map: dict[str, list[str]] = {}
+
+    def _walk_measure_leaves(m_name: str) -> list[str]:
+        leaves: list[str] = []
+        visited = {m_name}
+        m_obj = meas_by_name.get(m_name) or {}
+        m_view = str(m_obj.get("view") or base_view)
+        stack = list(_extract_refs(m_obj.get("sql"), m_view))
+        while stack:
+            ref = stack.pop(0)
+            if ref in visited:
+                continue
+            visited.add(ref)
+            if ref in meas_by_name:
+                rm = meas_by_name[ref]
+                stack.extend(_extract_refs(rm.get("sql"), rm.get("view") or m_view))
+            elif ref in dims_by_name:
+                rd = dims_by_name[ref]
+                sub = _extract_refs(rd.get("sql"), rd.get("view") or m_view)
+                if sub:
+                    stack.extend(sub)
+                if ref not in leaves:
+                    leaves.append(ref)
+        if not leaves:
+            tc = _table_col(m_obj.get("sql"), m_view)
+            if tc:
+                leaves.extend(dim_by_table_col.get(tc, []))
+        return _uniq(leaves)
+
+    for rf in req_fields:
+        qual = rf if "." in rf else f"{base_view}.{rf}"
+        if qual in dims_by_name:
+            target_dims.append(qual)
+        elif qual in meas_by_name:
+            target_measures.append(qual)
+            leaves = _walk_measure_leaves(qual)
+            measure_leaf_map[qual] = leaves
+            target_dims.extend(leaves)
+        elif qual in dgs_by_group:
+            dg_map = dgs_by_group[qual]
+            picked = dg_map.get("date") or dg_map.get("time") or next(iter(dg_map.values()), "")
+            if picked:
+                target_dims.append(picked)
+
+    target_dims = _uniq(target_dims)
+    target_measures = _uniq(target_measures)
+
+    type_buckets: dict[str, list[str]] = {
+        "string": [],
+        "number": [],
+        "yesno": [],
+        "datetime": [],
+    }
+    for dn in target_dims:
+        rt = _root_field_type(dims_by_name[dn])
+        type_buckets[rt].append(dn)
+
+    def _is_helper_dim(dn: str) -> bool:
+        sn = dn.split(".", 1)[-1].lower()
+        return bool(referenced_by.get(dn)) and sn.startswith(("_", "helper_", "tmp_", "raw_"))
+
+    if types_only:
+        profiles_meta = {
+            dn: _finalize_field_profile(dims_by_name[dn], _root_field_type(dims_by_name[dn]), {}, _is_helper_dim(dn))
+            for dn in target_dims
+        }
+        return {
+            "model": m_name,
+            "view": v_name,
+            "limit": q_limit,
+            "types_only": True,
+            "type_buckets": type_buckets,
+            "profiles": profiles_meta,
+            "measures": {
+                mn: {
+                    "field": mn,
+                    "lookml_type": (meas_by_name.get(mn) or {}).get("type"),
+                    "leaf_dimensions": measure_leaf_map.get(mn, []),
+                }
+                for mn in target_measures
+            },
+        }
+
+    def _run_detail(q_body: dict[str, object]) -> dict[str, object]:
+        raw = run_inline_query("json_detail", q_body)
+        if isinstance(raw, str):
+            s = raw.strip()
+            return _as_dict(_json_loads(s)) if s.startswith("{") else {}
+        return _as_dict(raw)
+
+    measures_out: dict[str, dict[str, object]] = {}
+    if target_measures:
+        m_body: dict[str, object] = {
+            "model": m_name,
+            "view": v_name,
+            "fields": target_measures,
+            "limit": "1",
+        }
+        if base_filters:
+            m_body["filters"] = base_filters
+        m_rows = _as_dicts(run_inline_query("json", m_body))
+        m_row0 = m_rows[0] if m_rows else {}
+        for mn in target_measures:
+            m_obj = meas_by_name.get(mn) or {}
+            measures_out[mn] = {
+                "field": mn,
+                "label": m_obj.get("label"),
+                "lookml_type": m_obj.get("type"),
+                "sql": m_obj.get("sql"),
+                "value": _cell_val(m_row0.get(mn)),
+                "leaf_dimensions": measure_leaf_map.get(mn, []),
+            }
+
+    profiles: dict[str, dict[str, object]] = {}
+    grouped_rows_out: list[dict[str, object]] = []
+    overall_total_rows = 0
+
+    def _build_dim_dyn(dn: str, rt: str, idx: int) -> tuple[list[dict[str, object]], list[str]]:
+        ref = "${" + dn + "}"
+        p = f"_p{idx}_"
+        dyn: list[dict[str, object]] = [
+            {"measure": f"{p}rows", "based_on": dn, "type": "count"},
+            {"measure": f"{p}dist", "based_on": dn, "type": "count_distinct"},
+            {"measure": f"{p}null", "based_on": dn, "type": "count", "filter_expression": f"is_null({ref})"},
+        ]
+        m_names = [f"{p}rows", f"{p}dist", f"{p}null"]
+        if rt == "string":
+            dyn.extend([
+                {"measure": f"{p}empty", "based_on": dn, "type": "count", "filter_expression": f"length({ref}) = 0"},
+                {"dimension": f"{p}len", "expression": f"length({ref})"},
+                {"measure": f"{p}minlen", "based_on": f"{p}len", "type": "min"},
+                {"measure": f"{p}maxlen", "based_on": f"{p}len", "type": "max"},
+                {"measure": f"{p}avglen", "based_on": f"{p}len", "type": "average"},
+            ])
+            m_names.extend([f"{p}empty", f"{p}minlen", f"{p}maxlen", f"{p}avglen"])
+        elif rt == "number":
+            dyn.extend([
+                {"measure": f"{p}min", "based_on": dn, "type": "min"},
+                {"measure": f"{p}max", "based_on": dn, "type": "max"},
+                {"measure": f"{p}avg", "based_on": dn, "type": "average"},
+                {"measure": f"{p}med", "based_on": dn, "type": "median"},
+                {"measure": f"{p}sum", "based_on": dn, "type": "sum"},
+                {"measure": f"{p}zero", "based_on": dn, "type": "count", "filter_expression": f"{ref} = 0"},
+                {"measure": f"{p}neg", "based_on": dn, "type": "count", "filter_expression": f"{ref} < 0"},
+            ])
+            m_names.extend([f"{p}min", f"{p}max", f"{p}avg", f"{p}med", f"{p}sum", f"{p}zero", f"{p}neg"])
+        elif rt == "yesno":
+            dyn.extend([
+                {"measure": f"{p}true", "based_on": dn, "type": "count", "filter_expression": ref},
+                {"measure": f"{p}false", "based_on": dn, "type": "count", "filter_expression": f"NOT {ref}"},
+            ])
+            m_names.extend([f"{p}true", f"{p}false"])
+        return dyn, m_names
+
+    def _extract_dim_stats(
+        dn: str,
+        rt: str,
+        idx: int,
+        totals: dict[str, object],
+        data_rows: list[dict[str, object]],
+    ) -> dict[str, object]:
+        p = f"_p{idx}_"
+        t_rows = _to_int(_cell_val(totals.get(f"{p}rows")))
+        d_cnt = _to_int(_cell_val(totals.get(f"{p}dist")))
+        n_cnt = _to_int(_cell_val(totals.get(f"{p}null")))
+
+        val_counts: dict[str, int] = {}
+        raw_vals: list[object] = []
+        for r in data_rows:
+            v = _cell_val(r.get(dn))
+            rc = _to_int(_cell_val(r.get(f"{p}rows")) or _cell_val(r.get("_p0_rows")) or 1)
+            if v is not None:
+                raw_vals.append(v)
+                sv = str(v)
+                val_counts[sv] = val_counts.get(sv, 0) + rc
+
+        top_pairs = sorted(val_counts.items(), key=lambda x: x[1], reverse=True)[:15]
+        top_values = [
+            {
+                "value": k,
+                "count": c,
+                "pct": round(100.0 * c / t_rows, 2) if t_rows > 0 else 0.0,
+            }
+            for k, c in top_pairs
+        ]
+
+        st: dict[str, object] = {
+            "total_rows": t_rows,
+            "approx_count_distinct": max(d_cnt, len(val_counts)),
+            "null_count": n_cnt,
+            "sample_rows_returned": len(data_rows),
+        }
+        if rt == "string":
+            e_cnt = _to_int(_cell_val(totals.get(f"{p}empty")))
+            min_l = _to_int(_cell_val(totals.get(f"{p}minlen")))
+            max_l = _to_int(_cell_val(totals.get(f"{p}maxlen")))
+            avg_l = _to_float(_cell_val(totals.get(f"{p}avglen"))) or 0.0
+            st.update({
+                "empty_count": e_cnt,
+                "min_length": min_l,
+                "max_length": max_l,
+                "avg_length": round(avg_l, 2),
+                "top_values": top_values,
+            })
+        elif rt == "number":
+            min_v = _to_float(_cell_val(totals.get(f"{p}min")))
+            max_v = _to_float(_cell_val(totals.get(f"{p}max")))
+            avg_v = _to_float(_cell_val(totals.get(f"{p}avg")))
+            med_v = _to_float(_cell_val(totals.get(f"{p}med")))
+            sum_v = _to_float(_cell_val(totals.get(f"{p}sum")))
+            z_cnt = _to_int(_cell_val(totals.get(f"{p}zero")))
+            neg_cnt = _to_int(_cell_val(totals.get(f"{p}neg")))
+            num_samples = [f for x in raw_vals if (f := _to_float(x)) is not None]
+            all_ints = bool(num_samples) and all(float(int(x)) == x for x in num_samples)
+            st.update({
+                "min": round(min_v, 4) if min_v is not None else None,
+                "max": round(max_v, 4) if max_v is not None else None,
+                "average": round(avg_v, 4) if avg_v is not None else None,
+                "median": round(med_v, 4) if med_v is not None else None,
+                "sum": round(sum_v, 4) if sum_v is not None else None,
+                "zero_count": z_cnt,
+                "negative_count": neg_cnt,
+                "all_integers": all_ints,
+                "top_values": top_values[:10],
+            })
+        elif rt == "yesno":
+            t_cnt = _to_int(_cell_val(totals.get(f"{p}true")))
+            f_cnt = _to_int(_cell_val(totals.get(f"{p}false")))
+            denom = t_cnt + f_cnt
+            st.update({
+                "true_count": t_cnt,
+                "false_count": f_cnt,
+                "true_pct": round(100.0 * t_cnt / denom, 2) if denom > 0 else 0.0,
+                "false_pct": round(100.0 * f_cnt / denom, 2) if denom > 0 else 0.0,
+            })
+        return st
+
+    non_dt_dims = [dn for dn in target_dims if _root_field_type(dims_by_name[dn]) != "datetime"]
+    dt_dims = [dn for dn in target_dims if _root_field_type(dims_by_name[dn]) == "datetime"]
+
+    batches = (
+        [non_dt_dims]
+        if group_fields and len(non_dt_dims) > 1
+        else [[dn] for dn in non_dt_dims]
+    )
+    for batch in batches:
+        all_dyn: list[dict[str, object]] = []
+        all_m_names: list[str] = []
+        for idx, dn in enumerate(batch):
+            rt = _root_field_type(dims_by_name[dn])
+            d_items, m_items = _build_dim_dyn(dn, rt, idx)
+            all_dyn.extend(d_items)
+            all_m_names.extend(m_items)
+        q_body: dict[str, object] = {
+            "model": m_name,
+            "view": v_name,
+            "fields": batch + all_m_names,
+            "dynamic_fields": _json_dumps(all_dyn),
+            "sorts": ["_p0_rows desc"],
+            "total": True,
+            "limit": str(q_limit),
+        }
+        if base_filters:
+            q_body["filters"] = base_filters
+        detail = _run_detail(q_body)
+        totals = _as_dict(detail.get("totals_data"))
+        d_rows = _as_dicts(detail.get("data"))
+        for idx, dn in enumerate(batch):
+            rt = _root_field_type(dims_by_name[dn])
+            st = _extract_dim_stats(dn, rt, idx, totals, d_rows)
+            overall_total_rows = max(overall_total_rows, _to_int(st.get("total_rows")))
+            profiles[dn] = _finalize_field_profile(
+                dims_by_name[dn], rt, st, _is_helper_dim(dn)
+            )
+        if len(batch) > 1:
+            for r in d_rows[:50]:
+                row_clean = {dn: _cell_val(r.get(dn)) for dn in batch}
+                row_clean["count"] = _to_int(_cell_val(r.get("_p0_rows")))
+                grouped_rows_out.append(row_clean)
+
+    for dn in dt_dims:
+        d_obj = dims_by_name[dn]
+        dtype = str(d_obj.get("type") or "date_date")
+        dg = str(d_obj.get("dimension_group") or "")
+        dg_map = dgs_by_group.get(dg, {}) if dg else {}
+        ref = "${" + dn + "}"
+
+        dt_dyn: list[dict[str, object]] = [
+            {"measure": "_dt_rows", "based_on": dn, "type": "count"},
+            {"measure": "_dt_dist", "based_on": dn, "type": "count_distinct"},
+            {"measure": "_dt_null", "based_on": dn, "type": "count", "filter_expression": f"is_null({ref})"},
+        ]
+        dt_m_names = ["_dt_rows", "_dt_dist", "_dt_null"]
+
+        is_time_grain = dtype in ("date_time", "date_raw", "date_hour", "date_minute", "date_second")
+        is_date_grain = dtype in ("date_date", "date_week", "date_month", "date_quarter", "date_year", "date_fiscal_year", "date_fiscal_quarter")
+
+        if is_time_grain or is_date_grain:
+            dt_dyn.extend([
+                {"dimension": "_dt_epoch", "expression": f"diff_days(date(1970, 1, 1), {ref})"},
+                {"measure": "_dt_min_d", "based_on": "_dt_epoch", "type": "min"},
+                {"measure": "_dt_max_d", "based_on": "_dt_epoch", "type": "max"},
+            ])
+            dt_m_names.extend(["_dt_min_d", "_dt_max_d"])
+
+        expanded_dims: list[str] = []
+        subtotals_list: list[str] = []
+        grain_map: list[tuple[str, str]] = []
+
+        if is_time_grain:
+            day_f = dg_map.get("date")
+            if not day_f:
+                day_f = "_dt_day_dim"
+                dt_dyn.append({"dimension": day_f, "expression": f"trunc_days({ref})"})
+            hr_f = dg_map.get("hour")
+            if not hr_f:
+                hr_f = "_dt_hour_dim"
+                dt_dyn.append({"dimension": hr_f, "expression": f"trunc_hours({ref})"})
+            expanded_dims = _uniq([day_f, hr_f])
+            if len(expanded_dims) > 1:
+                subtotals_list = [day_f]
+            grain_map = [("day", day_f), ("hour", hr_f)]
+        elif is_date_grain:
+            yr_f = dg_map.get("year")
+            if not yr_f:
+                yr_f = "_dt_year_dim"
+                dt_dyn.append({"dimension": yr_f, "expression": f"extract_years({ref})"})
+            mo_f = dg_map.get("month")
+            if not mo_f:
+                mo_f = "_dt_month_dim"
+                dt_dyn.append({"dimension": mo_f, "expression": f"trunc_months({ref})"})
+            day_f = dg_map.get("date") or dn
+            expanded_dims = _uniq([yr_f, mo_f, day_f])
+            subtotals_list = expanded_dims[:-1]
+            grain_map = [("year", yr_f), ("month", mo_f), ("day", day_f)]
+        else:
+            expanded_dims = [dn]
+            grain_map = [("cycle", dn)]
+
+        dt_body: dict[str, object] = {
+            "model": m_name,
+            "view": v_name,
+            "fields": expanded_dims + dt_m_names,
+            "dynamic_fields": _json_dumps(dt_dyn),
+            "sorts": [f"{ef} desc" for ef in expanded_dims],
+            "total": True,
+            "limit": str(q_limit),
+        }
+        if subtotals_list:
+            dt_body["subtotals"] = subtotals_list
+        if base_filters:
+            dt_body["filters"] = base_filters
+
+        detail = _run_detail(dt_body)
+        totals = _as_dict(detail.get("totals_data"))
+        d_rows = _as_dicts(detail.get("data"))
+        sub_data = _as_dict(detail.get("subtotals_data"))
+
+        t_rows = _to_int(_cell_val(totals.get("_dt_rows")))
+        d_cnt = _to_int(_cell_val(totals.get("_dt_dist")))
+        n_cnt = _to_int(_cell_val(totals.get("_dt_null")))
+        overall_total_rows = max(overall_total_rows, t_rows)
+
+        min_epoch = _to_float(_cell_val(totals.get("_dt_min_d")))
+        max_epoch = _to_float(_cell_val(totals.get("_dt_max_d")))
+        min_date = _days_to_ymd(round(min_epoch)) if min_epoch is not None else None
+        max_date = _days_to_ymd(round(max_epoch)) if max_epoch is not None else None
+        span_days = round(max_epoch - min_epoch) if (min_epoch is not None and max_epoch is not None) else None
+
+        spikiness: dict[str, object] = {}
+        subtotals_summary: dict[str, list[dict[str, object]]] = {}
+
+        for depth_idx, (g_label, g_field) in enumerate(grain_map, start=1):
+            depth_key = str(depth_idx)
+            if depth_key in sub_data and depth_idx <= len(subtotals_list):
+                src_rows = _as_dicts(sub_data.get(depth_key))
+            else:
+                src_rows = d_rows
+            agg_by_p: dict[str, float] = {}
+            for r in src_rows:
+                pv = _cell_val(r.get(g_field))
+                rc = _to_float(_cell_val(r.get("_dt_rows"))) or 0.0
+                if pv is not None:
+                    ps = str(pv)
+                    agg_by_p[ps] = agg_by_p.get(ps, 0.0) + rc
+            pairs = sorted(agg_by_p.items(), key=lambda x: x[0])
+            spikiness[g_label] = _spikiness_stats(pairs)
+            top_p = sorted(agg_by_p.items(), key=lambda x: x[1], reverse=True)[:12]
+            subtotals_summary[g_label] = [
+                {"period": k, "count": round(c)} for k, c in top_p
+            ]
+
+        dt_stats: dict[str, object] = {
+            "total_rows": t_rows,
+            "approx_count_distinct": d_cnt,
+            "null_count": n_cnt,
+            "min_date": min_date,
+            "max_date": max_date,
+            "span_days": span_days,
+            "expanded_fields": expanded_dims,
+            "spikiness": spikiness,
+            "subtotals_by_grain": subtotals_summary,
+            "sample_rows_returned": len(d_rows),
+        }
+        profiles[dn] = _finalize_field_profile(d_obj, "datetime", dt_stats, _is_helper_dim(dn))
+
+    res_out: dict[str, object] = {
+        "model": m_name,
+        "view": v_name,
+        "total_rows": overall_total_rows,
+        "limit": q_limit,
+        "type_buckets": type_buckets,
+        "profiles": profiles,
+    }
+    if measures_out:
+        res_out["measures"] = measures_out
+    if grouped_rows_out:
+        res_out["grouped_rows"] = grouped_rows_out
+    return res_out

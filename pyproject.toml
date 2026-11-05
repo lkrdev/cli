@@ -81,10 +81,4 @@ extend-select = ["ANN", "TID251"]
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "typing.Any".msg = "Use a concrete type, TypedDict, BaseModel, or object instead of Any."
 
-[tool.ruff.lint.per-file-ignores]
-"tests/**" = ["ANN", "TID251"]
-"scripts/**" = ["ANN", "TID251"]
-"lkr/extended_sdk_methods/_kda_monty.py" = ["ANN", "TID251"]
-"lkr/extended_sdk_methods/main.py" = ["TID251"]
-
 

@@ -74,7 +74,7 @@ def run_uv_sync(project_dir: Path, extras: list[str]) -> Path:
     return lock_file
 
 
-def test_dependency_resolution_consistency():
+def test_dependency_resolution_consistency() -> None:
     """Test that all dependency combinations resolve to the same lock file."""
     # Get the current project directory
     project_root = Path(__file__).parent.parent
@@ -128,7 +128,7 @@ def test_dependency_resolution_consistency():
             pytest.fail(f"Test failed with error: {e}")
 
 
-def test_individual_extras_consistency():
+def test_individual_extras_consistency() -> None:
     """Test that individual extras are properly defined and don't conflict."""
     project_root = Path(__file__).parent.parent
     pyproject_path = project_root / "pyproject.toml"
@@ -179,7 +179,7 @@ def test_individual_extras_consistency():
         print(f"ℹ️  Dev dependencies ({len(dev_deps)} items) are excluded from 'all' extra as expected")
 
 
-def test_user_attribute_updater_base_deps_only(tmp_path):
+def test_user_attribute_updater_base_deps_only(tmp_path: Path) -> None:
     """
     Test that UserAttributeUpdater can be imported, instantiated, and model_dump_json() works
     in a fresh environment with only base dependencies (no extras installed).
@@ -233,7 +233,7 @@ print(updater.model_dump_json())
     assert '"update_type":"default"' in output
 
 
-def test_no_internal_artifact_foundry_in_uv_lock():
+def test_no_internal_artifact_foundry_in_uv_lock() -> None:
     """Verify that uv.lock does not contain corporate internal artifact-foundry references."""
     project_root = Path(__file__).parent.parent
     lock_file = project_root / "uv.lock"
@@ -250,7 +250,7 @@ if __name__ == "__main__":
     # Run the tests directly if script is executed
     test_dependency_resolution_consistency()
     test_individual_extras_consistency()
-    test_user_attribute_updater_base_deps_only("./tmp")
+    test_user_attribute_updater_base_deps_only(Path("./tmp"))
     test_no_internal_artifact_foundry_in_uv_lock()
     print("All tests passed!") 
 

@@ -1,4 +1,5 @@
-from typing import Any, cast
+from collections.abc import Sequence
+from typing import cast
 
 from looker_sdk.rtl import api_methods, transport
 from looker_sdk.sdk.api40 import models as mdls
@@ -12,6 +13,9 @@ from lkr.extended_sdk_methods._kda_monty import (
 )
 from lkr.extended_sdk_methods._kda_monty import (
     execute_looker_query as _execute_looker_query,
+)
+from lkr.extended_sdk_methods._kda_monty import (
+    profile_fields as _profile_fields,
 )
 from lkr.extended_sdk_methods._kda_monty import (
     run_key_driver_analysis as _run_key_driver_analysis,
@@ -83,21 +87,27 @@ class ExtendedLooker40SDK(Looker40SDK):
         )
         return self._return(response, structure)
 
+    def _qp(self, **params: object) -> api_methods.TQueryParams:
+        return cast(
+            api_methods.TQueryParams,
+            self._convert_query_params(cast(api_methods.TQueryParams, params)),
+        )
+
     def all_project_files(
         self,
         project_id: str,
         fields: str | None = None,
         transport_options: transport.TransportOptions | None = None,
-    ) -> list[Any]:
+    ) -> Sequence[mdls.ProjectFile]:
         """Get all files in a project."""
         project_id = self.encode_path_param(project_id)
         path = f"/projects/{project_id}/files"
         return cast(
-            list[Any],
+            Sequence[mdls.ProjectFile],
             self.get(
                 path=path,
                 structure=list,
-                query_params=cast(Any, {"fields": fields}) if fields else None,
+                query_params=self._qp(fields=fields) if fields else None,
                 transport_options=transport_options,
             ),
         )
@@ -111,13 +121,12 @@ class ExtendedLooker40SDK(Looker40SDK):
         """Get file content."""
         project_id = self.encode_path_param(project_id)
         path = f"/projects/{project_id}/file/content"
-        query_params = self._convert_query_params(cast(Any, {"file_path": file_path}))
         return cast(
             str,
             self.get(
                 path=path,
                 structure=str,
-                query_params=cast(Any, query_params),
+                query_params=self._qp(file_path=file_path),
                 transport_options=transport_options,
             ),
         )
@@ -125,7 +134,7 @@ class ExtendedLooker40SDK(Looker40SDK):
     def create_file(
         self,
         project_id: str,
-        file_content: FileContent | dict[str, Any],
+        file_content: FileContent | dict[str, object],
         transport_options: transport.TransportOptions | None = None,
     ) -> object:
         """Create a new file in a project."""
@@ -134,7 +143,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         body = self._prepare_body(file_content)
         return self.post(
             path=path,
-            structure=Any,
+            structure=dict,
             body=body,
             transport_options=transport_options,
         )
@@ -142,7 +151,7 @@ class ExtendedLooker40SDK(Looker40SDK):
     def update_file(
         self,
         project_id: str,
-        file_content: FileContent | dict[str, Any],
+        file_content: FileContent | dict[str, object],
         transport_options: transport.TransportOptions | None = None,
     ) -> object:
         """Update a file in a project."""
@@ -151,7 +160,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         body = self._prepare_body(file_content)
         return self.put(
             path=path,
-            structure=Any,
+            structure=dict,
             body=body,
             transport_options=transport_options,
         )
@@ -165,11 +174,10 @@ class ExtendedLooker40SDK(Looker40SDK):
         """Delete a file in a project."""
         project_id = self.encode_path_param(project_id)
         path = f"/projects/{project_id}/files"
-        query_params = self._convert_query_params(cast(Any, {"file_path": file_path}))
         self.delete(
             path=path,
             structure=None,
-            query_params=cast(Any, query_params),
+            query_params=self._qp(file_path=file_path),
             transport_options=transport_options,
         )
 
@@ -185,7 +193,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         body = {"path": directory_path}
         return self.post(
             path=path,
-            structure=Any,
+            structure=dict,
             body=body,
             transport_options=transport_options,
         )
@@ -199,18 +207,17 @@ class ExtendedLooker40SDK(Looker40SDK):
         """Delete a project directory."""
         project_id = self.encode_path_param(project_id)
         path = f"/projects/{project_id}/directories"
-        query_params = self._convert_query_params(cast(Any, {"path": directory_path}))
         return self.delete(
             path=path,
-            structure=Any,
-            query_params=cast(Any, query_params),
+            structure=dict,
+            query_params=self._qp(path=directory_path),
             transport_options=transport_options,
         )
 
     def generate_lookml(
         self,
         project_id: str,
-        body: ProjectGenerationRequest | dict[str, Any],
+        body: ProjectGenerationRequest | dict[str, object],
         connection: str,
         model_name: str,
         folder_name: str,
@@ -239,23 +246,21 @@ class ExtendedLooker40SDK(Looker40SDK):
         """
         project_id = self.encode_path_param(project_id)
         path = f"/projects/{project_id}/generate"
-        query_params = {
-            "connection": connection,
-            "model_name": model_name,
-            "folder_name": folder_name,
-            "file_type_for_explores": file_type_for_explores,
-            "generate_descriptions": generate_descriptions,
-            "generate_helper_text": generate_helper_text,
-            "prefixes": prefixes,
-        }
-        converted_params = self._convert_query_params(cast(Any, query_params))
         request_body = self._prepare_body(body)
         return cast(
             str,
             self.post(
                 path=path,
                 structure=str,
-                query_params=cast(Any, converted_params),
+                query_params=self._qp(
+                    connection=connection,
+                    model_name=model_name,
+                    folder_name=folder_name,
+                    file_type_for_explores=file_type_for_explores,
+                    generate_descriptions=generate_descriptions,
+                    generate_helper_text=generate_helper_text,
+                    prefixes=prefixes,
+                ),
                 body=request_body,
                 transport_options=transport_options,
             ),
@@ -264,7 +269,7 @@ class ExtendedLooker40SDK(Looker40SDK):
     def generate_lookml_with_new_files(
         self,
         project_id: str,
-        body: ProjectGenerationRequest | dict[str, Any],
+        body: ProjectGenerationRequest | dict[str, object],
         connection: str,
         model_name: str,
         folder_name: str,
@@ -315,11 +320,15 @@ class ExtendedLooker40SDK(Looker40SDK):
         )
         before_ids = {_get_file_id(f) for f in files_before}
 
-        raw_tables = (
-            body.get("tables")
-            if isinstance(body, dict)
-            else getattr(body, "tables", None)
-        ) or []
+        raw_tables = cast(
+            Sequence[object],
+            (
+                body.get("tables")
+                if isinstance(body, dict)
+                else getattr(body, "tables", None)
+            )
+            or [],
+        )
         clean_folder = (folder_name or "").strip("/")
         regenerated_paths: list[str] = []
         for t in raw_tables:
@@ -419,7 +428,7 @@ class ExtendedLooker40SDK(Looker40SDK):
     def commit(
         self,
         project_id: str,
-        body: ProjectCommitRequest | dict[str, Any] | None = None,
+        body: ProjectCommitRequest | dict[str, object] | None = None,
         transport_options: transport.TransportOptions | None = None,
     ) -> str:
         """Commit changes to the project's git repository.
@@ -481,9 +490,9 @@ class ExtendedLooker40SDK(Looker40SDK):
     def publish_agent(
         self,
         agent_id: str,
-        body: GeminiEnterpriseAgentRequest | dict[str, Any] | None = None,
+        body: GeminiEnterpriseAgentRequest | dict[str, object] | None = None,
         transport_options: transport.TransportOptions | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Publish a Looker Conversational Analytics agent to Gemini Enterprise.
 
         Calls POST /internal/agents/{agent_id}/publish. When body parameters
@@ -495,7 +504,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         path = f"/internal/agents/{agent_id}/publish"
         request_body = self._prepare_body(body) if body is not None else {}
         return cast(
-            dict[str, Any],
+            dict[str, object],
             self.post(
                 path=path,
                 structure=dict,
@@ -508,7 +517,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         self,
         agent_id: str,
         transport_options: transport.TransportOptions | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Fetch published agent details from the default Gemini Enterprise app.
 
         Calls GET /internal/agents/{agent_id}/publish.
@@ -516,7 +525,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         agent_id = self.encode_path_param(agent_id)
         path = f"/internal/agents/{agent_id}/publish"
         return cast(
-            dict[str, Any],
+            dict[str, object],
             self.get(
                 path=path,
                 structure=dict,
@@ -528,7 +537,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         self,
         agent_id: str,
         transport_options: transport.TransportOptions | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Update an agent across all published Gemini Enterprise apps.
 
         Calls PATCH /internal/agents/{agent_id}/publish.
@@ -536,7 +545,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         agent_id = self.encode_path_param(agent_id)
         path = f"/internal/agents/{agent_id}/publish"
         return cast(
-            dict[str, Any],
+            dict[str, object],
             self.patch(
                 path=path,
                 structure=dict,
@@ -549,7 +558,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         self,
         agent_id: str,
         transport_options: transport.TransportOptions | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Unpublish an agent from the default configured Gemini Enterprise app.
 
         Calls PATCH /internal/agents/{agent_id}/unpublish.
@@ -557,7 +566,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         agent_id = self.encode_path_param(agent_id)
         path = f"/internal/agents/{agent_id}/unpublish"
         return cast(
-            dict[str, Any],
+            dict[str, object],
             self.patch(
                 path=path,
                 structure=dict,
@@ -568,9 +577,9 @@ class ExtendedLooker40SDK(Looker40SDK):
 
     def validate_gemini_enterprise_metadata(
         self,
-        body: GeminiEnterpriseAgentRequest | dict[str, Any],
+        body: GeminiEnterpriseAgentRequest | dict[str, object],
         transport_options: transport.TransportOptions | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Validate Gemini Enterprise GCP project, location, and engine configuration.
 
         Calls POST /gemini_enterprise/validate.
@@ -578,7 +587,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         path = "/gemini_enterprise/validate"
         request_body = self._prepare_body(body)
         return cast(
-            dict[str, Any],
+            dict[str, object],
             self.post(
                 path=path,
                 structure=dict,
@@ -590,13 +599,13 @@ class ExtendedLooker40SDK(Looker40SDK):
     def get_gemini_enablement(
         self,
         transport_options: transport.TransportOptions | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Fetch Gemini in Looker configuration, including ai_ge_service_account_email.
 
         Calls GET /gemini_enablement.
         """
         return cast(
-            dict[str, Any],
+            dict[str, object],
             self.get(
                 path="/gemini_enablement",
                 structure=dict,
@@ -625,39 +634,33 @@ class ExtendedLooker40SDK(Looker40SDK):
         keyword_score_scaler: int | None = None,
         keyword_score_threshold: float | None = None,
         transport_options: transport.TransportOptions | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Search all Looker content for matching text (GET /global_search_v2)."""
-        query_params = self._convert_query_params(
-            cast(
-                Any,
-                {
-                    "term": term,
-                    "curate": curate,
-                    "sections": sections,
-                    "fields": fields,
-                    "limit": limit,
-                    "offset": offset,
-                    "created_by_id": created_by_id,
-                    "created_at_start": created_at_start,
-                    "created_at_end": created_at_end,
-                    "last_modified_at_start": last_modified_at_start,
-                    "last_modified_at_end": last_modified_at_end,
-                    "certification_status": certification_status,
-                    "located_in": located_in,
-                    "prev_page": prev_page,
-                    "score_for_hybrid_keyword_search": score_for_hybrid_keyword_search,
-                    "semantic_score_threshold": semantic_score_threshold,
-                    "keyword_score_scaler": keyword_score_scaler,
-                    "keyword_score_threshold": keyword_score_threshold,
-                },
-            )
-        )
         return cast(
-            dict[str, Any],
+            dict[str, object],
             self.get(
                 path="/global_search_v2",
                 structure=dict,
-                query_params=cast(Any, query_params),
+                query_params=self._qp(
+                    term=term,
+                    curate=curate,
+                    sections=sections,
+                    fields=fields,
+                    limit=limit,
+                    offset=offset,
+                    created_by_id=created_by_id,
+                    created_at_start=created_at_start,
+                    created_at_end=created_at_end,
+                    last_modified_at_start=last_modified_at_start,
+                    last_modified_at_end=last_modified_at_end,
+                    certification_status=certification_status,
+                    located_in=located_in,
+                    prev_page=prev_page,
+                    score_for_hybrid_keyword_search=score_for_hybrid_keyword_search,
+                    semantic_score_threshold=semantic_score_threshold,
+                    keyword_score_scaler=keyword_score_scaler,
+                    keyword_score_threshold=keyword_score_threshold,
+                ),
                 transport_options=transport_options,
             ),
         )
@@ -671,7 +674,7 @@ class ExtendedLooker40SDK(Looker40SDK):
         filters: dict[str, str] | None = None,
         tile_filter: str | list[str] | None = None,
         transport_options: transport.TransportOptions | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Decompile an Explore URL, Query slug, Look, Dashboard, Merge Result, or Conversation into KDA measures and candidate driver dimensions.
 
         Pure metadata inspection using lookml_model_explore: never executes SQL or KDA queries.
@@ -681,16 +684,13 @@ class ExtendedLooker40SDK(Looker40SDK):
         with dynamic_field_hint when a leaf numeric dimension lacks a modeled SUM measure.
         """
         _bind_kda_sdk(self, transport_options)
-        return cast(
-            dict[str, Any],
-            _decompile_kda_target(
-                target=target,
-                model_name=model_name,
-                explore_name=explore_name,
-                fields=fields,
-                filters=filters,
-                tile_filter=tile_filter,
-            ),
+        return _decompile_kda_target(
+            target=target,
+            model_name=model_name,
+            explore_name=explore_name,
+            fields=fields,
+            filters=filters,
+            tile_filter=tile_filter,
         )
 
     def run_key_driver_analysis(  # type: ignore[override]
@@ -703,16 +703,16 @@ class ExtendedLooker40SDK(Looker40SDK):
         return cast(
             mdls.KdaResponsePayload,
             _run_key_driver_analysis(
-                body=self._prepare_body(body),
+                body=cast(dict[str, object] | None, self._prepare_body(body)),
                 transport_options=transport_options,
             ),
         )
 
     def execute_looker_query(
         self,
-        spec: dict[str, Any] | list[dict[str, Any]],
+        spec: dict[str, object] | list[dict[str, object]],
         transport_options: transport.TransportOptions | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         """Execute one or more Looker queries with SQL CTE joins and SQL Runner / Python fallback.
 
         1. Single query: delegates to run_inline_query('json', body). Zero queries raises ValueError.
@@ -726,13 +726,39 @@ class ExtendedLooker40SDK(Looker40SDK):
            table calculations) if the user lacks SQL Runner permissions or SQL Runner execution fails.
         """
         _bind_kda_sdk(self, transport_options)
-        return cast(
-            list[dict[str, Any]],
-            _execute_looker_query(
-                spec=ExtendedLooker40SDK._prepare_body(self, spec)
-                if not isinstance(spec, list)
-                else spec,
-                transport_options=transport_options,
-            ),
+        return _execute_looker_query(
+            spec=cast(
+                dict[str, object] | list[dict[str, object]],
+                ExtendedLooker40SDK._prepare_body(self, spec),
+            )
+            if not isinstance(spec, list)
+            else spec,
+            transport_options=transport_options,
+        )
+
+    def profile_fields(
+        self,
+        body: object = None,
+        model: str | None = None,
+        view: str | None = None,
+        fields: list[str] | None = None,
+        filters: dict[str, str] | None = None,
+        types_only: bool = False,
+        group_fields: bool = False,
+        limit: int | str = 5000,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> dict[str, object]:
+        """Profile Explore fields across string, number, yesno, and datetime types with subtypes, spikiness, and LookML curation tags."""
+        _bind_kda_sdk(self, transport_options)
+        return _profile_fields(
+            body=self._prepare_body(body) if body is not None else None,
+            model=model,
+            view=view,
+            fields=fields,
+            filters=filters,
+            types_only=types_only,
+            group_fields=group_fields,
+            limit=limit,
+            transport_options=transport_options,
         )
 

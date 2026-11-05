@@ -3,8 +3,10 @@ import json
 import os
 import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from types import ModuleType
+from typing import TypedDict, cast
 
 import pydantic_monty
 import pytest
@@ -12,14 +14,42 @@ import pytest
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "skills" / "agentic-lookml-workflow" / "scripts"
 
 
-def _run_monty(path: Path, vars_: dict[str, str], externals: dict[str, Any]) -> Any:
+class _MontyQueryResult(TypedDict, total=False):
+    query_index: int
+    query_id: str
+    sql_query_id: str
+    sql: str
+    sql_runner_url: str
+    explore_url: str
+    parity_status: str
+
+
+class _MontyValidationError(TypedDict, total=False):
+    message: str
+
+
+class _MontyResult(TypedDict, total=False):
+    passed: bool
+    committed: bool
+    all_queries_matched: bool
+    generated_bronze_files: list[str]
+    queries: list[_MontyQueryResult]
+    errors: list[_MontyValidationError]
+    validation_errors: list[_MontyValidationError]
+    test_query_results: dict[str, object]
+    production_ref: str
+
+
+def _run_monty(
+    path: Path, vars_: dict[str, str], externals: dict[str, Callable[..., object]]
+) -> _MontyResult:
     header = "\n".join(f"{k} = {json.dumps(v)}" for k, v in vars_.items())
     code = f"{header}\n{path.read_text()}" if header else path.read_text()
     with pydantic_monty.Monty() as m, m.checkout() as session:
-        return session.feed_run(code, external_lookup=externals)
+        return cast("_MontyResult", session.feed_run(code, external_lookup=externals))
 
 
-def _load_module(name: str, path: Path):
+def _load_module(name: str, path: Path) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
@@ -34,14 +64,14 @@ compare_row_sets = pre_gate_mod.compare_row_sets
 normalize_val = pre_gate_mod.normalize_val
 
 
-def test_split_sql_statements_single():
+def test_split_sql_statements_single() -> None:
     sql = "SELECT id, count FROM orders WHERE status = 'Complete'"
     stmts = split_sql_statements(sql)
     assert len(stmts) == 1
     assert stmts[0] == sql
 
 
-def test_split_sql_statements_multiple_with_semicolons_and_comments():
+def test_split_sql_statements_multiple_with_semicolons_and_comments() -> None:
     sql = """
     -- First query
     SELECT id, total_amount FROM orders WHERE status = 'done;not_split';
@@ -57,7 +87,7 @@ def test_split_sql_statements_multiple_with_semicolons_and_comments():
     assert "FROM users" in stmts[1]
 
 
-def test_compare_row_sets_identical():
+def test_compare_row_sets_identical() -> None:
     sql_rows = [{"order_id": 1, "revenue": 100.50}]
     looker_rows = [{"orders.order_id": 1, "orders.revenue": 100.50}]
     matched, mismatches = compare_row_sets(sql_rows, looker_rows)
@@ -65,14 +95,14 @@ def test_compare_row_sets_identical():
     assert len(mismatches) == 0
 
 
-def test_compare_row_sets_numeric_tolerance():
+def test_compare_row_sets_numeric_tolerance() -> None:
     sql_rows = [{"id": 10, "val": 12.34567}]
     looker_rows = [{"orders.id": "10", "orders.val": 12.3457}]
     matched, _mismatches = compare_row_sets(sql_rows, looker_rows)
     assert matched is True
 
 
-def test_compare_row_sets_mismatch():
+def test_compare_row_sets_mismatch() -> None:
     sql_rows = [{"id": 1, "val": 50}]
     looker_rows = [{"orders.id": 1, "orders.val": 99}]
     matched, mismatches = compare_row_sets(sql_rows, looker_rows)
@@ -82,7 +112,7 @@ def test_compare_row_sets_mismatch():
     assert "Looker=99" in mismatches[0]
 
 
-def test_compare_row_sets_row_count_mismatch():
+def test_compare_row_sets_row_count_mismatch() -> None:
     sql_rows = [{"id": 1}, {"id": 2}]
     looker_rows = [{"id": 1}]
     matched, mismatches = compare_row_sets(sql_rows, looker_rows)
@@ -90,7 +120,7 @@ def test_compare_row_sets_row_count_mismatch():
     assert "Row count mismatch" in mismatches[0]
 
 
-def test_generate_bronze_view_monty_compatible():
+def test_generate_bronze_view_monty_compatible() -> None:
     script_path = (
         Path(__file__).resolve().parent.parent
         / "skills"
@@ -103,7 +133,7 @@ def test_generate_bronze_view_monty_compatible():
 
     called_kwargs = {}
 
-    def fake_generate(**kwargs):
+    def fake_generate(**kwargs: object) -> dict[str, list[dict[str, str]]]:
         called_kwargs.update(kwargs)
         return {"new_files": [{"path": "bronze/order_items.view.lkml"}]}
 
@@ -124,14 +154,14 @@ def test_generate_bronze_view_monty_compatible():
     }
 
 
-def test_configure_model_defaults_to_project_id_and_creates_model():
+def test_configure_model_defaults_to_project_id_and_creates_model() -> None:
     script_path = SCRIPTS_DIR / "configure_model.py"
     source = script_path.read_text()
     assert "globals(" not in source
 
     created_bodies = []
 
-    def fake_create_lookml_model(body):
+    def fake_create_lookml_model(body: dict[str, object]) -> dict[str, object]:
         created_bodies.append(body)
         return body
 
@@ -152,16 +182,16 @@ def test_configure_model_defaults_to_project_id_and_creates_model():
     ]
 
 
-def test_init_branch_prefers_remote_ref_over_ref():
+def test_init_branch_prefers_remote_ref_over_ref() -> None:
     script_path = SCRIPTS_DIR / "init_branch.py"
     created_branches = []
     looked_up_branches = []
 
-    def fake_find_git_branch(project_id, branch_name):
+    def fake_find_git_branch(project_id: str, branch_name: str) -> dict[str, object]:
         looked_up_branches.append((project_id, branch_name))
         return {"name": branch_name, "is_production": True, "ref": "local_stale_sha", "remote_ref": "origin_latest_sha"}
 
-    def fake_create_git_branch(project_id, body):
+    def fake_create_git_branch(project_id: str, body: dict[str, object]) -> dict[str, object]:
         created_branches.append((project_id, body))
         return body
 
@@ -188,16 +218,16 @@ def test_init_branch_prefers_remote_ref_over_ref():
     ]
 
 
-def test_validate_and_commit_pushes_branch_to_remote_and_pairs_tests():
+def test_validate_and_commit_pushes_branch_to_remote_and_pairs_tests() -> None:
     script_path = SCRIPTS_DIR / "validate_and_commit_branch.py"
     pushed_paths = []
     test_calls = []
 
-    def fake_post(path, **_kw):
+    def fake_post(path: str, **_kw: object) -> str:
         pushed_paths.append(path)
         return ""
 
-    def fake_run_lookml_test(**kw):
+    def fake_run_lookml_test(**kw: object) -> list[dict[str, object]]:
         test_calls.append((kw.get("file_id"), kw.get("test")))
         return [{"test_name": kw.get("test"), "success": True}]
 
@@ -227,7 +257,7 @@ def test_validate_and_commit_pushes_branch_to_remote_and_pairs_tests():
     assert pushed_paths == ["/projects/agentic-thelook/push_branch"]
 
 
-def test_no_monty_globals_in_skill_scripts():
+def test_no_monty_globals_in_skill_scripts() -> None:
     skills_dir = Path(__file__).resolve().parent.parent / "skills"
     for py_file in skills_dir.rglob("*.py"):
         text = py_file.read_text()
@@ -235,7 +265,7 @@ def test_no_monty_globals_in_skill_scripts():
         assert "locals().get(" not in text, f"{py_file} uses locals().get()"
 
 
-def test_pre_gate_compare_row_sets_matches_aliased_count():
+def test_pre_gate_compare_row_sets_matches_aliased_count() -> None:
     ok, diffs = compare_row_sets(
         [{"total_line_items_sold": 181978}],
         [{"order_items.count": 181978}],
@@ -251,7 +281,7 @@ def test_pre_gate_compare_row_sets_matches_aliased_count():
     assert diffs2 == []
 
 
-def test_pre_gate_initializes_sql_and_validates_and_checks_parity():
+def test_pre_gate_initializes_sql_and_validates_and_checks_parity() -> None:
     script_path = SCRIPTS_DIR / "pre_gate.py"
     source = script_path.read_text()
     assert "globals(" not in source
@@ -260,15 +290,15 @@ def test_pre_gate_initializes_sql_and_validates_and_checks_parity():
     created_sql = []
     created_looker_queries = []
 
-    def fake_create_sql_query(body):
+    def fake_create_sql_query(body: dict[str, object]) -> dict[str, str]:
         created_sql.append(body)
         return {"slug": "sql_slug_1"}
 
-    def fake_create_query(body):
+    def fake_create_query(body: dict[str, object]) -> dict[str, str]:
         created_looker_queries.append(body)
         return {"id": "101", "slug": "slug_101", "share_url": "https://example.looker.com/x/slug_101"}
 
-    res: dict[str, Any] = _run_monty(
+    res = _run_monty(
         script_path,
         {
             "raw_sql": "SELECT id, count AS total_cnt FROM orders WHERE status = 'Complete';",
@@ -302,7 +332,7 @@ def test_pre_gate_initializes_sql_and_validates_and_checks_parity():
     assert len(created_looker_queries) == 1
 
     # Verify that modified SQL regenerates SQL Runner queries and invalid JSON does not crash
-    res2: dict[str, Any] = _run_monty(
+    res2 = _run_monty(
         script_path,
         {
             "raw_sql": "SELECT id, count FROM orders WHERE status = 'Cancelled';",
@@ -325,7 +355,7 @@ def test_pre_gate_initializes_sql_and_validates_and_checks_parity():
     assert "inline_queries_json" in res2["validation_errors"][0]["message"]
 
 
-def test_pre_gate_aligns_outer_sql_round_scale_without_loosening_unrounded_columns():
+def test_pre_gate_aligns_outer_sql_round_scale_without_loosening_unrounded_columns() -> None:
     script_path = SCRIPTS_DIR / "pre_gate.py"
     sql = (
         "SELECT COUNT(id) AS unsold_units_on_shelf, "
@@ -333,7 +363,7 @@ def test_pre_gate_aligns_outer_sql_round_scale_without_loosening_unrounded_colum
         "ROUND(SUM(product_retail_price), 2) AS hypothetical_retail_value "
         "FROM `bigquery-public-data.thelook_ecommerce.inventory_items` WHERE sold_at IS NULL;"
     )
-    res: dict[str, Any] = _run_monty(
+    res = _run_monty(
         script_path,
         {
             "raw_sql": sql,
@@ -381,7 +411,7 @@ def test_pre_gate_aligns_outer_sql_round_scale_without_loosening_unrounded_colum
         "SELECT SUM(ROUND(cost, 2)) AS sunk_dusty_shelf_cost FROM inventory_items;",
         "-- SELECT ROUND(SUM(cost), 2) AS sunk_dusty_shelf_cost\nSELECT SUM(cost) AS sunk_dusty_shelf_cost FROM inventory_items;",
     ):
-        res_strict: dict[str, Any] = _run_monty(
+        res_strict = _run_monty(
             script_path,
             {
                 "raw_sql": non_cosmetic_sql,
@@ -402,11 +432,11 @@ def test_pre_gate_aligns_outer_sql_round_scale_without_loosening_unrounded_colum
         assert res_strict["queries"][0]["parity_status"] == "mismatched"
 
 
-def test_pre_gate_executes_optional_test_queries_json_in_same_sandbox_call():
+def test_pre_gate_executes_optional_test_queries_json_in_same_sandbox_call() -> None:
     script_path = SCRIPTS_DIR / "pre_gate.py"
     inline_calls = []
 
-    def fake_run_inline_query(result_format, body, **kw):
+    def fake_run_inline_query(result_format: str, body: dict[str, object], **kw: object) -> str:
         assert "apply_formatting" not in kw
         assert result_format == "json"
         inline_calls.append(body)
@@ -414,7 +444,7 @@ def test_pre_gate_executes_optional_test_queries_json_in_same_sandbox_call():
             return '[{"orders.total_revenue": 4520.2519, "orders.count": 84}]'
         return '[{"orders.id": 1, "orders.count": 10}]'
 
-    res: dict[str, Any] = _run_monty(
+    res = _run_monty(
         script_path,
         {
             "raw_sql": "SELECT id, count FROM orders;",
@@ -448,7 +478,7 @@ def test_pre_gate_executes_optional_test_queries_json_in_same_sandbox_call():
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX bash script test")
-def test_setup_repo_skip_preflight_and_opt_in_secrets_and_preflight_fast_path(tmp_path: Path):
+def test_setup_repo_skip_preflight_and_opt_in_secrets_and_preflight_fast_path(tmp_path: Path) -> None:
     import os
     import subprocess
 
@@ -538,8 +568,8 @@ def test_setup_repo_skip_preflight_and_opt_in_secrets_and_preflight_fast_path(tm
     assert "gh secret set LOOKERSDK_BASE_URL" in spy_log.read_text(encoding="utf-8")
 
 
-def test_pre_gate_orders_unmatched_columns_by_inline_query_fields_not_json_dict_order():
-    res: dict[str, Any] = _run_monty(
+def test_pre_gate_orders_unmatched_columns_by_inline_query_fields_not_json_dict_order() -> None:
+    res = _run_monty(
         SCRIPTS_DIR / "pre_gate.py",
         {
             "raw_sql": (
@@ -583,14 +613,14 @@ def test_pre_gate_orders_unmatched_columns_by_inline_query_fields_not_json_dict_
     assert res["queries"][0]["parity_status"] == "matched"
 
 
-def test_init_branch_pre_generates_only_missing_bronze_views_before_pull():
+def test_init_branch_pre_generates_only_missing_bronze_views_before_pull() -> None:
     generated_calls = []
 
-    def fake_generate(**kw):
+    def fake_generate(**kw: object) -> dict[str, list[dict[str, str]]]:
         generated_calls.append(kw)
         return {"new_files": [{"path": "bronze/events.view.lkml"}]}
 
-    res: dict[str, Any] = _run_monty(
+    res = _run_monty(
         SCRIPTS_DIR / "init_branch.py",
         {
             "project_id": "agentic-thelook",
@@ -634,15 +664,15 @@ def test_init_branch_pre_generates_only_missing_bronze_views_before_pull():
     }
 
 
-def test_validate_and_commit_branch_checks_out_pr_branch_and_workflow_serializes():
+def test_validate_and_commit_branch_checks_out_pr_branch_and_workflow_serializes() -> None:
     from looker_sdk.error import SDKError
 
-    calls: list[tuple[str, Any]] = []
+    calls: list[tuple[str, dict[str, object]]] = []
 
-    def rec(name: str, ret: Any = None, fail_first: bool = False):
+    def rec(name: str, ret: object = None, fail_first: bool = False) -> Callable[..., object]:
         seen = 0
 
-        def _fn(**kw):
+        def _fn(**kw: object) -> object:
             nonlocal seen
             seen += 1
             calls.append((name, kw))
@@ -766,7 +796,7 @@ def test_validate_and_commit_branch_checks_out_pr_branch_and_workflow_serializes
     assert [c[0] for c in calls] == ["git_branch", "reset_remote", "project", "update_branch", "reset_remote"]
 
 
-def test_pre_gate_percent_scaling_unordered_group_by_and_share_url_fallback():
+def test_pre_gate_percent_scaling_unordered_group_by_and_share_url_fallback() -> None:
     raw_sql = (
         "SELECT department, COUNT(id) AS sku_count, "
         "ROUND(AVG(retail_price - cost), 2) AS avg_dollar_markup, "
@@ -822,7 +852,7 @@ def test_pre_gate_percent_scaling_unordered_group_by_and_share_url_fallback():
     created_slugs = iter(["sql_0", "sql_1"])
     inline_iter = iter(looker_results)
 
-    res: dict[str, Any] = _run_monty(
+    res = _run_monty(
         SCRIPTS_DIR / "pre_gate.py",
         {
             "raw_sql": raw_sql,
@@ -907,7 +937,7 @@ def test_pre_gate_percent_scaling_unordered_group_by_and_share_url_fallback():
     assert ok_2cnt_swap is False
 
 
-def test_pre_gate_order_by_round_ties_and_pr_data_json_compaction():
+def test_pre_gate_order_by_round_ties_and_pr_data_json_compaction() -> None:
     sql = (
         "SELECT dc.name AS warehouse_name, "
         "ROUND(100.0 * COUNTIF(ii.sold_at IS NOT NULL) / COUNT(ii.id), 2) AS sell_through_rate_pct "
@@ -971,7 +1001,7 @@ def test_pre_gate_order_by_round_ties_and_pr_data_json_compaction():
     assert res_fid["passed"] is True and seen_fids == ["tests/bronze/events.test.lkml"]
 
 
-def test_pre_gate_limit_boundary_tie_and_digit_string_preservation():
+def test_pre_gate_limit_boundary_tie_and_digit_string_preservation() -> None:
     sql = "SELECT depth, uri_segment, COUNT(id) AS click_hits, APPROX_COUNT_DISTINCT(sid) AS approx_sessions FROM e GROUP BY 1, 2 ORDER BY click_hits DESC LIMIT 3"
     sql_rows = [
         {"depth": 0, "uri_segment": "product", "click_hits": 100, "approx_sessions": 80},
@@ -989,8 +1019,9 @@ def test_pre_gate_limit_boundary_tie_and_digit_string_preservation():
     ]
     limits_called: list[str | None] = []
 
-    def fake_inline(**kw):
-        lim = (kw.get("body") or {}).get("limit")
+    def fake_inline(**kw: object) -> str:
+        body = cast("dict[str, object] | None", kw.get("body")) or {}
+        lim = cast("str | None", body.get("limit"))
         limits_called.append(lim)
         return json.dumps(expanded_looker if lim == "500" else top3_looker)
 
@@ -1028,7 +1059,7 @@ def test_pre_gate_limit_boundary_tie_and_digit_string_preservation():
     assert ok_zip is False and "SQL=02110, Looker=2110" in diffs_zip[0]
 
 
-def test_pre_gate_unordered_limit_fallback_and_grain_key_stripping():
+def test_pre_gate_unordered_limit_fallback_and_grain_key_stripping() -> None:
     sql = "SELECT first_name, age FROM `proj.ds.users` WHERE age < 25 LIMIT 2 -- sample;"
     raw_sql_rows = [{"first_name": "Zoe", "age": 22}, {"first_name": "Mia", "age": 19}]
     det_sql_rows = [{"first_name": "Aaron", "age": 18}, {"first_name": "Aaron", "age": 18}]
@@ -1040,17 +1071,17 @@ def test_pre_gate_unordered_limit_fallback_and_grain_key_stripping():
         {"users.first_name": "Aaron", "users.age": 18, "users.id": 1},
         {"users.first_name": "Aaron", "users.age": 18, "users.id": 9},
     ]
-    created_sqls: list[dict[str, Any]] = []
-    inline_sorts: list[Any] = []
+    created_sqls: list[dict[str, str]] = []
+    inline_sorts: list[object] = []
 
-    def fake_create_sql(body):
+    def fake_create_sql(body: dict[str, str]) -> dict[str, str]:
         created_sqls.append(body)
         return {"slug": "det" if "_lkr_det" in body["sql"] else "raw"}
 
-    def fake_run_sql(slug, **_kw):
+    def fake_run_sql(slug: str, **_kw: object) -> str:
         return json.dumps(det_sql_rows if slug == "det" else raw_sql_rows)
 
-    def fake_inline(body, **_kw):
+    def fake_inline(body: dict[str, object], **_kw: object) -> str:
         inline_sorts.append(body.get("sorts"))
         return json.dumps(det_lkr_rows if body.get("sorts") else raw_lkr_rows)
 
@@ -1101,7 +1132,7 @@ def test_pre_gate_unordered_limit_fallback_and_grain_key_stripping():
     assert ok_extra is False and "column count mismatch" in diffs_extra[0]
 
 
-def test_pre_gate_timestamp_normalization_and_same_second_sort_ties():
+def test_pre_gate_timestamp_normalization_and_same_second_sort_ties() -> None:
     sql = "SELECT order_id, created_at FROM `proj.ds.orders` ORDER BY created_at DESC LIMIT 2;"
     s_rows = [
         {"order_id": 10, "created_at": "2026-10-25 00:20:01.720336 UTC"},
@@ -1155,7 +1186,7 @@ def test_pre_gate_timestamp_normalization_and_same_second_sort_ties():
     assert ok_sub is False
 
 
-def test_pre_gate_volatile_current_timestamp_pins_compiled_sql_and_falls_back_for_post_sql():
+def test_pre_gate_volatile_current_timestamp_pins_compiled_sql_and_falls_back_for_post_sql() -> None:
     # 1. Primary path: compiles Looker SQL via result_format="sql", pins CURRENT_TIMESTAMP / CURRENT_DATE / NOW()
     #    to run_id's fixed UTC timestamp in both raw SQL and compiled Looker SQL, remaps aliases, strips __sort_,
     #    ignores literals/comments/aliases, and preserves original sql_query_id + sql.
@@ -1179,12 +1210,12 @@ def test_pre_gate_volatile_current_timestamp_pins_compiled_sql_and_falls_back_fo
     )
     pinned_sql_seen: dict[str, str] = {}
 
-    def fake_create_sql(body):
+    def fake_create_sql(body: dict[str, str]) -> dict[str, str]:
         slug = f"pin_{len(pinned_sql_seen)}"
         pinned_sql_seen[slug] = body["sql"]
         return {"slug": slug}
 
-    def fake_run_sql(slug, **_kw):
+    def fake_run_sql(slug: str, **_kw: object) -> str:
         assert slug.startswith("pin_"), "Pinned mode should execute pinned SQL slugs rather than stale cached slug"
         sql_txt = pinned_sql_seen[slug]
         if "AS ii_aging_tier" in sql_txt:
@@ -1199,7 +1230,7 @@ def test_pre_gate_volatile_current_timestamp_pins_compiled_sql_and_falls_back_fo
 
     inline_formats: list[str] = []
 
-    def fake_inline(result_format, body, **_kw):
+    def fake_inline(result_format: str, body: dict[str, object], **_kw: object) -> str:
         inline_formats.append(result_format)
         assert result_format == "sql"
         return compiled_looker_sql
@@ -1243,7 +1274,7 @@ def test_pre_gate_volatile_current_timestamp_pins_compiled_sql_and_falls_back_fo
 
     # 2. Post-SQL fallback (e.g., table_calculation present): bypasses compiled-SQL mode and retries uncached live
     tc_sql = "SELECT COUNTIF(TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), created_at, DAY) < 90) AS fresh_units FROM ii"
-    cache_flags: list[Any] = []
+    cache_flags: list[object] = []
     tc_q = {
         "query_index": 0,
         "sql_query_id": "s_cached",
@@ -1286,7 +1317,7 @@ def test_pre_gate_volatile_current_timestamp_pins_compiled_sql_and_falls_back_fo
     assert res_bad["passed"] is False
 
 
-def test_pre_gate_native_case_ordinal_prefix_stripping_and_order_enforcement():
+def test_pre_gate_native_case_ordinal_prefix_stripping_and_order_enforcement() -> None:
     sql = "SELECT CASE WHEN x < 10 THEN '1. North' ELSE '2. Europe' END AS region, country, COUNT(id) AS cnt FROM u GROUP BY 1, 2 ORDER BY region, cnt DESC"
     s_rows = [
         {"region": "1. North", "country": "US", "cnt": 50},
@@ -1335,17 +1366,17 @@ def test_pre_gate_native_case_ordinal_prefix_stripping_and_order_enforcement():
     assert ok_leg is True
 
 
-def test_pre_gate_ordered_limit_massive_tie_secondary_order_fallback():
+def test_pre_gate_ordered_limit_massive_tie_secondary_order_fallback() -> None:
     sql = "SELECT session_id, user_id, COUNT(id) AS total_events FROM events GROUP BY 1, 2 ORDER BY total_events DESC LIMIT 2"
     sql_queries: dict[str, str] = {}
 
-    def _create_sql(body):
+    def _create_sql(body: dict[str, str]) -> dict[str, str]:
         slug = f"slug_{len(sql_queries)}"
         sql_queries[slug] = body["sql"]
         return {"slug": slug}
 
-    def _run_inline(body, **_kw):
-        sorts = body.get("sorts") or []
+    def _run_inline(body: dict[str, object], **_kw: object) -> str:
+        sorts = cast("list[str]", body.get("sorts") or [])
         if sorts == ["e.count desc", "e.session_id asc", "e.user_id asc"]:
             return json.dumps([{"e.session_id": f"s_{i}", "e.user_id": i, "e.count": 13} for i in (1, 2)])
         if sorts and sorts[0] == "e.count asc":
@@ -1372,7 +1403,7 @@ def test_pre_gate_ordered_limit_massive_tie_secondary_order_fallback():
     assert _check([]) is False
 
 
-def test_case_filter_unescaped_comma_and_zero_hint_and_test_target_guard():
+def test_case_filter_unescaped_comma_and_zero_hint_and_test_target_guard() -> None:
     from lkr.parse.lookml_to_api import parse_lookml_to_api
 
     lkml = """
@@ -1465,7 +1496,7 @@ def test_case_filter_unescaped_comma_and_zero_hint_and_test_target_guard():
     assert (res_ref.lookml_model_explores["m::p_ok"].errors or []) == []
 
 
-def test_pre_gate_half_away_round_cte_pct_table_calc_backing_and_test_gate():
+def test_pre_gate_half_away_round_cte_pct_table_calc_backing_and_test_gate() -> None:
     sql_cte = (
         "WITH ledger AS (SELECT id, ROUND(SAFE_DIVIDE(sold, total) * 100.0, 2) AS sell_through_pct FROM t) "
         "SELECT id, sell_through_pct FROM ledger"
@@ -1529,7 +1560,7 @@ def test_pre_gate_half_away_round_cte_pct_table_calc_backing_and_test_gate():
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX bash script test")
-def test_create_github_pr_body_cap_and_intact_data_json(tmp_path: Path):
+def test_create_github_pr_body_cap_and_intact_data_json(tmp_path: Path) -> None:
     sdir = tmp_path / "run"
     sdir.mkdir()
     (sdir / "summary.md").write_text("S" * 30000)
@@ -1565,7 +1596,7 @@ def test_create_github_pr_body_cap_and_intact_data_json(tmp_path: Path):
     assert "data.json omitted" in Path(f"{gh}.create").read_text() and len(Path(f"{gh}.create").read_text()) < 65536
 
 
-def test_pre_gate_compare_row_sets_normalizes_sql_bool_and_looker_yesno():
+def test_pre_gate_compare_row_sets_normalizes_sql_bool_and_looker_yesno() -> None:
     ok, diffs = compare_row_sets(
         [{"path": "a->b", "converted": "false"}, {"path": "a->c", "converted": "true"}],
         [{"f.path": "a->b", "f.is_converted": "No"}, {"f.path": "a->c", "f.is_converted": "Yes"}],
@@ -1580,7 +1611,7 @@ def test_pre_gate_compare_row_sets_normalizes_sql_bool_and_looker_yesno():
     assert ok_bad is False
 
 
-def test_pre_gate_malformed_test_queries_json_surfaces_error_and_raw_float_mismatch_hint():
+def test_pre_gate_malformed_test_queries_json_surfaces_error_and_raw_float_mismatch_hint() -> None:
     ok_f, diffs_f = compare_row_sets(
         [{"decile": 9, "avg_age": 40.8}],
         [{"f.decile": 9, "u.avg_age": 40.744732}],
@@ -1607,11 +1638,11 @@ def test_pre_gate_malformed_test_queries_json_surfaces_error_and_raw_float_misma
     )
     assert res["all_queries_matched"] is True
     assert res["passed"] is False
-    assert "Invalid test_queries_json" in res["test_query_results"]["_error"]
+    assert "Invalid test_queries_json" in cast("str", res["test_query_results"]["_error"])
     assert any("Invalid test_queries_json" in e["message"] for e in res["validation_errors"])
 
 
-def test_pre_gate_nondeterministic_ntile_shuffle_conservation_and_rejects_broken_lookml():
+def test_pre_gate_nondeterministic_ntile_shuffle_conservation_and_rejects_broken_lookml() -> None:
     ntile_sql = (
         "WITH s AS (SELECT user_id, age, spend, "
         "NTILE(5) OVER (ORDER BY freq DESC) AS f_score, "
@@ -1652,7 +1683,7 @@ def test_pre_gate_nondeterministic_ntile_shuffle_conservation_and_rejects_broken
     tq = json.dumps({"s": {"model": "m", "view": "u", "fields": ["u.c"]}})
     sql_slugs: dict[str, str] = {}
 
-    def fake_create_sql(body, **_kw):
+    def fake_create_sql(body: dict[str, str], **_kw: object) -> dict[str, str]:
         slug = f"s{len(sql_slugs)}"
         sql_slugs[slug] = body["sql"]
         return {"slug": slug}

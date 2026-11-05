@@ -17,7 +17,7 @@ from lkr.parse import (
 runner = CliRunner()
 
 
-def test_parse_multiple_queries_and_pieces():
+def test_parse_multiple_queries_and_pieces() -> None:
     sql = """
     WITH active_users AS (
         SELECT id, country FROM raw.users WHERE active = 1
@@ -73,7 +73,7 @@ def test_parse_multiple_queries_and_pieces():
     assert q2.limit == "5"
 
 
-def test_parse_captures_syntax_errors_per_query():
+def test_parse_captures_syntax_errors_per_query() -> None:
     sql = "SELECT 1 AS a; SELECT FROM WHERE; SELECT 2 AS b;"
     result = parse_sql(sql=sql)
     assert len(result.queries) == 3
@@ -84,7 +84,7 @@ def test_parse_captures_syntax_errors_per_query():
     assert result.queries[2].columns[0].alias == "b"
 
 
-def test_cli_parse_sql_stdout_and_file(tmp_path: Path):
+def test_cli_parse_sql_stdout_and_file(tmp_path: Path) -> None:
     sql_file = tmp_path / "queries.sql"
     out_file = tmp_path / "out.json"
     sql_file.write_text("SELECT a FROM tbl1; SELECT b FROM tbl2;", encoding="utf-8")
@@ -109,7 +109,7 @@ def test_cli_parse_sql_stdout_and_file(tmp_path: Path):
     assert direct_model.queries[0].tables[0].name == "users"
 
 
-def test_parse_sql_star_modifiers_and_cte_expansion():
+def test_parse_sql_star_modifiers_and_cte_expansion() -> None:
     res_bq = parse_sql(
         sql=(
             "SELECT * EXCEPT (secret, ssn) REPLACE (LOWER(email) AS email) FROM db.s.users; "
@@ -155,7 +155,7 @@ def test_parse_sql_star_modifiers_and_cte_expansion():
     ]
 
 
-def test_query_similarity_hierarchy_and_table_isolation():
+def test_query_similarity_hierarchy_and_table_isolation() -> None:
     q_base = (
         "SELECT o.user_id, SUM(o.amount) AS total "
         "FROM prod.orders o WHERE o.status = 'paid' GROUP BY o.user_id"
@@ -245,7 +245,7 @@ def test_query_similarity_hierarchy_and_table_isolation():
     )
 
 
-def test_sql_complexity_seven_tiers():
+def test_sql_complexity_seven_tiers() -> None:
     queries = [
         # Tier 1: trivial
         "SELECT id FROM users",
@@ -326,7 +326,7 @@ def test_sql_complexity_seven_tiers():
     assert compute_sql_complexity(parsed[-1])[2] == "very_complex"
 
 
-def test_group_sql_queries_synthesis_and_frequency_sorting(tmp_path: Path):
+def test_group_sql_queries_synthesis_and_frequency_sorting(tmp_path: Path) -> None:
     # 1000+ queries across 3 table families + 1 syntax error
     sql_statements: list[str] = []
     # Family 1: analytics.orders + raw.users (700 queries with varying literals, operators, and projections)
