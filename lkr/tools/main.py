@@ -27,11 +27,13 @@ if not logger:
 def user_attribute_updater(
     host: str = typer.Option(default="127.0.0.1", envvar="HOST"),
     port: int = typer.Option(default=8080, envvar="PORT"),
-):
+) -> None:
     api = FastAPI()
 
     @api.post("/identity_token")
-    def identity_token(request: Request, body: UserAttributeUpdater):
+    def identity_token(
+        request: Request, body: UserAttributeUpdater
+    ) -> AttributeUpdaterResponse:
         try:
             body.get_request_authorization_for_value(request.headers.items())
             body.update_user_attribute_value()
@@ -57,7 +59,9 @@ def user_attribute_updater(
             return AttributeUpdaterResponse(success=False, message=str(e))
 
     @api.delete("/value")
-    def delete_user_attribute_value(request: Request, body: UserAttributeUpdater):
+    def delete_user_attribute_value(
+        request: Request, body: UserAttributeUpdater
+    ) -> AttributeUpdaterResponse:
         try:
             body.delete_user_attribute_value()
             logger.debug(
@@ -71,7 +75,9 @@ def user_attribute_updater(
             return AttributeUpdaterResponse(success=False, message=str(e))
 
     @api.post("/value")
-    def update_user_attribute_value(request: Request, body: UserAttributeUpdater):
+    def update_user_attribute_value(
+        request: Request, body: UserAttributeUpdater
+    ) -> AttributeUpdaterResponse:
         try:
             body.update_user_attribute_value()
             logger.debug(
@@ -85,7 +91,7 @@ def user_attribute_updater(
             return AttributeUpdaterResponse(success=False, message=str(e))
 
     @api.get("")
-    def health():
+    def health() -> dict[str, str]:
         return {"status": "ok"}
 
     uvicorn.run(api, host=host, port=port)
@@ -124,7 +130,7 @@ def schedule_download_deprecation_command(
     csv_file_name: Annotated[str | None, typer.Option("--csv-file-name", help="Name for the output CSV file (without extension)")] = "schedule_download_deprecation",
     unfiltered: Annotated[bool, typer.Option("--unfiltered", help="Show all rows, including those with no missing permissions")] = False,
     email: Annotated[bool | None, typer.Option("--email", help="Use Email instead of Name")] = False,
-):
+) -> None:
     """
     Build a table of users and their scheduling/downloading permissions per model.
     """
@@ -196,7 +202,7 @@ def schedule_download_deprecation_command(
         for i in range(len(headers))
     ]
     
-    def format_line(parts, widths):
+    def format_line(parts: list[str], widths: list[int]) -> str:
         return " | ".join(visual_ljust(str(p), w) for p, w in zip(parts, widths))
 
     typer.echo(format_line(headers, col_widths))

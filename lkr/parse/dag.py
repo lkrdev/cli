@@ -1,6 +1,5 @@
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any
 
 import sqlglot
 from pydantic import BaseModel, Field
@@ -34,7 +33,7 @@ def _extract_lookml_refs(sql: str | None) -> list[str]:
     ]
 
 
-def _as_list(val: Any) -> list[Any]:
+def _as_list[T](val: list[T] | dict[str, T] | T | None) -> list[T]:
     if val is None:
         return []
     if isinstance(val, list):
@@ -50,16 +49,16 @@ def _qualify_field_ref(ref: str, default_alias: str) -> str:
 
 
 
-def _collect_declarations(
+def _collect_declarations[T](
     project: LookmlProject,
     obj_type: str,
-    cls: type[Any],
+    cls: type[T],
 ) -> tuple[
-    dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    dict[str, list[tuple[str, Any, dict[str, Any]]]],
+    dict[str, list[tuple[str, T, dict[str, object]]]],
+    dict[str, list[tuple[str, T, dict[str, object]]]],
 ]:
-    base_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]] = {}
-    ref_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]] = {}
+    base_decls: dict[str, list[tuple[str, T, dict[str, object]]]] = {}
+    ref_decls: dict[str, list[tuple[str, T, dict[str, object]]]] = {}
 
     if not isinstance(project.file, BaseModel):
         return base_decls, ref_decls
@@ -79,6 +78,8 @@ def _collect_declarations(
             pos_key = f"{rel_key}.{category}"
             file_pos = pos_files.get(pos_key, {})
             obj_pos_map = file_pos.get(obj_type, {}) if isinstance(file_pos, dict) else {}
+            if not isinstance(obj_pos_map, dict):
+                obj_pos_map = {}
 
             objs_dict = getattr(file_entry, obj_type, None)
             if not isinstance(objs_dict, dict):
@@ -113,19 +114,19 @@ def _collect_declarations(
     return base_decls, ref_decls
 
 
-def _build_chain(
+def _build_chain[T](
     name: str,
-    base_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
-    ref_decls: dict[str, list[tuple[str, Any, dict[str, Any]]]],
+    base_decls: dict[str, list[tuple[str, T, dict[str, object]]]],
+    ref_decls: dict[str, list[tuple[str, T, dict[str, object]]]],
     visited: set[str] | None = None,
-) -> list[tuple[str, Any, dict[str, Any]]]:
+) -> list[tuple[str, T, dict[str, object]]]:
     if visited is None:
         visited = set()
     if name in visited:
         return []
     visited.add(name)
 
-    chain: list[tuple[str, Any, dict[str, Any]]] = []
+    chain: list[tuple[str, T, dict[str, object]]] = []
     bases = base_decls.get(name, [])
     refs = ref_decls.get(name, [])
 
@@ -144,14 +145,19 @@ def _build_chain(
     return chain
 
 
-def _chain_root_pos(
-    chain: list[tuple[str, Any, dict[str, Any]]], target_name: str
+def _chain_root_pos[T](
+    chain: list[tuple[str, T, dict[str, object]]], target_name: str
 ) -> tuple[str, list[int]]:
     file, pos = "", [0, 0, 0, 0]
     for fpath, item, p_dict in chain:
-        if (item.name_ == target_name or not file) and "$p" in p_dict:
-            file, pos = fpath, [int(x) for x in p_dict["$p"][:4]]
-            if item.name_ == target_name:
+        item_name = getattr(item, "name_", None)
+        p_val = p_dict.get("$p")
+        if (item_name == target_name or not file) and isinstance(p_val, (list, tuple)):
+            file, pos = (
+                fpath,
+                [int(x) for x in p_val[:4] if isinstance(x, (int, float, str))],
+            )
+            if item_name == target_name:
                 break
     return file, pos
 
@@ -266,7 +272,7 @@ def _is_field_allowed_by_spec(
 def _resolve_explore_base(
     exp_name: str,
     exp_obj: LookmlExplore,
-    exp_chain: list[tuple[str, Any, dict[str, Any]]],
+    exp_chain: list[tuple[str, LookmlExplore, dict[str, object]]],
     model_views: Mapping[str, LookmlView | list[LookmlView]],
 ) -> tuple[str, str, str, list[int]]:
     exp_file, exp_pos = _chain_root_pos(exp_chain, exp_name)
@@ -440,7 +446,7 @@ def _extract_explore_equi_joins(
 def build_explore_join_graph(
     explore_name: str,
     explore_obj: LookmlExplore,
-    explore_chain: list[tuple[str, Any, dict[str, Any]]],
+    explore_chain: list[tuple[str, LookmlExplore, dict[str, object]]],
     model_views: Mapping[str, LookmlView | list[LookmlView]],
     model_name: str | None = None,
 ) -> LookmlExploreJoinGraph:
@@ -452,7 +458,7 @@ def build_explore_join_graph(
     if isinstance(bv, LookmlView):
         views_by_alias[base_alias] = bv
 
-    merged_joins: dict[str, tuple[str, LookmlJoin, dict[str, Any]]] = {}
+    merged_joins: dict[str, tuple[str, LookmlJoin, dict[str, object]]] = {}
     always_joins: list[str] = []
 
     items_to_process = list(explore_chain)
@@ -465,7 +471,8 @@ def build_explore_join_graph(
                 always_joins.append(aj)
         join_pos_map = p_dict.get("join", {}) if isinstance(p_dict, dict) else {}
         for j_name, j_obj in (e_item.join or {}).items():
-            jp = join_pos_map.get(j_name, {}) if isinstance(join_pos_map, dict) else {}
+            raw_jp = join_pos_map.get(j_name, {}) if isinstance(join_pos_map, dict) else {}
+            jp: dict[str, object] = raw_jp if isinstance(raw_jp, dict) else {}
             if j_name in merged_joins:
                 prev_fpath, _, prev_jp = merged_joins[j_name]
                 merged_joins[j_name] = (fpath or prev_fpath, j_obj, jp or prev_jp)
@@ -485,7 +492,14 @@ def build_explore_join_graph(
         rel = j_obj.relationship or "many_to_one"
         req_joins = _as_list(j_obj.required_joins)
         is_always = j_name in always_joins
-        line = int(jp["$p"][0]) if "$p" in jp and len(jp["$p"]) > 0 else None
+        jp_p = jp.get("$p")
+        line = (
+            int(jp_p[0])
+            if isinstance(jp_p, (list, tuple))
+            and len(jp_p) > 0
+            and isinstance(jp_p[0], (int, float, str))
+            else None
+        )
 
         equi_joins = _extract_explore_equi_joins(
             j_obj.sql_on,

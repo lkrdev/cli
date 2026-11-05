@@ -371,7 +371,11 @@ Before writing a Looker query, inspect the model's Explore topology with `lkr sc
        "limit": "10"
      }
      ```
-   - Validate offline with `lkr schema validate --model <model> --explore-file <explores.json> --query '<json>'` (or `validate_merge_query(payload, model, explores_map)`) and execute via `execute_looker_query(sdk, spec)`.
+   - Validate offline with `lkr schema validate --model <model> --explore-file <explores.json> --query '<json>'` (or `validate_merge_query(payload, model, explores_map)`) and execute via `execute_looker_query(spec)` (`sdk.execute_looker_query(spec)`).
+   - **`POST /api/4.0/merge_queries` (`create_merge_query`) & `total` Propagation Rules:**
+     - `create_merge_query` accepts arbitrary `vis_config` dictionaries (including Highcharts `advanced_vis_config` overrides not exposed in the `/merge` UI), `column_limit`, and `total`.
+     - For in-memory merges (`HTMergeQuery#compute_totals_from_source_query_totals`), Looker only populates `totals_data` if `total: true` is set on **both** the top-level `MergeQuery` and **every** constituent `source_query` (`validate_merge_query` and `execute_looker_query` propagate `total: True` automatically when `total: True` or a `:total` table calculation is present).
+     - Instance-level merge policies `merge_results_global_policy_disabled` and `merge_results_dashboard_policy_disabled` are controllable via `setting()` / `set_setting()` (`GET`/`PATCH /api/4.0/setting`).
 
 ## Agent Guidelines for Non-Interactive Execution
 

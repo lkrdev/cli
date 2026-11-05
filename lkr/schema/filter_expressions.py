@@ -1,5 +1,3 @@
-from typing import Any
-
 NUMERIC_FIELD_TYPES = frozenset(
     {
         "number",
@@ -26,7 +24,7 @@ DATETIME_FIELD_TYPES = frozenset({
     "date_fiscal_year", "date_microsecond", "datetime", "time",
 })
 
-FILTER_EXPRESSION_DEFS: dict[str, Any] = {
+FILTER_EXPRESSION_DEFS: dict[str, dict[str, object]] = {
     "StringFilterExpression": {
         "type": "string",
         "description": (
@@ -154,7 +152,7 @@ FILTER_EXPRESSION_DEFS: dict[str, Any] = {
 }
 
 
-def extract_enum_values(field: dict[str, Any]) -> list[Any] | None:
+def extract_enum_values(field: dict[str, object]) -> list[object] | None:
     """Extract allowed values from `allowed_values` or `enumerations` on a LookML field."""
     raw_allowed = field.get("allowed_values")
     if isinstance(raw_allowed, list) and raw_allowed:
@@ -172,9 +170,9 @@ def extract_enum_values(field: dict[str, Any]) -> list[Any] | None:
     return None
 
 
-def classify_filter_expression_ref(field: dict[str, Any]) -> str:
+def classify_filter_expression_ref(field: dict[str, object]) -> str:
     """Map a LookML field definition to its corresponding `$defs` FilterExpression reference."""
-    ftype = (field.get("type") or "").lower()
+    ftype = str(field.get("type") or "").lower()
     if ftype == "yesno":
         return "#/$defs/BooleanFilterExpression"
     if ftype == "location":
@@ -190,10 +188,10 @@ def classify_filter_expression_ref(field: dict[str, Any]) -> str:
 
 
 def build_filter_property_schema(
-    field: dict[str, Any], *, is_parameter: bool = False
-) -> dict[str, Any]:
+    field: dict[str, object], *, is_parameter: bool = False
+) -> dict[str, object]:
     """Return a strongly typed JSON Schema for a single filter property."""
-    meta: dict[str, Any] = {}
+    meta: dict[str, object] = {}
     if field.get("description"):
         meta["description"] = field["description"]
     if field.get("default_filter_value") is not None:
@@ -225,19 +223,19 @@ def build_filter_property_schema(
 
 
 def build_filters_schema(
-    dimensions: list[dict[str, Any]],
-    measures: list[dict[str, Any]],
-    filters: list[dict[str, Any]],
-    parameters: list[dict[str, Any]],
-) -> dict[str, Any]:
+    dimensions: list[dict[str, object]],
+    measures: list[dict[str, object]],
+    filters: list[dict[str, object]],
+    parameters: list[dict[str, object]],
+) -> dict[str, object]:
     """Build the `body.filters` object schema across all visible filterable fields."""
-    filter_properties: dict[str, Any] = {}
+    filter_properties: dict[str, object] = {}
     for f in dimensions + measures + filters:
-        filter_properties[f["name"]] = build_filter_property_schema(
+        filter_properties[str(f["name"])] = build_filter_property_schema(
             f, is_parameter=False
         )
     for p in parameters:
-        filter_properties[p["name"]] = build_filter_property_schema(
+        filter_properties[str(p["name"])] = build_filter_property_schema(
             p, is_parameter=True
         )
 

@@ -57,9 +57,9 @@ def format_attributes(
     return formatted_attributes
 
 
-def now():
+def now() -> datetime:
     return datetime.now(UTC)
 
 
-def ms_diff(start: datetime):
+def ms_diff(start: datetime) -> int:
     return int((now() - start).total_seconds() * 1000)

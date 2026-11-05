@@ -1,8 +1,9 @@
 import json
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, cast
 
 import typer
+from looker_sdk.sdk.api40.methods import Looker40SDK
 
 from lkr.auth_service import get_auth
 from lkr.classes import LkrCtxObj
@@ -28,7 +29,7 @@ group = typer.Typer(
 )
 
 
-def _get_sdk(ctx: typer.Context) -> Any:
+def _get_sdk(ctx: typer.Context) -> Looker40SDK:
     ctx_lkr = (
         ctx.obj.get("ctx_lkr")
         if (ctx and ctx.obj and "ctx_lkr" in ctx.obj)
@@ -42,10 +43,12 @@ def _load_explore_data(
     model: str,
     explore: str,
     explore_file: Path | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     if explore_file is not None:
         try:
-            return json.loads(explore_file.read_text(encoding="utf-8"))
+            return cast(
+                dict[str, object], json.loads(explore_file.read_text(encoding="utf-8"))
+            )
         except FileNotFoundError:
             logger.error(f"Explore file not found: {explore_file}")
             raise typer.Exit(1)
@@ -55,7 +58,10 @@ def _load_explore_data(
 
     from lkr.codemode.type import to_primitive
 
-    return to_primitive(_get_sdk(ctx).lookml_model_explore(model, explore))
+    return cast(
+        dict[str, object],
+        to_primitive(_get_sdk(ctx).lookml_model_explore(model, explore)),
+    )
 
 
 @group.command(name="generate")

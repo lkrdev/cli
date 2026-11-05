@@ -1,6 +1,6 @@
 # server.py
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated
 
 import duckdb
 from pydantic import BaseModel, Field, computed_field
@@ -11,7 +11,7 @@ from lkr.observability.classes import now
 
 class SpectaclesResponse(BaseModel):
     success: bool
-    result: Any | None = None
+    result: object | None = None
     error: str | None = None
     sql: str | None = None
     share_url: str | None = None

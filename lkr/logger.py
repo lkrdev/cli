@@ -1,8 +1,16 @@
 import logging
 import os
-from typing import Any
+from typing import Protocol, cast
 
 from lkr.custom_types import LogLevel
+
+
+class StructuredLogger(Protocol):
+    def debug(self, event: str, *args: object, **kw: object) -> object: ...
+    def info(self, event: str, *args: object, **kw: object) -> object: ...
+    def warning(self, event: str, *args: object, **kw: object) -> object: ...
+    def error(self, event: str, *args: object, **kw: object) -> object: ...
+
 
 STRUCT_LOG_AVAILABLE = True
 RICH_AVAILABLE = True
@@ -68,10 +76,10 @@ logging.basicConfig(
 
 # Create a logger for the application
 logger = logging.getLogger("lkr")
-structured_logger: Any = (
+structured_logger: StructuredLogger = (
     structlog.get_logger("lkr.structured")
     if STRUCT_LOG_AVAILABLE
-    else logging.getLogger("lkr.structured")
+    else cast(StructuredLogger, logging.getLogger("lkr.structured"))
 )
 
 
@@ -81,7 +89,7 @@ if log_level != "DEBUG" and requests_logger:
     requests_logger.setLevel(logging.WARNING)
 
 
-def set_log_level(level: LogLevel):
+def set_log_level(level: LogLevel) -> None:
     """Set the logging level for the application."""
     logger.setLevel(getattr(logging, level.value))
     if structured_logger:

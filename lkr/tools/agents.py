@@ -5,7 +5,7 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal, cast
 
 import requests
 import typer
@@ -46,15 +46,16 @@ def _discovery_engine_base_uri(location: str) -> str:
 
 def _get_agent_artifact(
     sdk: ExtendedLooker40SDK, agent_id: str
-) -> tuple[int | None, dict[str, Any]]:
+) -> tuple[int | None, dict[str, object]]:
     """Fetch existing artifact version and parsed payload for agent_id."""
-    default_doc: dict[str, Any] = {"agent_id": agent_id, "publications": {}}
+    default_doc: dict[str, object] = {"agent_id": agent_id, "publications": {}}
     try:
         items = sdk.artifact(namespace=ARTIFACT_NAMESPACE, key=agent_id) or []
         if not items:
             return None, default_doc
         item = items[0]
-        version = get(item, "version")
+        raw_version = get(item, "version")
+        version = raw_version if isinstance(raw_version, int) else None
         raw_val = get(item, "value")
         if raw_val:
             parsed = (
@@ -63,7 +64,7 @@ def _get_agent_artifact(
             if isinstance(parsed, dict):
                 parsed.setdefault("agent_id", agent_id)
                 parsed.setdefault("publications", {})
-                return version, parsed
+                return version, cast(dict[str, object], parsed)
         return version, default_doc
     except Exception as e:  # noqa: BLE001
         logger.debug(f"Artifact lookup notice for '{agent_id}': {e}")
@@ -80,7 +81,7 @@ def _upsert_agent_publication_artifact(
     engine_id: str | None,
     platform_agent_id: str | None = None,
     name: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Create or update the Looker Artifact tracking publications for agent_id."""
     version, doc = _get_agent_artifact(sdk, agent_id)
     proj = str(project_number).strip() if project_number else "default"
@@ -88,7 +89,15 @@ def _upsert_agent_publication_artifact(
     eng = str(engine_id).strip() if engine_id else "default"
     pub_key = f"{proj}:{loc}:{eng}"
 
-    existing_pub = doc["publications"].get(pub_key, {})
+    raw_pubs = doc.get("publications")
+    if not isinstance(raw_pubs, dict):
+        raw_pubs = {}
+        doc["publications"] = raw_pubs
+    pubs = cast(dict[str, dict[str, object]], raw_pubs)
+    raw_existing = pubs.get(pub_key)
+    existing_pub: dict[str, object] = (
+        raw_existing if isinstance(raw_existing, dict) else {}
+    )
     resolved_platform_id = platform_agent_id or existing_pub.get(
         "platform_agent_id"
     )
@@ -96,7 +105,7 @@ def _upsert_agent_publication_artifact(
     if resolved_name:
         doc["name"] = resolved_name
 
-    doc["publications"][pub_key] = {
+    pubs[pub_key] = {
         "ge_gcp_project_number": proj,
         "ge_gcp_location": loc,
         "ge_engine_id": eng,
@@ -119,7 +128,7 @@ def _upsert_agent_publication_artifact(
 
 def _fetch_looker_agents_map(
     sdk: ExtendedLooker40SDK,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, dict[str, str]]:
     """Call GET /api/4.0/agents/search and return a map keyed by Looker agent GUID."""
     try:
         agents = (
@@ -131,8 +140,8 @@ def _fetch_looker_agents_map(
         return {
             str(get(a, "id")): {
                 "id": str(get(a, "id")),
-                "name": get(a, "name") or "",
-                "updated_at": get(a, "updated_at") or "",
+                "name": str(get(a, "name") or ""),
+                "updated_at": str(get(a, "updated_at") or ""),
             }
             for a in agents
             if get(a, "id")
@@ -143,8 +152,8 @@ def _fetch_looker_agents_map(
 
 
 def _search_artifacts_source(
-    sdk: ExtendedLooker40SDK, looker_map: dict[str, dict[str, Any]]
-) -> list[dict[str, Any]]:
+    sdk: ExtendedLooker40SDK, looker_map: dict[str, dict[str, str]]
+) -> list[dict[str, object]]:
     """Source 1: Search Looker Artifacts in namespace lkr-dev-cli-tools-agents."""
     try:
         artifacts = (
@@ -154,7 +163,7 @@ def _search_artifacts_source(
         logger.debug(f"Could not search artifacts in {ARTIFACT_NAMESPACE}: {e}")
         return []
 
-    rows: list[dict[str, Any]] = []
+    rows: list[dict[str, object]] = []
     for art in artifacts:
         key = str(get(art, "key", ""))
         raw_val = get(art, "value")
@@ -206,10 +215,10 @@ def _search_discovery_engine(
     token: str,
     project_number: str,
     engine_ids: list[str],
-    looker_map: dict[str, dict[str, Any]],
+    looker_map: dict[str, dict[str, str]],
     location: str | None = None,
     checked_engines: set[tuple[str, str, str]] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Query Discovery Engine assistants.agents.list across GE apps."""
     locs = (location.strip().lower(),) if location else ("global", "us", "eu")
     headers = {
@@ -217,7 +226,7 @@ def _search_discovery_engine(
         "X-Goog-User-Project": project_number,
         "Content-Type": "application/json",
     }
-    found: list[dict[str, Any]] = []
+    found: list[dict[str, object]] = []
     norm_proj = str(project_number).strip()
 
     for eng_id in engine_ids:
@@ -236,7 +245,7 @@ def _search_discovery_engine(
             )
             page_token: str | None = None
             while True:
-                params: dict[str, Any] = {"pageSize": 100}
+                params: dict[str, str | int] = {"pageSize": 100}
                 if page_token:
                     params["pageToken"] = page_token
                 resp = requests.get(
@@ -266,7 +275,7 @@ def _search_discovery_engine(
                         continue
                     if not isinstance(card, dict):
                         continue
-                    match = LOOKER_A2A_URL_RE.match(card.get("url", ""))
+                    match = LOOKER_A2A_URL_RE.match(str(card.get("url") or ""))
                     if not match:
                         continue
                     guid = match.group("looker_agent_guid")
@@ -303,13 +312,13 @@ def _search_discovery_engine(
 
 def _search_looker_api(
     sdk: ExtendedLooker40SDK,
-    looker_map: dict[str, dict[str, Any]],
+    looker_map: dict[str, dict[str, str]],
     delay_seconds: float = 6.0,
     scan_all: bool = False,
     de_targets: set[tuple[str, str | None, str]] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Probe Looker's singleton GE config on 1 agent, or scan all agents when scan_all=True."""
-    found: list[dict[str, Any]] = []
+    found: list[dict[str, object]] = []
     items = list(looker_map.items())
     if not items:
         return found
@@ -329,7 +338,10 @@ def _search_looker_api(
                     break
                 continue
 
-            ge_meta = res.get("ge_agent_metadata") or {}
+            raw_ge_meta = res.get("ge_agent_metadata")
+            ge_meta: dict[str, object] = (
+                raw_ge_meta if isinstance(raw_ge_meta, dict) else {}
+            )
             singleton_proj = str(
                 ge_meta.get("ge_gcp_project_number") or ""
             ).strip()
@@ -393,11 +405,11 @@ def _search_looker_api(
 
 
 def dedupe_agent_publications(
-    records: list[dict[str, Any]],
+    records: list[dict[str, object]],
     checked_engines: set[tuple[str, str, str]] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Deduplicate and merge agent publication records across artifact, discovery_engine, and looker_api."""
-    merged: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    merged: dict[tuple[str, str, str, str], dict[str, object]] = {}
 
     for rec in records:
         agent_id = str(rec.get("agent_id") or "").strip()
@@ -424,15 +436,16 @@ def dedupe_agent_publications(
             }
         else:
             existing = merged[key]
-            if src not in existing["discovery_sources"]:
-                existing["discovery_sources"].append(src)
+            sources = cast(list[str], existing["discovery_sources"])
+            if src not in sources:
+                sources.append(src)
             if src in ("discovery_engine", "looker_api"):
                 if state == "published":
                     existing["state"] = "published"
                 elif (
                     state == "unpublished"
                     and existing.get("state") == "published"
-                    and "discovery_engine" not in existing["discovery_sources"]
+                    and "discovery_engine" not in sources
                 ):
                     existing["state"] = "unpublished"
                     existing["_reconciled_from_live"] = True
@@ -450,9 +463,10 @@ def dedupe_agent_publications(
 
     if checked_engines:
         for (_, proj, loc, eng), row in merged.items():
+            row_sources = cast(list[str], row["discovery_sources"])
             if (
                 row.get("state") == "published"
-                and "discovery_engine" not in row["discovery_sources"]
+                and "discovery_engine" not in row_sources
                 and (proj, loc, eng) in checked_engines
             ):
                 row["state"] = "unpublished"
@@ -468,7 +482,7 @@ def _delete_from_discovery_engine(
     engine_id: str | None,
     location: str | None = None,
     platform_agent_id: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     target_resource = (
         platform_agent_id.strip().lstrip("/") if platform_agent_id else None
     )
@@ -490,8 +504,9 @@ def _delete_from_discovery_engine(
             raise LookupError(
                 f"Agent '{agent_id}' not found in Gemini Enterprise engine '{engine_id}' (project '{project_number}')."
             )
-        target_resource = matches[0]["platform_agent_id"]
-        resolved_loc = matches[0].get("ge_gcp_location") or resolved_loc
+        target_resource = str(matches[0]["platform_agent_id"])
+        loc_val = matches[0].get("ge_gcp_location")
+        resolved_loc = str(loc_val) if loc_val else resolved_loc
 
     if not resolved_loc and target_resource:
         parts = target_resource.split("/")
@@ -626,15 +641,16 @@ def publish_agent_command(
             )
             raise typer.Exit(1) from e
         raise
-    meta = res.get("ge_agent_metadata") or {}
+    raw_meta = res.get("ge_agent_metadata")
+    meta: dict[str, object] = raw_meta if isinstance(raw_meta, dict) else {}
     _upsert_agent_publication_artifact(
         sdk,
         agent_id=agent_id,
-        state=res.get("state", "published"),
-        message=res.get("message", ""),
-        project_number=meta.get("ge_gcp_project_number") or project_number,
-        location=meta.get("ge_gcp_location") or loc,
-        engine_id=meta.get("ge_engine_id") or engine_id,
+        state=str(res.get("state") or "published"),
+        message=str(res.get("message") or ""),
+        project_number=str(meta.get("ge_gcp_project_number") or project_number or "") or None,
+        location=str(meta.get("ge_gcp_location") or loc or "") or None,
+        engine_id=str(meta.get("ge_engine_id") or engine_id or "") or None,
     )
     typer.echo(json.dumps(res, indent=2))
 
@@ -693,10 +709,15 @@ def delete_agent_command(
         project_number or engine_id or platform_agent_id
     )
     _, artifact_doc = _get_agent_artifact(sdk, agent_id)
-    publications: dict[str, Any] = artifact_doc.get("publications", {})
+    raw_pubs = artifact_doc.get("publications")
+    publications: dict[str, dict[str, object]] = (
+        cast(dict[str, dict[str, object]], raw_pubs)
+        if isinstance(raw_pubs, dict)
+        else {}
+    )
 
-    results: list[dict[str, Any]] = []
-    singleton_unpublish_meta: dict[str, Any] = {}
+    results: list[dict[str, object]] = []
+    singleton_unpublish_meta: dict[str, object] = {}
 
     if not has_explicit_ge_target:
         try:
@@ -704,22 +725,25 @@ def delete_agent_command(
         except Exception as e:
             logger.error(f"Failed to unpublish agent: {e}")
             raise typer.Exit(1) from e
-        singleton_meta = res.get("ge_agent_metadata") or {}
+        raw_s_meta = res.get("ge_agent_metadata")
+        singleton_meta: dict[str, object] = (
+            raw_s_meta if isinstance(raw_s_meta, dict) else {}
+        )
         if res.get("message") != "AGENT_NEVER_PUBLISHED":
             singleton_unpublish_meta = singleton_meta
             _upsert_agent_publication_artifact(
                 sdk,
                 agent_id=agent_id,
-                state=res.get("state", "unpublished"),
-                message=res.get("message", ""),
-                project_number=singleton_meta.get("ge_gcp_project_number"),
-                location=singleton_meta.get("ge_gcp_location"),
-                engine_id=singleton_meta.get("ge_engine_id"),
+                state=str(res.get("state") or "unpublished"),
+                message=str(res.get("message") or ""),
+                project_number=str(singleton_meta.get("ge_gcp_project_number") or "") or None,
+                location=str(singleton_meta.get("ge_gcp_location") or "") or None,
+                engine_id=str(singleton_meta.get("ge_engine_id") or "") or None,
             )
             results.append(res)
 
     if has_explicit_ge_target:
-        matched = next(
+        matched: dict[str, object] = next(
             (
                 pub
                 for pub in publications.values()
@@ -732,7 +756,7 @@ def delete_agent_command(
             ),
             {},
         )
-        targets_to_delete = [
+        targets_to_delete: list[dict[str, object]] = [
             {
                 "ge_gcp_project_number": project_number,
                 "ge_gcp_location": matched.get("ge_gcp_location"),
@@ -781,10 +805,10 @@ def delete_agent_command(
 
     try:
         for target in targets_to_delete:
-            t_proj = target.get("ge_gcp_project_number")
-            t_loc = target.get("ge_gcp_location")
-            t_eng = target.get("ge_engine_id")
-            t_plat = target.get("platform_agent_id")
+            t_proj = str(target["ge_gcp_project_number"]) if target.get("ge_gcp_project_number") else None
+            t_loc = str(target["ge_gcp_location"]) if target.get("ge_gcp_location") else None
+            t_eng = str(target["ge_engine_id"]) if target.get("ge_engine_id") else None
+            t_plat = str(target["platform_agent_id"]) if target.get("platform_agent_id") else None
             del_res = _delete_from_discovery_engine(
                 agent_id=agent_id,
                 token=token,
@@ -793,8 +817,9 @@ def delete_agent_command(
                 location=t_loc,
                 platform_agent_id=t_plat,
             )
-            resolved_loc = (
-                del_res.get("ge_agent_metadata", {}).get("ge_gcp_location")
+            del_meta = del_res.get("ge_agent_metadata")
+            resolved_loc = str(
+                (del_meta.get("ge_gcp_location") if isinstance(del_meta, dict) else None)
                 or t_loc
                 or "global"
             )
@@ -802,11 +827,11 @@ def delete_agent_command(
                 sdk,
                 agent_id=agent_id,
                 state="unpublished",
-                message=del_res["message"],
+                message=str(del_res.get("message") or ""),
                 project_number=t_proj,
                 location=resolved_loc,
                 engine_id=t_eng,
-                platform_agent_id=del_res.get("platform_agent_id"),
+                platform_agent_id=str(del_res["platform_agent_id"]) if del_res.get("platform_agent_id") else None,
             )
             results.append(del_res)
         typer.echo(
@@ -941,7 +966,8 @@ def list_agent_artifacts_command(
         reconciled = bool(row.pop("_reconciled_from_live", False))
         if not update_artifact:
             continue
-        sources = row.get("discovery_sources") or []
+        raw_sources = row.get("discovery_sources")
+        sources = raw_sources if isinstance(raw_sources, list) else []
         live_discovered = (
             "discovery_engine" in sources or "looker_api" in sources
         )
@@ -951,18 +977,18 @@ def list_agent_artifacts_command(
             try:
                 _upsert_agent_publication_artifact(
                     sdk,
-                    agent_id=row["agent_id"],
-                    state=row["state"],
+                    agent_id=str(row["agent_id"]),
+                    state=str(row["state"]),
                     message=(
                         "Synced from live discovery (not found in Gemini Enterprise)"
                         if reconciled and row.get("state") == "unpublished"
                         else "Synced from live discovery"
                     ),
-                    project_number=row["ge_gcp_project_number"],
-                    location=row["ge_gcp_location"],
-                    engine_id=row["ge_engine_id"],
-                    platform_agent_id=row.get("platform_agent_id"),
-                    name=row.get("name"),
+                    project_number=str(row["ge_gcp_project_number"]),
+                    location=str(row["ge_gcp_location"]),
+                    engine_id=str(row["ge_engine_id"]),
+                    platform_agent_id=str(row["platform_agent_id"]) if row.get("platform_agent_id") else None,
+                    name=str(row["name"]) if row.get("name") else None,
                 )
             except Exception as e:  # noqa: BLE001
                 logger.debug(
@@ -980,13 +1006,15 @@ def list_agent_artifacts_command(
     for i, r in enumerate(deduped):
         if i:
             typer.echo("-" * 40)
+        r_sources = r.get("discovery_sources")
+        r_sources_list = [str(s) for s in r_sources] if isinstance(r_sources, list) else []
         typer.echo(f"Agent ID:   {r['agent_id']}")
         typer.echo(f"Name:       {r.get('name') or ''}")
         typer.echo(f"Project:    {r['ge_gcp_project_number']}")
         typer.echo(f"Location:   {r['ge_gcp_location']}")
         typer.echo(f"Engine ID:  {r['ge_engine_id']}")
         typer.echo(f"State:      {r['state']}")
-        typer.echo(f"Sources:    {','.join(r.get('discovery_sources') or [])}")
+        typer.echo(f"Sources:    {','.join(r_sources_list)}")
         typer.echo(f"Updated At: {r['updated_at']}")
 
 
@@ -1059,13 +1087,22 @@ def card_agent_command(
         logger.error("Could not determine Looker base URL. Pass lkr --base-url <url> ...")
         raise typer.Exit(1)
 
-    resolved_name = (name or get(agent, "name") or f"Looker Agent {agent_id}").strip()
-    resolved_desc = (description or get(agent, "description") or f"Looker CA agent ({agent_id})").strip()
-    src_tags = (str(get(s, k) or "").strip() for s in (get(agent, "sources") or []) for k in ("model", "explore"))
+    resolved_name = str(name or get(agent, "name") or f"Looker Agent {agent_id}").strip()
+    resolved_desc = str(description or get(agent, "description") or f"Looker CA agent ({agent_id})").strip()
+    raw_sources = get(agent, "sources")
+    sources_list = raw_sources if isinstance(raw_sources, list) else []
+    src_tags = (str(get(s, k) or "").strip() for s in sources_list for k in ("model", "explore"))
     tags = list(dict.fromkeys(["looker", "conversational-analytics", *(t for t in src_tags if t)]))
-    qs = (str(q).strip() for gq in (get(agent, "golden_queries") or []) if get(gq, "is_active") is not False for q in (get(gq, "questions") or []))
+    raw_gqs = get(agent, "golden_queries")
+    gqs_list = raw_gqs if isinstance(raw_gqs, list) else []
+    qs = (
+        str(q).strip()
+        for gq in gqs_list
+        if get(gq, "is_active") is not False and isinstance(raw_q := get(gq, "questions"), list)
+        for q in raw_q
+    )
     examples = list(dict.fromkeys(q for q in qs if q))
-    base_skill: dict[str, Any] = {
+    base_skill: dict[str, object] = {
         "id": re.sub(r"[^a-z0-9]+", "-", resolved_name.lower()).strip("-") or "looker-ca-agent",
         "name": resolved_name,
         "description": resolved_desc,
@@ -1123,7 +1160,7 @@ def card_agent_command(
         skills = [{**base_skill, "description": skill_desc}]
 
     # Omit /chat: /api/4.0/a2a/agents/<id> serves open A2A 0.3.0 JSON-RPC + SSE.
-    card: dict[str, Any] = {
+    card: dict[str, object] = {
         "protocolVersion": "0.3.0",
         "name": resolved_name,
         "description": resolved_desc,

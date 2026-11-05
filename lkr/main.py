@@ -30,7 +30,12 @@ app.add_typer(schema_group, name="schema")
 IMPORT_ERROR = None
 
 
-def add_optional_typer_group(app, import_path, group_name, extra_message=None):
+def add_optional_typer_group(
+    app: typer.Typer,
+    import_path: str,
+    group_name: str,
+    extra_message: str | None = None,
+) -> None:
     try:
         module_path, attr = import_path.rsplit(".", 1)
         mod = __import__(module_path, fromlist=[attr])
@@ -47,7 +52,7 @@ def add_optional_typer_group(app, import_path, group_name, extra_message=None):
                 "ignore_unknown_options": True,
             },
         )
-        def fallback():
+        def fallback() -> None:
             msg = f"{group_name} tools (dependencies not available, try installing optional dependencies: lkr-dev-cli\\[{group_name}])"
             if extra_message:
                 msg += f" {extra_message}"
@@ -63,7 +68,7 @@ add_optional_typer_group(app, "lkr.codemode.main.group", "code-mode")
 add_optional_typer_group(app, "lkr.parse.main.group", "parse")
 
 
-def version_callback(value: bool):
+def version_callback(value: bool) -> None:
     if value:
         import importlib.metadata
 
@@ -107,7 +112,7 @@ def callback(
             help="OAuth account to lookup in DB and use regardless of what's active",
         ),
     ] = None,
-):
+) -> None:
     if client_id:
         os.environ["LOOKERSDK_CLIENT_ID"] = client_id
         logger.debug("Set LOOKERSDK_CLIENT_ID from command line")

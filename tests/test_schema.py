@@ -1,40 +1,41 @@
+import copy
 import json
 import re
 from pathlib import Path
+from typing import Any
 
+import pytest
 from typer.testing import CliRunner
 
+import lkr.schema as _schema
+import lkr.schema.builder as _builder
+import lkr.schema.dynamic_fields as _dyn_fields
+import lkr.schema.fields as _fields
+import lkr.schema.filter_expressions as _filter_exprs
 from lkr.main import app
-from lkr.schema import (
-    build_explore_query_schema,
-    build_schema_context,
-    execute_looker_query,
-    validate_merge_query,
-    validate_query,
-)
-from lkr.schema.builder import build_query_body_schema
-from lkr.schema.dynamic_fields import (
-    build_custom_dimension_schema,
-    build_custom_measure_schema,
-    build_dynamic_fields_schema,
-    build_table_calculation_schema,
-)
-from lkr.schema.fields import (
-    build_fields_schema,
-    build_fill_fields_schema,
-    build_pivots_schema,
-    build_sorts_schema,
-    build_subtotals_schema,
-    extract_visible_explore_fields,
-    is_visible_field,
-)
-from lkr.schema.filter_expressions import (
-    FILTER_EXPRESSION_DEFS,
-    build_filter_property_schema,
-    build_filters_schema,
-    classify_filter_expression_ref,
-    extract_enum_values,
-)
+
+build_explore_query_schema: Any = _schema.build_explore_query_schema
+build_schema_context: Any = _schema.build_schema_context
+execute_looker_query: Any = _schema.execute_looker_query
+validate_merge_query: Any = _schema.validate_merge_query
+validate_query: Any = _schema.validate_query
+build_query_body_schema: Any = _builder.build_query_body_schema
+build_custom_dimension_schema: Any = _dyn_fields.build_custom_dimension_schema
+build_custom_measure_schema: Any = _dyn_fields.build_custom_measure_schema
+build_dynamic_fields_schema: Any = _dyn_fields.build_dynamic_fields_schema
+build_table_calculation_schema: Any = _dyn_fields.build_table_calculation_schema
+build_fields_schema: Any = _fields.build_fields_schema
+build_fill_fields_schema: Any = _fields.build_fill_fields_schema
+build_pivots_schema: Any = _fields.build_pivots_schema
+build_sorts_schema: Any = _fields.build_sorts_schema
+build_subtotals_schema: Any = _fields.build_subtotals_schema
+extract_visible_explore_fields: Any = _fields.extract_visible_explore_fields
+is_visible_field: Any = _fields.is_visible_field
+FILTER_EXPRESSION_DEFS: Any = _filter_exprs.FILTER_EXPRESSION_DEFS
+build_filter_property_schema: Any = _filter_exprs.build_filter_property_schema
+build_filters_schema: Any = _filter_exprs.build_filters_schema
+classify_filter_expression_ref: Any = _filter_exprs.classify_filter_expression_ref
+extract_enum_values: Any = _filter_exprs.extract_enum_values
 
 runner = CliRunner()
 
@@ -516,7 +517,7 @@ def test_history_pipeline_and_real_queries() -> None:
 
     # 2. Verify resolve_history_queries with a mock SDK
     class FakeSDK:
-        def query_for_slug(self, slug: str) -> dict:
+        def query_for_slug(self, slug: str) -> dict[str, object]:
             return {
                 "model": "system__activity",
                 "view": "history",
@@ -537,7 +538,7 @@ def test_history_pipeline_and_real_queries() -> None:
                 ]
             )
 
-        def query(self, slug: str) -> dict:
+        def query(self, slug: str) -> dict[str, object]:
             assert slug == "slug_142769"
             return {
                 "id": 142769,
@@ -582,7 +583,10 @@ def test_history_pipeline_and_real_queries() -> None:
 
 
 def test_rust_validator_and_batch() -> None:
-    from lkr.schema.validator import get_rust_validator, validate_batch_queries
+    import lkr.schema.validator as _val
+
+    get_rust_validator: Any = _val.get_rust_validator
+    validate_batch_queries: Any = _val.validate_batch_queries
 
     schema = build_explore_query_schema("thelook", "order_items", MOCK_EXPLORE)
     rust_val = get_rust_validator(schema)
@@ -1186,18 +1190,157 @@ def test_validate_merge_query_and_execute_looker_query():
         ],
         "join_type": "left",
         "sorts": ["order_items.total_sale_price desc"],
-        "limit": "5",
+        "limit": 5,
+        "column_limit": 50,
+        "total": True,
+        "vis_config": {"type": "looker_column", "advanced_vis_config": "{chart: {}}"},
     }
     merge_res = validate_merge_query(merge_payload, "thelook", explores_map)
     assert merge_res.valid is True, merge_res.errors
     norm = merge_res.normalized_query
     assert norm is not None
+    assert norm["limit"] == "5" and norm["column_limit"] == "50"
+    assert norm["total"] is True
+    assert all(sq["query"].get("total") is True for sq in norm["source_queries"])
     assert norm["source_queries"][1]["merge_fields"] == [
         {"source_field_name": "products.category", "field_name": "products.category"}
     ]
 
-    # 3. Execute single and merged queries via mock SDK
-    class FakeSDK:
+    # 3. Mode 1: Zero queries raises ValueError; single query calls run_inline_query("json", ...)
+    for empty_spec in ({}, {"body": {}}, {"source_queries": []}):
+        with pytest.raises(ValueError, match="At least one query"):
+            execute_looker_query(object(), empty_spec)
+
+    # Validation inside execute_looker_query when explores_data is provided
+    with pytest.raises(ValueError, match="unknown"):
+        execute_looker_query(
+            object(),
+            {"model": "thelook", "view": "order_items", "fields": ["order_items.unknown_field"]},
+            explores_data=explores_map,
+        )
+
+    # 4. Mode 2, 3, & 4: SQL Runner CTE merge (no final TCs vs. with final TCs via sql__{slug})
+    class SqlRunnerSDK:
+        def __init__(self) -> None:
+            self.created_sql: list[dict[str, Any]] = []
+            self.inline_calls: list[tuple[str, dict[str, Any]]] = []
+            self.fail_model_create = False
+
+        def lookml_model_explore(self, model_name, explore_name, fields=None):
+            return {"connection_name": "bq_conn"}
+
+        def create_sql_query(self, body):
+            if self.fail_model_create and "model_name" in body:
+                raise RuntimeError("Model has errors")
+            self.created_sql.append(body)
+            return {"slug": "slug123"}
+
+        def run_sql_query(self, slug, result_format):
+            assert slug == "slug123" and result_format == "json"
+            return json.dumps([
+                {
+                    "products_category": "Accessories",
+                    "order_items_total_sale_price": 300.0,
+                    "inventory_items_count": 50,
+                },
+                {
+                    "products_category": "Jeans",
+                    "order_items_total_sale_price": 120.0,
+                    "inventory_items_count": None,
+                },
+            ])
+
+        def run_inline_query(self, result_format, body, limit=None):
+            self.inline_calls.append((result_format, body))
+            if result_format == "sql":
+                if body["view"] == "order_items":
+                    return "SELECT products.category AS products_category, SUM(sale_price) AS order_items_total_sale_price FROM orders GROUP BY 1 LIMIT 100000;"
+                return "SELECT products.category AS products_category, COUNT(*) AS inventory_items_count FROM inv GROUP BY 1 LIMIT 500;"
+            if body.get("model") == "sql__slug123":
+                assert body["view"] == "sql_runner_query"
+                return json.dumps([
+                    {
+                        "sql_runner_query.products_category": "Accessories",
+                        "sql_runner_query.order_items_total_sale_price": 300.0,
+                        "sql_runner_query.inventory_items_count": 50,
+                        "rev_per_unit": 6.0,
+                    }
+                ])
+            if body["view"] == "order_items":
+                return json.dumps([
+                    {"products.category": "Jeans", "order_items.total_sale_price": 120.0},
+                    {"products.category": "Accessories", "order_items.total_sale_price": 300.0},
+                ])
+            return json.dumps([
+                {"products.category": "Accessories", "inventory_items.count": 50},
+            ])
+
+    sql_sdk = SqlRunnerSDK()
+
+    # Single query (direct & 1-element source_queries)
+    assert len(execute_looker_query(sql_sdk, single_res.normalized_query, explores_data=explores_map)) == 1
+    assert len(execute_looker_query(sql_sdk, {"source_queries": [single_res.normalized_query]})) == 1
+
+    # Mode 2 + 3: Multi-query CTE generation, -1 LIMIT 100000 stripping, source-query TC warning, SQL Runner execution
+    spec_with_src_tc = copy.deepcopy(norm)
+    spec_with_src_tc["source_queries"][0]["query"]["limit"] = "-1"
+    spec_with_src_tc["source_queries"][0]["query"]["dynamic_fields"] = json.dumps([
+        {"dimension": "custom_cat", "expression": "${products.category}"},
+        {"table_calculation": "ignored_src_tc", "expression": "${order_items.total_sale_price} * 2"},
+    ])
+    spec_with_src_tc["source_queries"][0]["query"]["fields"].append("ignored_src_tc")
+    spec_with_src_tc["source_queries"][0]["query"]["sorts"] = ["ignored_src_tc desc"]
+
+    with pytest.warns(UserWarning, match="Table calculations on source queries are ignored"):
+        cte_rows = execute_looker_query(sql_sdk, spec_with_src_tc)
+
+    assert len(cte_rows) == 2
+    assert cte_rows[0] == {
+        "products.category": "Accessories",
+        "order_items.total_sale_price": 300.0,
+        "inventory_items.count": 50,
+    }
+    gen_sql = sql_sdk.created_sql[-1]["sql"]
+    assert "WITH cte_0 AS (" in gen_sql
+    assert "LIMIT 100000" not in gen_sql  # Stripped on limit="-1"
+    assert "LIMIT 500" in gen_sql  # Preserved oncte_1 without -1 limit
+    assert "LEFT JOIN cte_1 ON cte_0.products_category = cte_1.products_category" in gen_sql
+    assert "ORDER BY order_items_total_sale_price DESC" in gen_sql
+    assert "LIMIT 5" in gen_sql
+
+    # Mode 4: Top-level table calculations on final select -> sql__{slug} / sql_runner_query Explore query
+    sql_sdk.fail_model_create = True  # Also exercises lookml_model_explore connection_name fallback
+    spec_final_tc = {
+        **norm,
+        "fields": ["products.category", "order_items.total_sale_price"],
+        "table_calculations": [
+            {
+                "name": "rev_per_unit",
+                "expression": "${order_items.total_sale_price} / ${inventory_items.count:total}",
+                "based_on": "order_items.total_sale_price",
+                "args": ["inventory_items.count"],
+            }
+        ],
+        "sorts": ["order_items.total_sale_price desc", "rev_per_unit desc"],
+    }
+    tc_rows = execute_looker_query(sql_sdk, spec_final_tc, explores_data=explores_map)
+    assert tc_rows == [
+        {
+            "products.category": "Accessories",
+            "order_items.total_sale_price": 300.0,
+            "inventory_items.count": 50,
+            "rev_per_unit": 6.0,
+        }
+    ]
+    _, sql_explore_body = sql_sdk.inline_calls[-1]
+    assert sql_explore_body["model"] == "sql__slug123"
+    assert sql_explore_body["view"] == "sql_runner_query"
+    assert sql_explore_body["total"] is True
+    assert "${sql_runner_query.order_items_total_sale_price} / ${sql_runner_query.inventory_items_count:total}" in sql_explore_body["dynamic_fields"]
+    assert sql_explore_body["sorts"] == ["sql_runner_query.order_items_total_sale_price desc", "rev_per_unit desc"]
+
+    # 5. Fallback when user lacks SQL Runner permissions: warns about row limits & unprocessed table calculations
+    class NoSqlRunnerPermissionsSDK:
         def run_inline_query(self, result_format, body, limit=None):
             view = body["view"]
             if view == "order_items":
@@ -1209,24 +1352,33 @@ def test_validate_merge_query_and_execute_looker_query():
                 {"products.category": "Accessories", "inventory_items.count": 50},
             ])
 
-    sdk = FakeSDK()
-    rows = execute_looker_query(sdk, norm)
+    sdk = NoSqlRunnerPermissionsSDK()
+    with pytest.warns(UserWarning, match="falling back to Python merge with source query row limits applied"):
+        rows = execute_looker_query(sdk, norm, explores_data=explores_map)
     assert len(rows) == 2
     assert rows[0]["products.category"] == "Accessories"
     assert rows[0]["inventory_items.count"] == 50
     assert rows[1]["products.category"] == "Jeans"
     assert rows[1]["inventory_items.count"] is None
 
-    # Inner join + limit 1 and unlimited (-1)
-    norm_inner = {**norm, "join_type": "inner", "limit": "1"}
-    rows_inner = execute_looker_query(sdk, norm_inner)
+    with pytest.warns(UserWarning) as rec_warns:
+        rows_inner = execute_looker_query(
+            sdk,
+            {
+                **norm,
+                "join_type": "inner",
+                "limit": "1",
+                "dynamic_fields": [{"table_calculation": "tc_ignored", "expression": "${order_items.total_sale_price} * 2"}],
+            },
+            explores_data=explores_map,
+        )
+    warn_msgs = [str(w.message) for w in rec_warns]
+    assert any("row limits applied" in m for m in warn_msgs)
+    assert any("cannot process table calculations" in m for m in warn_msgs)
     assert len(rows_inner) == 1
     assert rows_inner[0]["products.category"] == "Accessories"
-    assert len(execute_looker_query(sdk, {**norm, "limit": "-1"})) == 2
-
-    # Single query execution
-    single_rows = execute_looker_query(sdk, single_res.normalized_query)
-    assert len(single_rows) == 1
+    with pytest.warns(UserWarning, match="row limits applied"):
+        assert len(execute_looker_query(sdk, {**norm, "limit": "-1"})) == 2
 
     # Invalid merge query cases
     bad_merge = validate_merge_query(

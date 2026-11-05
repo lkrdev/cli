@@ -26,6 +26,11 @@ repos:
         entry: uv run --frozen --extra all ty check
         language: system
         pass_filenames: false
+      - id: no-plain-dict
+        name: check no plain dict annotations
+        entry: uv run --frozen --extra all pytest tests/test_type_annotations.py --no-cov -q
+        language: system
+        pass_filenames: false
       - id: test-and-coverage
         name: pytest & rust coverage
         entry: make coverage

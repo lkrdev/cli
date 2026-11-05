@@ -1,5 +1,4 @@
 import warnings
-from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -85,7 +84,7 @@ class GenerateLookMLWithNewFilesResponse(BaseModel):
     """Response body for generate_lookml_with_new_files SDK method."""
 
     generate_lookml: str = Field(..., description="The API response from generating LookML, typically an empty string on success.")
-    new_files: list[Any] = Field(..., description="List of newly created files.")
+    new_files: list[object] = Field(..., description="List of newly created files.")
 
 
 class ProjectCommitRequest(BaseModel):
@@ -115,7 +114,7 @@ class GeminiEnterpriseAgentRequest(BaseModel):
 
     @field_validator("ge_gcp_project_number", mode="before")
     @classmethod
-    def _validate_project_number(cls, v: Any) -> str | None:
+    def _validate_project_number(cls, v: object) -> str | None:
         if v is None:
             return None
         s = str(v).strip()

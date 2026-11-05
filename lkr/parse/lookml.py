@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Annotated, Any, Self
+from typing import Annotated, Self
 
 import nodejs_wheel
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PrivateAttr
@@ -75,23 +75,23 @@ class LookmlViewPositions(LookmlPosition):
     type_: LookmlPosition | None = Field(default=None, alias="$type")
     name_: LookmlPosition | None = Field(default=None, alias="$name")
     sql_table_name: LookmlPosition | None = None
-    drill_fields: dict[str, Any] | LookmlPosition | None = None
-    set: dict[str, Any] | LookmlPosition | None = None
-    dimension: dict[str, Any] | LookmlPosition | None = None
-    dimension_group: dict[str, Any] | LookmlPosition | None = None
-    measure: dict[str, Any] | LookmlPosition | None = None
-    derived_table: dict[str, Any] | LookmlPosition | None = None
+    drill_fields: dict[str, object] | LookmlPosition | None = None
+    set: dict[str, object] | LookmlPosition | None = None
+    dimension: dict[str, object] | LookmlPosition | None = None
+    dimension_group: dict[str, object] | LookmlPosition | None = None
+    measure: dict[str, object] | LookmlPosition | None = None
+    derived_table: dict[str, object] | LookmlPosition | None = None
 
 
 class LookmlPositions(_LookmlBase):
-    file: dict[str, Any] = Field(default_factory=dict)
-    model: dict[str, Any] = Field(default_factory=dict)
+    file: dict[str, object] = Field(default_factory=dict)
+    model: dict[str, object] = Field(default_factory=dict)
 
 
 class LookmlParserValues(_LookmlBase):
     name_: str | None = Field(default=None, alias="$name")
     type_: str | None = Field(default=None, alias="$type")
-    strings_: Any = Field(default=None, alias="$strings")
+    strings_: object = Field(default=None, alias="$strings")
 
 
 class LookmlFileAttributes(LookmlParserValues):
@@ -117,17 +117,19 @@ class LookmlActionParam(_LookmlBase):
     required: bool | None = None
     default: str | None = None
     type: str | None = None
-    option: LookmlActionOption | list[LookmlActionOption] | dict[str, Any] | None = None
+    option: (
+        LookmlActionOption | list[LookmlActionOption] | dict[str, object] | None
+    ) = None
 
 
 class LookmlAction(_LookmlBase):
     label: str | None = None
     url: str | None = None
     icon_url: str | None = None
-    param: LookmlActionParam | list[LookmlActionParam] | dict[str, Any] | None = None
-    form_param: LookmlActionParam | list[LookmlActionParam] | dict[str, Any] | None = (
-        None
-    )
+    param: LookmlActionParam | list[LookmlActionParam] | dict[str, object] | None = None
+    form_param: (
+        LookmlActionParam | list[LookmlActionParam] | dict[str, object] | None
+    ) = None
 
 
 class LookmlCaseWhen(_LookmlBase):
@@ -137,7 +139,7 @@ class LookmlCaseWhen(_LookmlBase):
 
 class LookmlCase(LookmlParserValues):
     when: LookmlCaseWhen | list[LookmlCaseWhen] | None = None
-    else_: str | dict[str, Any] | None = Field(default=None, alias="else")
+    else_: str | dict[str, object] | None = Field(default=None, alias="else")
 
 
 class LookmlAllowedValue(_LookmlBase):
@@ -197,7 +199,7 @@ class LookmlFieldProperties(LookmlParserValues):
 class LookmlParameter(LookmlFieldProperties):
     type: str | None = None
     allowed_value: (
-        LookmlAllowedValue | list[LookmlAllowedValue] | dict[str, Any] | None
+        LookmlAllowedValue | list[LookmlAllowedValue] | dict[str, object] | None
     ) = None
     sql: str | None = None
 
@@ -221,7 +223,7 @@ class LookmlFilter(LookmlFieldProperties):
 
 class LookmlDimension(LookmlFieldProperties):
     action: LookmlAction | list[LookmlAction] | None = None
-    bins: list[Any] | None = None
+    bins: list[int | float | str] | None = None
     drill_fields: list[str | None] | None = None
     link: LookmlLink | list[LookmlLink] | None = None
     sql_end: str | None = None
@@ -229,8 +231,8 @@ class LookmlDimension(LookmlFieldProperties):
     sql_longitude: str | None = None
     sql_start: str | None = None
     sql: str | None = None
-    tier: str | list[Any] | None = None
-    tiers: list[Any] | None = None
+    tier: str | list[int | float | str] | None = None
+    tiers: list[int | float | str] | None = None
     type: str | None = None
     value_format: str | None = None
 
@@ -281,8 +283,8 @@ class LookmlMeasure(LookmlFieldProperties):
     drill_fields: list[str | None] | None = None
     filters: (
         LookmlFilter
-        | list[LookmlFilter | dict[str, Any] | None]
-        | dict[str, Any]
+        | list[LookmlFilter | dict[str, object] | None]
+        | dict[str, object]
         | None
     ) = None
     link: LookmlLink | list[LookmlLink] | None = None
@@ -340,8 +342,8 @@ class LookmlJoin(LookmlParserValues):
 
 
 class LookmlAggregateTable(LookmlParserValues):
-    query: dict[str, Any] | list[dict[str, Any] | None] | None = None
-    materialization: dict[str, Any] | list[dict[str, Any] | None] | None = None
+    query: dict[str, object] | list[dict[str, object] | None] | None = None
+    materialization: dict[str, object] | list[dict[str, object] | None] | None = None
 
 
 class LookmlExploreSourceColumn(LookmlParserValues):
@@ -369,12 +371,12 @@ class LookmlExploreSource(LookmlParserValues):
     bind_all_filters: bool | None = None
     filters: (
         LookmlFilter
-        | list[LookmlFilter | dict[str, Any] | None]
-        | dict[str, Any]
+        | list[LookmlFilter | dict[str, object] | None]
+        | dict[str, object]
         | None
     ) = None
-    sort: list[dict[str, Any]] | dict[str, Any] | None = None
-    sorts: list[dict[str, Any]] | dict[str, Any] | None = None
+    sort: list[dict[str, object]] | dict[str, object] | None = None
+    sorts: list[dict[str, object]] | dict[str, object] | None = None
     expression_custom_filter: str | None = None
     limit: int | str | None = None
     timezone: str | None = None
@@ -393,7 +395,7 @@ class LookmlTest(LookmlParserValues):
 
 class LookmlDerivedTable(_LookmlBase):
     cluster_keys: list[str] | None = None
-    create_process: dict[str, Any] | None = None
+    create_process: dict[str, object] | None = None
     datagroup_trigger: str | None = None
     distribution: str | None = None
     distribution_style: str | None = None
@@ -409,15 +411,15 @@ class LookmlDerivedTable(_LookmlBase):
     publish_as_db_view: bool | None = None
     sortkeys: list[str] | None = None
     sql: str | None = None
-    sql_create: str | dict[str, Any] | None = None
+    sql_create: str | dict[str, object] | None = None
     sql_trigger_value: str | None = None
     table_compression: str | None = None
     table_format: str | None = None
 
 
 class LookmlView(LookmlParserValues):
-    access_filter: dict[str, Any] | list[dict[str, Any] | None] | None = None
-    derived_table: LookmlDerivedTable | dict[str, Any] | None = None
+    access_filter: dict[str, object] | list[dict[str, object] | None] | None = None
+    derived_table: LookmlDerivedTable | dict[str, object] | None = None
     description: str | None = None
     dimension_group: dict[str, LookmlDimensionGroup] | None = None
     dimension: dict[str, LookmlDimension] | None = None
@@ -472,11 +474,11 @@ class LookmlExplore(LookmlParserValues):
     group_label: str | None = None
     hidden: bool | None = None
     label: str | None = None
-    query: dict[str, Any] | list[dict[str, Any] | None] | None = None
+    query: dict[str, object] | list[dict[str, object] | None] | None = None
     view_label: str | None = None
-    access_filter: dict[str, Any] | list[dict[str, Any] | None] | None = None
-    always_filter: dict[str, Any] | None = None
-    conditionally_filter: dict[str, Any] | None = None
+    access_filter: dict[str, object] | list[dict[str, object] | None] | None = None
+    always_filter: dict[str, object] | None = None
+    conditionally_filter: dict[str, object] | None = None
     case_sensitive: bool | None = None
     sql_always_having: str | None = None
     sql_always_where: str | None = None
@@ -531,7 +533,7 @@ class LookmlLocalizationSettings(_LookmlBase):
 
 class LookmlManifest(LookmlFileAttributes):
     project_name: str | None = None
-    application: Any = None
+    application: object = None
     includes: list[str] | None = None
     timezone: str | None = None
     constant: dict[str, LookmlConstant] | None = None
@@ -550,7 +552,7 @@ class LookmlManifest(LookmlFileAttributes):
     visualization: list[LookmlVisualization] | dict[str, LookmlVisualization] | None = (
         None
     )
-    localization_settings: LookmlLocalizationSettings | dict[str, Any] | None = None
+    localization_settings: LookmlLocalizationSettings | dict[str, object] | None = None
 
 
 class LookmlDashboard(LookmlFileAttributes):
@@ -633,14 +635,14 @@ class LookmlFile(_LookmlBase):
 
 
 class LookmlError(LookmlFileAttributes):
-    error: dict[str, Any] | None = None
+    error: dict[str, object] | None = None
     message: str | None = None
     code: int | str | None = None
 
 
 class LookmlProject(_LookmlBase):
     errors: list[LookmlError] | None = None
-    file: LookmlFile | dict[str, Any] | None = None
+    file: LookmlFile | dict[str, object] | None = None
     model: dict[str, LookmlModel] | None = None
     manifest: LookmlManifest | None = None
     positions: LookmlPositions | None = None
@@ -713,7 +715,7 @@ def parse_lookml(
         raise ValueError("Specify exactly one of 'path', 'file', or 'lookml'")
 
     mod_dir = _ensure_lookml_parser()
-    opts: dict[str, Any] = {}
+    opts: dict[str, object] = {}
     if constants:
         opts["constants"] = {str(k): str(v) for k, v in constants.items()}
 

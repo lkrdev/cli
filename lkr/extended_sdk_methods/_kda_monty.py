@@ -1,7 +1,9 @@
 import json
+import warnings
 from typing import Any
 
 from lkr.codemode.type import to_primitive
+from lkr.logger import logger
 
 query: Any = None
 query_for_slug: Any = None
@@ -12,15 +14,26 @@ get_conversation: Any = None
 all_conversation_messages: Any = None
 lookml_model_explore: Any = None
 run_inline_query: Any = None
+create_sql_query: Any = None
+run_sql_query: Any = None
 _raw_run_key_driver_analysis: Any = None
+
+
+def _warn_sdk_query(msg: str) -> None:
+    warnings.warn(msg, UserWarning, stacklevel=3)
+    logger.warning(msg)
 
 
 def _bind_sdk(sdk: Any, transport_options: Any = None) -> None:
     global query, query_for_slug, merge_query, dashboard, look
     global get_conversation, all_conversation_messages, lookml_model_explore
-    global run_inline_query, _raw_run_key_driver_analysis
+    global run_inline_query, create_sql_query, run_sql_query, _raw_run_key_driver_analysis
 
-    def _wrap(fn: Any) -> Any:
+    def _wrap(attr: str) -> Any:
+        fn = getattr(sdk, attr, None)
+        if fn is None:
+            return None
+
         def _inner(*a: Any, **kw: Any) -> Any:
             if transport_options is not None and "transport_options" not in kw:
                 kw["transport_options"] = transport_options
@@ -28,20 +41,24 @@ def _bind_sdk(sdk: Any, transport_options: Any = None) -> None:
 
         return _inner
 
-    query = _wrap(sdk.query)
-    query_for_slug = _wrap(sdk.query_for_slug)
-    merge_query = _wrap(sdk.merge_query)
-    dashboard = _wrap(sdk.dashboard)
-    look = _wrap(sdk.look)
-    get_conversation = _wrap(sdk.get_conversation)
-    all_conversation_messages = _wrap(sdk.all_conversation_messages)
-    lookml_model_explore = _wrap(sdk.lookml_model_explore)
+    query = _wrap("query")
+    query_for_slug = _wrap("query_for_slug")
+    merge_query = _wrap("merge_query")
+    dashboard = _wrap("dashboard")
+    look = _wrap("look")
+    get_conversation = _wrap("get_conversation")
+    all_conversation_messages = _wrap("all_conversation_messages")
+    lookml_model_explore = _wrap("lookml_model_explore")
+    create_sql_query = _wrap("create_sql_query")
+    run_sql_query = _wrap("run_sql_query")
 
     def _run_inline(result_format: str, body: Any, **kw: Any) -> Any:
         if transport_options is not None and "transport_options" not in kw:
             kw["transport_options"] = transport_options
         raw = sdk.run_inline_query(result_format, body, **kw)
         if isinstance(raw, str):
+            if result_format != "json":
+                return raw
             s = raw.strip()
             return json.loads(s) if s else []
         return to_primitive(raw)
@@ -1324,3 +1341,338 @@ def run_key_driver_analysis(body=None, transport_options=None):
         baseline_filters=baseline,
         breach_filters=breach,
     )
+
+
+def _json_dumps(v):
+    if v is None or isinstance(v, bool):
+        return "null" if v is None else ("true" if v else "false")
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, str):
+        esc = v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+        return f'"{esc}"'
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(_json_dumps(x) for x in v) + "]"
+    if isinstance(v, dict):
+        return "{" + ", ".join(f"{_json_dumps(str(k))}: {_json_dumps(val)}" for k, val in v.items()) + "}"
+    return _json_dumps(str(v))
+
+
+def _json_loads(s):
+    n = len(s)
+
+    def _ws(i):
+        while i < n and s[i] in " \t\r\n":
+            i += 1
+        return i
+
+    def _str(i):
+        i += 1
+        out = []
+        while i < n and s[i] != '"':
+            if s[i] == "\\":
+                i += 1
+                out.append({"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}.get(s[i], s[i]))
+            else:
+                out.append(s[i])
+            i += 1
+        return "".join(out), i + 1
+
+    def _val(i):
+        i = _ws(i)
+        if s[i] == '"':
+            return _str(i)
+        if s[i] == "[":
+            arr, i = [], _ws(i + 1)
+            while i < n and s[i] != "]":
+                v, i = _val(i)
+                arr.append(v)
+                i = _ws(i)
+                if i < n and s[i] == ",":
+                    i = _ws(i + 1)
+            return arr, i + 1
+        if s[i] == "{":
+            obj, i = {}, _ws(i + 1)
+            while i < n and s[i] != "}":
+                k, i = _str(_ws(i))
+                v, i = _val(_ws(i) + 1)
+                obj[k] = v
+                i = _ws(i)
+                if i < n and s[i] == ",":
+                    i = _ws(i + 1)
+            return obj, i + 1
+        for lit, val in (("true", True), ("false", False), ("null", None)):
+            if s.startswith(lit, i):
+                return val, i + len(lit)
+        j = i
+        while j < n and s[j] not in " \t\r\n,]}":
+            j += 1
+        tok = s[i:j]
+        return (float(tok) if ("." in tok or "e" in tok or "E" in tok) else int(tok)), j
+
+    return _val(0)[0]
+
+
+def _clone(x):
+    if isinstance(x, dict):
+        return {k: _clone(v) for k, v in x.items()}
+    return [_clone(v) for v in x] if isinstance(x, list) else x
+
+
+def _parse_dyn_items(raw):
+    if isinstance(raw, str):
+        if not (s := raw.strip()):
+            return []
+        try:
+            raw = _json_loads(s)
+        except Exception:  # noqa: BLE001
+            return []
+    return [dict(d) for d in raw if isinstance(d, dict)] if isinstance(raw, list) else []
+
+
+def _sql_alias(name):
+    return "".join(c if (c.isalnum() or c == "_") else "_" for c in str(name))
+
+
+def _strip_trailing_limit(sql):
+    toks = sql.rstrip().rsplit(None, 2)
+    if len(toks) >= 2 and toks[-2].upper() == "LIMIT" and toks[-1].isdigit():
+        return sql[: sql.upper().rfind("LIMIT")].rstrip()
+    return sql
+
+
+def _rewrite_tc_expr(expr, field_origin):
+    parts = str(expr).split("${")
+    out = [parts[0]]
+    for part in parts[1:]:
+        if "}" in part:
+            ref, rest = part.split("}", 1)
+            colon = ref.strip().split(":", 1)
+            if (base := colon[0].strip()) in field_origin:
+                sfx = (":" + colon[1]) if len(colon) > 1 else ""
+                out.append(f"${{sql_runner_query.{field_origin[base][1]}{sfx}}}{rest}")
+                continue
+        out.append("${" + part)
+    return "".join(out)
+
+
+def _warn_query(msg):
+    try:
+        _warn_sdk_query(msg)
+    except Exception:  # noqa: BLE001
+        print("WARNING: " + str(msg))
+
+
+def execute_looker_query(spec, transport_options=None):
+    """Execute one or more Looker queries with SQL CTE joins and SQL Runner / Python fallback."""
+    spec_dict = {"source_queries": spec} if isinstance(spec, list) and spec else (spec or {})
+
+    def _parse_rows(raw, ctx=""):
+        res = _json_loads(raw.strip()) if isinstance(raw, str) and raw.strip() else raw
+        if isinstance(res, dict) and ("errors" in res or "message" in res):
+            raise RuntimeError(f"Looker query error ({ctx}): {res}")
+        return res if isinstance(res, list) else []
+
+    def _run_json(q):
+        body = q.get("body", q)
+        return _parse_rows(run_inline_query("json", body), str(body.get("view")))
+
+    if not isinstance(spec_dict, dict) or not spec_dict:
+        raise ValueError("At least one query is required")
+    if "source_queries" not in spec_dict:
+        body0 = spec_dict.get("body", spec_dict)
+        if not isinstance(body0, dict) or (not body0.get("view") and not body0.get("fields")):
+            raise ValueError("At least one query is required")
+        return _run_json(spec_dict)
+
+    raw_sqs = spec_dict["source_queries"]
+    if not isinstance(raw_sqs, list) or not raw_sqs:
+        raise ValueError("At least one query is required in source_queries")
+    if len(raw_sqs) == 1:
+        sq0 = raw_sqs[0] if isinstance(raw_sqs[0], dict) else {}
+        return _run_json(sq0.get("query", sq0))
+
+    q_bodies = []
+    warned_src_tc = False
+    for sq in raw_sqs:
+        q_raw = sq.get("query", sq) if isinstance(sq, dict) else {}
+        qb = _clone(q_raw.get("body", q_raw) if isinstance(q_raw, dict) else {})
+        dyn = _parse_dyn_items(qb.get("dynamic_fields"))
+        tc_names = {d["table_calculation"] for d in dyn if isinstance(d.get("table_calculation"), str)}
+        if tc_names:
+            if not warned_src_tc:
+                _warn_query("Table calculations on source queries are ignored when merging multiple queries.")
+                warned_src_tc = True
+            kept = [d for d in dyn if "table_calculation" not in d]
+            qb.update(dynamic_fields=_json_dumps(kept)) if kept else qb.pop("dynamic_fields", None)
+            if isinstance(qb.get("fields"), list):
+                qb["fields"] = [f for f in qb["fields"] if f not in tc_names]
+            if isinstance(qb.get("sorts"), list):
+                qb["sorts"] = [s for s in qb["sorts"] if str(s).split()[0] not in tc_names]
+        q_bodies.append(qb)
+
+    final_tcs = []
+    for d in _parse_dyn_items(spec_dict.get("dynamic_fields")) + _parse_dyn_items(spec_dict.get("table_calculations")):
+        if "table_calculation" not in d and isinstance(d.get("name"), str) and "dimension" not in d and "measure" not in d:
+            d = {**d, "table_calculation": d["name"]}
+        if isinstance(d.get("table_calculation"), str) and d["table_calculation"]:
+            d.setdefault("label", d["table_calculation"])
+            final_tcs.append(d)
+
+    needs_total = bool(spec_dict.get("total")) or any(":total" in str(tc.get("expression", "")) for tc in final_tcs)
+    if needs_total:
+        for qb in q_bodies:
+            qb["total"] = True
+
+    p0_fields = q_bodies[0].get("fields") or []
+    joins_meta = [
+        (
+            (sq.get("merge_fields") if isinstance(sq, dict) else None)
+            or [{"field_name": f, "source_field_name": f} for f in p0_fields if f in (q_bodies[idx].get("fields") or [])],
+            str((sq.get("join_type") if isinstance(sq, dict) else None) or spec_dict.get("join_type") or "left").lower(),
+        )
+        for idx, sq in enumerate(raw_sqs[1:], start=1)
+    ]
+
+    try:
+        if create_sql_query is None or run_sql_query is None:
+            raise RuntimeError("SQL Runner methods unavailable on SDK")
+
+        ctes = []
+        field_origin = {}
+        alias_to_field = {}
+        for idx, qb in enumerate(q_bodies):
+            for f in qb.get("fields") or []:
+                if isinstance(f, str) and f not in field_origin:
+                    alias = _sql_alias(f)
+                    field_origin[f] = (idx, alias)
+                    alias_to_field[alias] = f
+                    alias_to_field[alias.lower()] = f
+            raw_sql = run_inline_query("sql", qb)
+            if not isinstance(raw_sql, str) or not raw_sql.strip() or raw_sql.lstrip().startswith(("{", "[")):
+                raise RuntimeError(f"Expected SQL string from run_inline_query, got: {raw_sql!r}")
+            sql = raw_sql.strip().rstrip(";").strip()
+            if str(qb.get("limit", spec_dict.get("limit", ""))).strip() == "-1":
+                sql = _strip_trailing_limit(sql)
+            ctes.append(f"cte_{idx} AS (\n{sql}\n)")
+
+        joins = []
+        for idx, (mfields, jtype) in enumerate(joins_meta, start=1):
+            if not mfields:
+                raise ValueError(f"source_queries[{idx}] is missing merge_fields")
+            on_sql = " AND ".join(
+                f"cte_0.{_sql_alias(m['field_name'])} = cte_{idx}.{_sql_alias(m['source_field_name'])}"
+                for m in mfields
+            )
+            joins.append(f"{'INNER JOIN' if jtype == 'inner' else 'LEFT JOIN'} cte_{idx} ON {on_sql}")
+
+        projected = _uniq([f for f in (spec_dict.get("fields") or []) if f in field_origin] + list(field_origin.keys()))
+        select_sql = ", ".join(f"cte_{field_origin[f][0]}.{field_origin[f][1]} AS {field_origin[f][1]}" for f in projected)
+        sql_lines = [f"WITH {', '.join(ctes)}", f"SELECT {select_sql}", f"FROM cte_0 {' '.join(joins)}"]
+
+        if not final_tcs:
+            order_cols = [
+                f"{field_origin[c][1] if (c := s.strip().split()[0]) in field_origin else _sql_alias(c)} {'DESC' if len(s.strip().split()) > 1 and s.strip().split()[1].lower() == 'desc' else 'ASC'}"
+                for s in (spec_dict.get("sorts") or [])
+                if isinstance(s, str) and s.strip() and s != "__UNSORTED__"
+            ]
+            if order_cols:
+                sql_lines.append(f"ORDER BY {', '.join(order_cols)}")
+            if (lim_val := spec_dict.get("limit")) is not None and str(lim_val).strip() not in ("", "-1"):
+                sql_lines.append(f"LIMIT {int(lim_val)}")
+
+        merged_sql = "\n".join(sql_lines)
+        model = spec_dict.get("model") or q_bodies[0].get("model")
+        if conn := spec_dict.get("connection_name"):
+            sql_q = create_sql_query(body={"connection_name": conn, "sql": merged_sql})
+        else:
+            try:
+                sql_q = create_sql_query(body={"model_name": model, "sql": merged_sql})
+            except Exception:
+                if not model or lookml_model_explore is None:
+                    raise
+                exp = lookml_model_explore(model, q_bodies[0].get("view", ""), fields="connection_name")
+                conn_fb = exp.get("connection_name") if isinstance(exp, dict) else getattr(exp, "connection_name", None)
+                if not conn_fb:
+                    raise
+                sql_q = create_sql_query(body={"connection_name": conn_fb, "sql": merged_sql})
+
+        slug = sql_q.get("slug") if isinstance(sql_q, dict) else getattr(sql_q, "slug", None)
+        if not slug:
+            raise RuntimeError("create_sql_query did not return a slug")
+
+        def _remap(rows):
+            return [{alias_to_field.get(s := k.removeprefix("sql_runner_query."), alias_to_field.get(s.lower(), k)): v for k, v in r.items()} for r in rows]
+
+        sql_rows = _parse_rows(run_sql_query(slug=slug, result_format="json"), f"sql:{slug}")
+        if not final_tcs:
+            return _remap(sql_rows)
+
+        rewritten_tcs = []
+        for tc in final_tcs:
+            tc_c = dict(tc)
+            if isinstance(expr := tc_c.get("expression"), str):
+                tc_c["expression"] = _rewrite_tc_expr(expr, field_origin)
+            for fk in ("based_on", "source_field"):
+                if isinstance(fv := tc_c.get(fk), str) and fv in field_origin:
+                    tc_c[fk] = f"sql_runner_query.{field_origin[fv][1]}"
+            if isinstance(args := tc_c.get("args"), list):
+                tc_c["args"] = [f"sql_runner_query.{field_origin[a][1]}" if isinstance(a, str) and a in field_origin else a for a in args]
+            rewritten_tcs.append(tc_c)
+
+        explore_body = {
+            "model": f"sql__{slug}",
+            "view": "sql_runner_query",
+            "fields": [f"sql_runner_query.{field_origin[f][1]}" for f in projected],
+            "dynamic_fields": _json_dumps(rewritten_tcs),
+        }
+        if needs_total:
+            explore_body["total"] = True
+        if spec_dict.get("sorts"):
+            explore_body["sorts"] = [
+                f"sql_runner_query.{field_origin[p[0]][1]}{' ' + p[1] if len(p) > 1 else ''}"
+                if isinstance(s, str) and (p := s.strip().split(None, 1)) and p[0] in field_origin
+                else s
+                for s in spec_dict["sorts"]
+            ]
+        if spec_dict.get("limit") is not None:
+            explore_body["limit"] = str(spec_dict["limit"])
+
+        return _remap(_parse_rows(run_inline_query("json", explore_body), f"sql__{slug}"))
+    except Exception:  # noqa: BLE001
+        _warn_query("SQL Runner merge unavailable; falling back to Python merge with source query row limits applied.")
+        if final_tcs:
+            _warn_query("Python merge fallback cannot process table calculations; table calculations were ignored.")
+
+    sub_results = [_run_json(qb) for qb in q_bodies]
+    merged_rows = [dict(r) for r in sub_results[0]]
+    for idx, (mfields, join_type) in enumerate(joins_meta, start=1):
+        sec_rows = sub_results[idx]
+        lookup = {}
+        for sr in sec_rows:
+            raw_key = tuple(sr.get(m["source_field_name"]) for m in mfields)
+            if None not in raw_key:
+                lookup.setdefault(tuple(str(k) for k in raw_key), []).append(sr)
+
+        null_pad = dict.fromkeys(sec_rows[0]) if sec_rows else {}
+        next_merged = []
+        for pr in merged_rows:
+            raw_key = tuple(pr.get(m["field_name"]) for m in mfields)
+            if None not in raw_key and (matches := lookup.get(tuple(str(k) for k in raw_key))):
+                for sr in matches:
+                    next_merged.append({**sr, **pr})
+            elif join_type != "inner":
+                next_merged.append({**null_pad, **pr})
+        merged_rows = next_merged
+
+    for s in reversed(spec_dict.get("sorts") or []):
+        if isinstance(s, str) and s.strip() and s != "__UNSORTED__":
+            parts = s.strip().split()
+            col, desc = parts[0], len(parts) > 1 and parts[1].lower() == "desc"
+            merged_rows.sort(
+                key=lambda r, c=col: (r.get(c) is None, r.get(c) if r.get(c) is not None else ""),
+                reverse=desc,
+            )
+
+    limit = int(spec_dict["limit"]) if spec_dict.get("limit") else -1
+    return merged_rows[:limit] if limit >= 0 else merged_rows

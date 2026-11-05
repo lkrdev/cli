@@ -6,7 +6,7 @@ import requests
 from dotenv import load_dotenv
 
 
-def download_swagger():
+def download_swagger() -> None:
     base_url = os.environ.get("LOOKERSDK_BASE_URL")
     
     if not base_url:

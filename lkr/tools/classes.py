@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from typing import Literal, Self, cast
 
 from looker_sdk.sdk.api40.methods import Looker40SDK
@@ -45,7 +46,9 @@ class UserAttributeUpdater(BaseModel):
             )
         return self
 
-    def get_request_authorization_for_value(self, headers: list[tuple[str, str]]):
+    def get_request_authorization_for_value(
+        self, headers: Iterable[tuple[str, str]]
+    ) -> None:
         authorization_token = next(
             (header for header in headers if header[0] == "Authorization"), None
         )
@@ -109,7 +112,8 @@ class UserAttributeUpdater(BaseModel):
             return self.user_attribute_id
         elif self.user_attribute:
             user_attributes = cast(
-                list[dict], sdk.get("/user_attributes", structure=list[dict])
+                list[dict[str, object]],
+                sdk.get("/user_attributes", structure=list[dict]),
             )
             for user_attribute in user_attributes or []:
                 if user_attribute["name"] == self.user_attribute:
@@ -174,7 +178,9 @@ class UserAttributeUpdater(BaseModel):
         resolved.delete_user_attribute(attr_id)
         return True
 
-    def delete_user_attribute_value(self, sdk: Looker40SDK | None = None):
+    def delete_user_attribute_value(
+        self, sdk: Looker40SDK | None = None
+    ) -> None:
         sdk = self._get_sdk(sdk)
         if not sdk:
             raise ValueError("No SDK found")
@@ -216,7 +222,7 @@ class UserAttributeUpdater(BaseModel):
         sdk: Looker40SDK | None = None,
         *,
         create_group_if_missing: bool = False,
-    ):
+    ) -> None:
         if self.value is None:
             raise ValueError("Value is required to update user attribute")
 

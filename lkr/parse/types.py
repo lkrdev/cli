@@ -1,5 +1,3 @@
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict, Field
 
 from lkr.parse.sql import JoinSpec, ParsedQuery
@@ -110,7 +108,7 @@ class ApiLookmlModelExploreField(BaseModel):
     can_time_filter: bool = False
     time_interval: ApiLookmlModelExploreFieldTimeInterval | None = None
     lookml_link: str | None = None
-    period_over_period_params: dict[str, Any] | None = None
+    period_over_period_params: dict[str, object] | None = None
     permanent: bool | None = None
     source_file: str | None = None
     source_file_path: str | None = None
@@ -160,7 +158,7 @@ class ApiLookmlModelExploreTurtleLook(BaseModel):
     pivots: list[str] = Field(default_factory=list)
     filters: dict[str, str] = Field(default_factory=dict)
     limit: int | str | None = None
-    sorts: list[dict[str, Any]] = Field(default_factory=list)
+    sorts: list[dict[str, object]] = Field(default_factory=list)
     name: str
     label: str
     label_short: str
@@ -183,14 +181,14 @@ class ApiLookmlModelExplore(BaseModel):
     view_name: str
     hidden: bool = False
     sql_table_name: str | None = None
-    access_filters: list[dict[str, Any]] = Field(default_factory=list)
+    access_filters: list[dict[str, object]] = Field(default_factory=list)
     aliases: list[ApiLookmlModelExploreAlias] = Field(default_factory=list)
-    always_filter: list[dict[str, Any]] = Field(default_factory=list)
-    conditionally_filter: list[dict[str, Any]] = Field(default_factory=list)
+    always_filter: list[dict[str, str]] = Field(default_factory=list)
+    conditionally_filter: list[dict[str, str]] = Field(default_factory=list)
     index_fields: list[str] = Field(default_factory=list)
     sets: list[ApiLookmlModelExploreSet] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
-    errors: list[dict[str, Any]] | None = None
+    errors: list[dict[str, object]] | None = None
     fields: ApiLookmlModelExploreFieldset = Field(
         default_factory=ApiLookmlModelExploreFieldset
     )

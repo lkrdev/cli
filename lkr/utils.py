@@ -1,10 +1,11 @@
 from collections.abc import Mapping, Sequence
-from typing import Any
 
 _MISSING = object()
 
 
-def deep_get(obj: Any, path: str | Sequence[str | int], default: Any = None) -> Any:
+def deep_get(
+    obj: object, path: str | Sequence[str | int], default: object = None
+) -> object:
     """Traverse dicts, sequences, and object attributes by dotted string or key sequence."""
     keys = path.split(".") if isinstance(path, str) else path
     cur = obj

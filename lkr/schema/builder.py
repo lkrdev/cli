@@ -1,6 +1,5 @@
 import copy
 import re
-from typing import Any
 
 from lkr.codemode.type import _get_swagger_data
 from lkr.schema.dynamic_fields import build_dynamic_fields_schema
@@ -21,22 +20,24 @@ from lkr.schema.filter_expressions import (
 def build_query_body_schema(
     model: str,
     explore: str,
-    explore_data: dict[str, Any],
-    base_query_def: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+    explore_data: dict[str, object],
+    base_query_def: dict[str, object] | None = None,
+) -> dict[str, object]:
     """Build the strongly-typed `body` (`WriteQuery`) object schema for `<model> <explore>`."""
     if isinstance(m := explore_data.get("lookml_model_explores"), dict):
         v = m.get(f"{model}::{explore}")
-        explore_data = v if v is not None else next(iter(m.values()), {})
+        cand = v if v is not None else next(iter(m.values()), {})
+        explore_data = cand if isinstance(cand, dict) else {}
     visible = extract_visible_explore_fields(explore_data)
     dim_names = visible.dimension_names
     measure_names = visible.measure_names
 
-    raw_props = (base_query_def or {}).get("properties") or {}
-    body_props = {
-        k: copy.deepcopy(v)
+    raw_props_val = (base_query_def or {}).get("properties")
+    raw_props = raw_props_val if isinstance(raw_props_val, dict) else {}
+    body_props: dict[str, object] = {
+        str(k): copy.deepcopy(v)
         for k, v in raw_props.items()
-        if not v.get("readOnly") and k != "client_id"
+        if isinstance(v, dict) and not v.get("readOnly") and k != "client_id"
     }
 
     body_props["model"] = {
@@ -83,17 +84,24 @@ def build_query_body_schema(
 def build_explore_query_schema(
     model: str,
     explore: str,
-    explore_data: dict[str, Any],
-    swagger_data: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+    explore_data: dict[str, object],
+    swagger_data: dict[str, object] | None = None,
+) -> dict[str, object]:
     """Rewrite `run_inline_query` into a strongly typed JSON Schema for `<model> <explore>`."""
     swagger = swagger_data if swagger_data is not None else _get_swagger_data()
-    op = (
-        swagger.get("paths", {})
-        .get("/queries/run/{result_format}", {})
-        .get("post", {})
+    paths_val = swagger.get("paths")
+    run_path = (
+        paths_val.get("/queries/run/{result_format}")
+        if isinstance(paths_val, dict)
+        else None
     )
-    query_def = swagger.get("definitions", {}).get("Query", {"properties": {}})
+    post_val = run_path.get("post") if isinstance(run_path, dict) else None
+    op = post_val if isinstance(post_val, dict) else {}
+    defs_val = swagger.get("definitions")
+    q_def_val = defs_val.get("Query") if isinstance(defs_val, dict) else None
+    query_def: dict[str, object] = (
+        q_def_val if isinstance(q_def_val, dict) else {"properties": {}}
+    )
     body_schema = build_query_body_schema(
         model, explore, explore_data, query_def
     )
@@ -102,13 +110,13 @@ def build_explore_query_schema(
         (fmt, fmt_desc)
         for fmt, fmt_desc in re.findall(
             r"^\|\s*([a-z0-9_]+)\s*\|\s*(.+?)\s*$",
-            op.get("description", ""),
+            str(op.get("description") or ""),
             re.MULTILINE,
         )
         if fmt != "result_format"
     ]
 
-    param_defaults: dict[str, Any] = {
+    param_defaults: dict[str, object] = {
         "limit": 500,
         "apply_formatting": True,
         "apply_vis": True,
@@ -119,10 +127,15 @@ def build_explore_query_schema(
         "cache_only": False,
         "rebuild_pdts": False,
     }
-    top_props: dict[str, Any] = {}
+    top_props: dict[str, object] = {}
     required_top: list[str] = []
-    for param in op.get("parameters", []):
-        p_name = param["name"]
+    params_val = op.get("parameters")
+    for param in [
+        p
+        for p in (params_val if isinstance(params_val, list) else [])
+        if isinstance(p, dict)
+    ]:
+        p_name = str(param["name"])
         if param.get("required"):
             required_top.append(p_name)
         if p_name == "body":
@@ -131,7 +144,7 @@ def build_explore_query_schema(
                 body_with_desc["description"] = param["description"]
             top_props["body"] = body_with_desc
         else:
-            p_schema: dict[str, Any] = {"type": param.get("type", "string")}
+            p_schema: dict[str, object] = {"type": param.get("type", "string")}
             if "description" in param:
                 p_schema["description"] = param["description"]
             if "format" in param:
@@ -182,42 +195,45 @@ def _tokenize(text: str) -> list[str]:
 
 
 def normalize_explores_map(
-    model: str, explores_data: dict[str, Any] | list[Any]
-) -> dict[str, dict[str, Any]]:
-    raw_map: dict[str, Any] = (
+    model: str,
+    explores_data: dict[str, object] | list[dict[str, object]] | list[object],
+) -> dict[str, dict[str, object]]:
+    raw_map: dict[str, object] = (
         {str(i["name"]): i for i in explores_data if isinstance(i, dict) and i.get("name")}
         if isinstance(explores_data, list)
         else (
-            explores_data["lookml_model_explores"]
-            if isinstance(explores_data.get("lookml_model_explores"), dict)
+            lme
+            if isinstance(lme := explores_data.get("lookml_model_explores"), dict)
             else explores_data
         )
     )
     return {
-        k.split("::")[-1]: v
+        str(k).split("::")[-1]: v
         for k, v in raw_map.items()
         if isinstance(v, dict)
         and not v.get("hidden")
-        and ("::" not in k or k.startswith(f"{model}::"))
+        and ("::" not in str(k) or str(k).startswith(f"{model}::"))
     }
 
 
 def build_schema_context(
     model: str,
-    explores_data: dict[str, Any] | list[Any],
+    explores_data: dict[str, object] | list[dict[str, object]] | list[object],
     prompt: str | None = None,
     top_explores: int = 3,
     max_fields_per_view: int = 35,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build a pruned LookML catalog with base_view, joins, candidate_merge_keys, and BM25-ranked fields."""
     explores_by_name = normalize_explores_map(model, explores_data)
     q_tokens = set(_tokenize(prompt or ""))
 
-    def _score_field(f: dict[str, Any]) -> float:
+    def _score_field(f: dict[str, object]) -> float:
         if not q_tokens:
             return 0.0
-        syns = " ".join(str(x) for x in (f.get("synonyms") or []))
-        tags = " ".join(str(x) for x in (f.get("tags") or []))
+        raw_syns = f.get("synonyms")
+        syns = " ".join(str(x) for x in (raw_syns if isinstance(raw_syns, list) else []))
+        raw_tags = f.get("tags")
+        tags = " ".join(str(x) for x in (raw_tags if isinstance(raw_tags, list) else []))
         blob = " ".join([
             str(f.get("name") or "").replace(".", " ").replace("_", " "),
             str(f.get("label") or ""),
@@ -233,7 +249,7 @@ def build_schema_context(
     exp_field_scores: dict[str, dict[str, float]] = {}
     for ename, edata in explores_by_name.items():
         vis = vis_by_exp[ename]
-        fscores = {f["name"]: _score_field(f) for f in vis.dimensions + vis.measures}
+        fscores = {str(f["name"]): _score_field(f) for f in vis.dimensions + vis.measures}
         exp_field_scores[ename] = fscores
         top10 = sum(sorted(fscores.values(), reverse=True)[:10])
         bview = str(edata.get("view_name") or ename)
@@ -256,10 +272,11 @@ def build_schema_context(
     for ename in selected:
         vis = vis_by_exp[ename]
         for f in vis.dimensions + vis.measures:
-            view_explores.setdefault(f["name"].split(".", 1)[0], set()).add(ename)
-            field_explores.setdefault(f["name"], set()).add(ename)
+            fn_str = str(f["name"])
+            view_explores.setdefault(fn_str.split(".", 1)[0], set()).add(ename)
+            field_explores.setdefault(fn_str, set()).add(ename)
 
-    candidate_merge_keys: list[dict[str, Any]] = []
+    candidate_merge_keys: list[dict[str, str]] = []
     seen_pairs: set[tuple[str, str]] = set()
     for i, e1 in enumerate(selected):
         for e2 in selected[i + 1 :]:
@@ -267,7 +284,7 @@ def build_schema_context(
                 sql1 = " ".join(str(d1.get("sql") or "").split())
                 t1 = str(d1.get("type") or "")
                 for d2 in vis_by_exp[e2].dimensions:
-                    n1, n2 = d1["name"], d2["name"]
+                    n1, n2 = str(d1["name"]), str(d2["name"])
                     if (n1, n2) in seen_pairs:
                         continue
                     sql2 = " ".join(str(d2.get("sql") or "").split())
@@ -276,33 +293,34 @@ def build_schema_context(
                         seen_pairs.add((n1, n2))
                         candidate_merge_keys.append({"field_name": n1, "source_field_name": n2})
 
-    explores_out: dict[str, Any] = {}
-    views_raw: dict[str, dict[str, list[tuple[float, str, dict[str, Any]]]]] = {}
+    explores_out: dict[str, object] = {}
+    views_raw: dict[str, dict[str, list[tuple[float, str, dict[str, object]]]]] = {}
     for ename in selected:
         edata, vis = explores_by_name[ename], vis_by_exp[ename]
+        raw_joins = edata.get("joins")
         explores_out[ename] = {
             "base_view": edata.get("view_name") or ename,
             "label": edata.get("label") or ename,
             "description": edata.get("description") or "",
-            "views": sorted({f["name"].split(".", 1)[0] for f in vis.dimensions + vis.measures}),
+            "views": sorted({str(f["name"]).split(".", 1)[0] for f in vis.dimensions + vis.measures}),
             "joins": {
-                j["name"]: {
+                str(j["name"]): {
                     "type": j.get("type") or "left_outer",
                     "relationship": j.get("relationship") or "many_to_one",
                     "sql_on": j.get("sql_on") or "",
                 }
-                for j in (edata.get("joins") or [])
+                for j in (raw_joins if isinstance(raw_joins, list) else [])
                 if isinstance(j, dict) and isinstance(j.get("name"), str)
             },
         }
         for kind, items in (("dimensions", vis.dimensions), ("measures", vis.measures)):
             for item in items:
-                fname = item["name"]
+                fname = str(item["name"])
                 vname = fname.split(".", 1)[0]
                 bucket = views_raw.setdefault(vname, {"dimensions": [], "measures": []})[kind]
                 if any(existing_name == fname for _, existing_name, _ in bucket):
                     continue
-                fmeta: dict[str, Any] = {
+                fmeta: dict[str, object] = {
                     "type": item.get("type") or "string",
                     "label": item.get("description") or item.get("label") or fname,
                 }

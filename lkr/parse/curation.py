@@ -1,16 +1,63 @@
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 from lkr.parse.dag import _extract_lookml_refs, _qualify_field_ref
 from lkr.parse.lookml import LookmlExplore, LookmlView, parse_lookml
 from lkr.parse.lookml_to_api import LookmlToApiResult, parse_lookml_to_api
 
 __all__ = [
+    "CurationExploreMetadata",
+    "CurationMetadataResult",
+    "CurationModelMetadata",
+    "CurationSandboxVars",
+    "CurationViewMetadata",
     "build_api_result_from_lookml",
     "extract_curation_metadata",
 ]
+
+
+class CurationModelMetadata(TypedDict):
+    name: str | None
+    project_name: str | None
+    allowed_db_connection_names: list[str]
+    explores: list[str | None]
+
+
+class CurationViewMetadata(TypedDict):
+    view_alias: str
+    original_view: str
+    dimensions: list[dict[str, object]]
+    dimension_groups: list[dict[str, object]]
+    measures: list[dict[str, object]]
+    string_fields: list[str]
+    string_columns: list[dict[str, object]]
+    all_columns_for_enrichment: list[dict[str, object]]
+    static_curation_candidates: list[dict[str, object]]
+
+
+class CurationSandboxVars(TypedDict):
+    profile_string_fields: dict[str, str]
+    enrich_partition_clustering: dict[str, str]
+
+
+class CurationExploreMetadata(TypedDict):
+    id: str
+    model_name: str
+    explore_name: str
+    view_name: str
+    connection_name: str | None
+    sql_table_name: str | None
+    parsed_table: dict[str, str | None]
+    views: dict[str, CurationViewMetadata]
+    sandbox_vars: CurationSandboxVars
+
+
+class CurationMetadataResult(TypedDict):
+    models: list[CurationModelMetadata]
+    explores: dict[str, CurationExploreMetadata]
 
 
 def _parse_sql_table_name(raw: str | None) -> dict[str, str | None]:
@@ -48,8 +95,8 @@ def _qualified_refs(sql_expr: str | None, default_view: str) -> list[str]:
 
 
 def _ensure_view(
-    views_map: dict[str, dict[str, Any]], v_alias: str, orig_view: str
-) -> dict[str, Any]:
+    views_map: dict[str, CurationViewMetadata], v_alias: str, orig_view: str
+) -> CurationViewMetadata:
     return views_map.setdefault(
         v_alias,
         {
@@ -98,16 +145,17 @@ def build_api_result_from_lookml(
 
 
 def extract_curation_metadata(
-    api_payload: dict[str, Any] | LookmlToApiResult,
+    api_payload: Mapping[str, object] | LookmlToApiResult,
     view_filter: str | None = None,
-) -> dict[str, Any]:
+) -> CurationMetadataResult:
     """Extract LookML field curation candidates and Monty sandbox vars from compiled API metadata."""
-    data = (
+    data: Mapping[str, object] = (
         api_payload.model_dump(by_alias=True)
         if isinstance(api_payload, LookmlToApiResult)
         else api_payload
     )
-    models_out = [
+    raw_models = data.get("all_lookml_models")
+    models_out: list[CurationModelMetadata] = [
         {
             "name": m.get("name"),
             "project_name": m.get("project_name"),
@@ -116,11 +164,15 @@ def extract_curation_metadata(
                 e.get("name") for e in (m.get("explores") or []) if isinstance(e, dict)
             ],
         }
-        for m in (data.get("all_lookml_models") or [])
+        for m in (raw_models if isinstance(raw_models, list) else [])
+        if isinstance(m, dict)
     ]
 
-    explores_out: dict[str, Any] = {}
-    for exp_id, exp in (data.get("lookml_model_explores") or {}).items():
+    explores_out: dict[str, CurationExploreMetadata] = {}
+    raw_explores = data.get("lookml_model_explores")
+    for exp_id, exp in (
+        raw_explores.items() if isinstance(raw_explores, dict) else ()
+    ):
         if not isinstance(exp, dict):
             continue
         model_name = str(exp.get("model_name") or "")
@@ -129,7 +181,8 @@ def extract_curation_metadata(
         conn_name = exp.get("connection_name")
         parsed_tbl = _parse_sql_table_name(exp.get("sql_table_name"))
 
-        fields_block = exp.get("fields") or {}
+        raw_fields = exp.get("fields")
+        fields_block = raw_fields if isinstance(raw_fields, dict) else {}
         all_dims = fields_block.get("dimensions") or []
         all_meas = fields_block.get("measures") or []
         all_filts = fields_block.get("filters") or []
@@ -149,7 +202,7 @@ def extract_curation_metadata(
                     if f_name not in referenced_by.setdefault(ref, []):
                         referenced_by[ref].append(f_name)
 
-        views_map: dict[str, dict[str, Any]] = {}
+        views_map: dict[str, CurationViewMetadata] = {}
         seen_dgs: set[tuple[str, str]] = set()
 
         for d in all_dims:
@@ -190,7 +243,7 @@ def extract_curation_metadata(
                         or d.get("field_group_label")
                         or label_short
                     )
-                    dg_entry = {
+                    dg_entry: dict[str, object] = {
                         "name": dg_str,
                         "short_name": dg_str.split(".", 1)[-1],
                         "label": str(tf_labels.get("label") or label or dg_label_short),
@@ -290,7 +343,7 @@ def extract_curation_metadata(
                 else None
             )
             if reason:
-                cand_entry: dict[str, Any] = {
+                cand_entry: dict[str, object] = {
                     "field_name": full_name,
                     "label_short": label_short,
                     "reason": reason,
@@ -362,12 +415,14 @@ def extract_curation_metadata(
             view_filter if (view_filter and view_filter in views_map) else base_view
         )
         target_v_obj = views_map.get(target_v) or (
-            next(iter(views_map.values())) if views_map else {}
+            next(iter(views_map.values())) if views_map else None
         )
-        resolved_view = target_v_obj.get("original_view") or target_v
+        resolved_view = (
+            (target_v_obj["original_view"] if target_v_obj else None) or target_v
+        )
 
-        explores_out[exp_id] = {
-            "id": exp_id,
+        explores_out[str(exp_id)] = {
+            "id": str(exp_id),
             "model_name": model_name,
             "explore_name": explore_name,
             "view_name": base_view,
@@ -383,7 +438,7 @@ def extract_curation_metadata(
                     "view_name": resolved_view,
                     "table_name": parsed_tbl.get("table_expr") or "",
                     "fields_json": json.dumps(
-                        target_v_obj.get("string_columns") or []
+                        target_v_obj["string_columns"] if target_v_obj else []
                     ),
                 },
                 "enrich_partition_clustering": {
@@ -396,7 +451,9 @@ def extract_curation_metadata(
                     or "",
                     "view_name": resolved_view,
                     "fields_json": json.dumps(
-                        target_v_obj.get("all_columns_for_enrichment") or []
+                        target_v_obj["all_columns_for_enrichment"]
+                        if target_v_obj
+                        else []
                     ),
                 },
             },
