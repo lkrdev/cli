@@ -711,12 +711,24 @@ def validate_merge_query(
             errors.extend(f"$.source_queries[{idx}] ({sq.get('name', idx)}): {e}" for e in sub_res.errors)
         else:
             norm_q = cast(dict[str, object], sub_res.normalized_query["body"])
-            if norm_q.get("limit") in (None, "500"):
+            if norm_q.get("limit") in (None, "500", 500):
                 norm_q["limit"] = "5000"
             if needs_merge_total:
                 norm_q["total"] = True
             nq_fields = _str_set(norm_q.get("fields"))
-            if top_sorts and not norm_q.get("sorts") and (sub_sorts := [s for s in top_sorts if (m := _SORT_ITEM_RE.match(s)) and m.group(1) in nq_fields]):
+            raw_mfs = sq.get("merge_fields")
+            m_map = {
+                str(mf["field_name"]): str(mf["source_field_name"])
+                for mf in (raw_mfs if isinstance(raw_mfs, list) else [])
+                if isinstance(mf, dict) and isinstance(mf.get("field_name"), str) and isinstance(mf.get("source_field_name"), str)
+            }
+            if top_sorts and not norm_q.get("sorts") and (
+                sub_sorts := [
+                    f"{sub_f}{s[m.end(1):]}"
+                    for s in top_sorts
+                    if (m := _SORT_ITEM_RE.match(s)) and (sub_f := m_map.get(m.group(1), m.group(1))) in nq_fields
+                ]
+            ):
                 norm_q["sorts"] = sub_sorts
             sq["query"] = norm_q
             union_fields |= nq_fields
