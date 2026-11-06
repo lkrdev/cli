@@ -1539,6 +1539,8 @@ def test_build_schema_context_and_cli_commands(tmp_path: Path) -> None:
     assert val_res.exit_code == 0, val_res.output
     parsed_val = json.loads(val_res.stdout)
     assert parsed_val["valid"] is True
+    sq0_norm = parsed_val["normalized_query"]["source_queries"][0]["query"]
+    assert sq0_norm["limit"] == "5000" and sq0_norm["sorts"] == ["order_items.total_sale_price desc"]
 
 
 
