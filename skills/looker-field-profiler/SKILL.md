@@ -203,3 +203,10 @@ profile_fields(
   - Candidate for `primary_key: yes` on the view and a `.test.lkml` uniqueness assertion (`assert: id_is_unique { expression: count(${view.field}) = count_distinct(${view.field}) ;; }`).
 - **`profile:empty_or_null_only` & `profile:constant_value`**:
   - Flag potential upstream ETL breakage or unpopulated columns before building downstream Silver/Gold models on top of them.
+
+---
+
+## 5. Sub-Skills & Scripts
+
+- **[Scratch Schema Value Search (`sub-skills/scratch-search/SKILL.md`)](sub-skills/scratch-search/SKILL.md)**:
+  - Profiles string dimensions across a model (offline via `--path` or online via `lookml_model_explore`), compiles each searchable `(explore_name, field_name)` SQL branch via `run_inline_query(result_format="sql")`, and generates a `UNION ALL` PDT (`view: _field_value_search` with `sql_trigger_value: SELECT CURRENT_DATE ;;` and `create_process` search index DDL) plus a `hidden: yes` LookML Explore (`explore: _field_value_search`) across 5 dialects ([`bigquery.py`](scripts/dialects/bigquery.py), [`snowflake.py`](scripts/dialects/snowflake.py), [`postgres.py`](scripts/dialects/postgres.py), [`databricks.py`](scripts/dialects/databricks.py), [`duckdb.py`](scripts/dialects/duckdb.py)) via [`scripts/scratch_search.py`](scripts/scratch_search.py).
