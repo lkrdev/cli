@@ -58,7 +58,9 @@ def test_push_command(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock)
         project_id="test_project", file_content=expected_fc
     )
 
-    # Verify deploy flags
+    # Verify deploy flags and no redundant update_session
+    mock_sdk.update_session.assert_not_called()
+    mock_sdk.all_project_files.assert_called_once_with(project_id="test_project")
     mock_sdk.commit.assert_called_once()
     mock_sdk.deploy_to_production.assert_called_once_with(project_id="test_project")
 
@@ -248,24 +250,26 @@ def test_push_create_directory_recursively_fallback(
     nested_dir = project_dir / "views2" / "subfolder"
     nested_dir.mkdir(parents=True)
 
-    view_file = nested_dir / "my_view.view.lkml"
-    view_file.write_text("view: my_view {}")
+    (nested_dir / "my_view.view.lkml").write_text("view: my_view {}")
+    (nested_dir / "second_view.view.lkml").write_text("view: second_view {}")
 
-    mock_sdk.update_file.side_effect = Exception("File not found")
-    # First create_file fails (missing directory), second succeeds
-    mock_sdk.create_file.side_effect = [Exception("Directory not found"), None]
+    existing_dir = project_dir / "existing_dir"
+    existing_dir.mkdir()
+    (existing_dir / "new_in_existing.view.lkml").write_text("view: new_in_existing {}")
+
+    mock_sdk.all_project_files.return_value = [{"id": "existing_dir/old.view.lkml"}]
 
     with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
         result = runner.invoke(app, ["tools", "lookml", "push", str(project_dir)])
         assert result.exit_code == 0
 
-    mock_sdk.create_project_directory.assert_any_call(
-        project_id="test_project", directory_path="views2"
-    )
-    mock_sdk.create_project_directory.assert_any_call(
-        project_id="test_project", directory_path="views2/subfolder"
-    )
-    assert mock_sdk.create_file.call_count == 2
+    created_dir_calls = [
+        call.kwargs["directory_path"]
+        for call in mock_sdk.create_project_directory.call_args_list
+    ]
+    assert created_dir_calls == ["views2", "views2/subfolder"]
+    mock_sdk.update_file.assert_not_called()
+    assert mock_sdk.create_file.call_count == 3
 
 
 def test_push_single_file_option(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
@@ -280,6 +284,8 @@ def test_push_single_file_option(tmp_path: Path, mock_sdk: MagicMock, mock_auth:
 
     other_file = views_dir / "other.view.lkml"
     other_file.write_text("view: other {}")
+
+    mock_sdk.all_project_files.return_value = [{"id": "views/target.view.lkml"}]
 
     with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
         result = runner.invoke(
@@ -300,8 +306,6 @@ def test_push_single_file_option(tmp_path: Path, mock_sdk: MagicMock, mock_auth:
     mock_sdk.update_file.assert_called_once_with(
         project_id="test_project", file_content=expected_fc
     )
-    # Verify no orphan cleanup inventory check occurred
-    mock_sdk.all_project_files.assert_not_called()
     mock_sdk.delete_file.assert_not_called()
 
 
@@ -327,7 +331,7 @@ def test_push_single_file_js_bundle(tmp_path: Path, mock_sdk: MagicMock, mock_au
         assert result.exit_code == 0
 
     expected_fc = FileContent(path="bundle.js", content="console.log('lookbase');")
-    mock_sdk.update_file.assert_called_once_with(
+    mock_sdk.create_file.assert_called_once_with(
         project_id="test_project", file_content=expected_fc
     )
 
@@ -349,10 +353,10 @@ def test_push_file_as_argument(tmp_path: Path, mock_sdk: MagicMock, mock_auth: M
     expected_fc = FileContent(
         path="standalone.view.lkml", content="view: standalone {}"
     )
-    mock_sdk.update_file.assert_called_once_with(
+    mock_sdk.create_file.assert_called_once_with(
         project_id="test_project", file_content=expected_fc
     )
-    mock_sdk.all_project_files.assert_not_called()
+    mock_sdk.delete_file.assert_not_called()
 
 
 def test_pull_single_file_option(tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock) -> None:
@@ -534,7 +538,10 @@ def test_push_and_pull_include_snap_strings_json_and_skip_generic_json(
         assert push_res.exit_code == 0
         pushed_paths = {
             call.kwargs["file_content"].path
-            for call in mock_sdk.update_file.call_args_list
+            for call in [
+                *mock_sdk.update_file.call_args_list,
+                *mock_sdk.create_file.call_args_list,
+            ]
         }
         assert pushed_paths == {
             "orders.view.lkml",
@@ -562,19 +569,24 @@ def test_push_and_pull_skip_dot_directories_unless_sync_hidden(
     with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
         # 1. Push without --sync-hidden ignores .agents
         mock_sdk.update_file.reset_mock()
+        mock_sdk.create_file.reset_mock()
         res_push_default = runner.invoke(
             app, ["tools", "lookml", "push", str(project_dir), "--no-reset"]
         )
         assert res_push_default.exit_code == 0
         pushed = {
             call.kwargs["file_content"].path
-            for call in mock_sdk.update_file.call_args_list
+            for call in [
+                *mock_sdk.update_file.call_args_list,
+                *mock_sdk.create_file.call_args_list,
+            ]
         }
         assert ".agents/skills/doc.md" not in pushed
         assert "main.view.lkml" in pushed
 
         # 2. Push with --sync-hidden includes .agents
         mock_sdk.update_file.reset_mock()
+        mock_sdk.create_file.reset_mock()
         res_push_hidden = runner.invoke(
             app,
             [
@@ -589,7 +601,10 @@ def test_push_and_pull_skip_dot_directories_unless_sync_hidden(
         assert res_push_hidden.exit_code == 0
         pushed_hidden = {
             call.kwargs["file_content"].path
-            for call in mock_sdk.update_file.call_args_list
+            for call in [
+                *mock_sdk.update_file.call_args_list,
+                *mock_sdk.create_file.call_args_list,
+            ]
         }
         assert ".agents/skills/doc.md" in pushed_hidden
 
@@ -643,6 +658,7 @@ def test_push_only_changed_and_skills_lock_ignored(
         (project_dir / "new.explore.lkml").write_text("explore: orders {}")
 
         mock_sdk.update_file.reset_mock()
+        mock_sdk.create_file.reset_mock()
         mock_sdk.delete_file.reset_mock()
 
         push_res = runner.invoke(
@@ -660,7 +676,10 @@ def test_push_only_changed_and_skills_lock_ignored(
 
         pushed_paths = {
             call.kwargs["file_content"].path
-            for call in mock_sdk.update_file.call_args_list
+            for call in [
+                *mock_sdk.update_file.call_args_list,
+                *mock_sdk.create_file.call_args_list,
+            ]
         }
         assert pushed_paths == {"orders.view.lkml", "new.explore.lkml"}
         mock_sdk.delete_file.assert_not_called()
@@ -672,6 +691,7 @@ def test_push_only_changed_and_skills_lock_ignored(
             settings=MagicMock(base_url="https://staging.looker.com")
         )
         mock_sdk.update_file.reset_mock()
+        mock_sdk.create_file.reset_mock()
         push_staging = runner.invoke(
             app,
             [
@@ -686,7 +706,10 @@ def test_push_only_changed_and_skills_lock_ignored(
         assert push_staging.exit_code == 0
         staging_pushed = {
             call.kwargs["file_content"].path
-            for call in mock_sdk.update_file.call_args_list
+            for call in [
+                *mock_sdk.update_file.call_args_list,
+                *mock_sdk.create_file.call_args_list,
+            ]
         }
         assert staging_pushed == {
             "orders.view.lkml",
@@ -731,3 +754,53 @@ def test_pull_retries_transient_502_and_aborts_before_orphan_delete(
         assert fail_res.exit_code == 1
     assert local_file.exists()
     assert local_file.read_text() == "view: silver_updated {}"
+
+
+def test_push_create_project_and_no_root_fallback(
+    tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock
+) -> None:
+    project_dir = tmp_path / "brand_new_proj"
+    project_dir.mkdir()
+    bronze_dir = project_dir / "bronze"
+    bronze_dir.mkdir()
+    (bronze_dir / "orders.view.lkml").write_text("view: orders {}")
+
+    mock_sdk.all_projects.return_value = []
+    mock_sdk.all_project_files.return_value = []
+
+    with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
+        # Default does not call all_projects / create_project
+        res_default = runner.invoke(
+            app, ["tools", "lookml", "push", str(project_dir), "--no-reset"]
+        )
+        assert res_default.exit_code == 0
+        mock_sdk.all_projects.assert_not_called()
+        mock_sdk.create_project.assert_not_called()
+
+        # --create-project creates missing project and initializes bare git
+        res_create = runner.invoke(
+            app,
+            [
+                "tools",
+                "lookml",
+                "push",
+                str(project_dir),
+                "--no-reset",
+                "--create-project",
+            ],
+        )
+        assert res_create.exit_code == 0
+        mock_sdk.create_project.assert_called_once()
+        mock_sdk.update_project.assert_called_once()
+        assert (
+            mock_sdk.update_project.call_args.args[1].git_service_name == "bare"
+        )
+
+        # Upload failure propagates without falling back to project root
+        mock_sdk.create_file.side_effect = RuntimeError("Upload failed")
+        mock_sdk.update_file.side_effect = RuntimeError("Upload failed")
+        res_err = runner.invoke(
+            app, ["tools", "lookml", "push", str(project_dir), "--no-reset"]
+        )
+        assert res_err.exit_code != 0
+        assert isinstance(res_err.exception, RuntimeError)

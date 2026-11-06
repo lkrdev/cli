@@ -129,8 +129,33 @@ def _resolve_project_id(folder_name: str | None, project_id_opt: str | None) -> 
     return os.path.basename(os.getcwd())
 
 
+def _attr(obj: object, key: str, default: object = "") -> object:
+    return (
+        obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+    ) or default
+
+
+def _ensure_project_exists(sdk: ExtendedLooker40SDK, project_id: str) -> None:
+    existing_projects = {
+        str(_attr(p, "id")): p
+        for p in (sdk.all_projects(fields="id,uses_git,git_service_name") or [])
+        if _attr(p, "id")
+    }
+    proj = existing_projects.get(project_id)
+    if not proj:
+        proj = sdk.create_project(models40.WriteProject(name=project_id))
+    if (
+        not (_attr(proj, "uses_git", False) is True)
+        and _attr(proj, "git_service_name", "") != "bare"
+    ):
+        sdk.update_project(project_id, models40.WriteProject(git_service_name="bare"))
+
+
 def _ensure_remote_directory(
-    sdk: ExtendedLooker40SDK, project_id: str, file_path: str
+    sdk: ExtendedLooker40SDK,
+    project_id: str,
+    file_path: str,
+    created_dirs: set[str] | None = None,
 ) -> None:
     dir_path = os.path.dirname(file_path.replace("\\", "/"))
     if not dir_path or dir_path == "." or dir_path == "/":
@@ -140,6 +165,8 @@ def _ensure_remote_directory(
     current_path = ""
     for part in parts:
         current_path = f"{current_path}/{part}" if current_path else part
+        if created_dirs is not None and current_path in created_dirs:
+            continue
         try:
             sdk.create_project_directory(
                 project_id=project_id,
@@ -147,6 +174,41 @@ def _ensure_remote_directory(
             )
         except Exception as e:  # noqa: BLE001
             logger.debug(f"Directory creation notice for '{current_path}': {e}")
+        if created_dirs is not None:
+            created_dirs.add(current_path)
+
+
+def _upsert_remote_file(
+    sdk: ExtendedLooker40SDK,
+    project_id: str,
+    file_path: str,
+    content: str,
+    created_dirs: set[str] | None = None,
+    in_remote: bool = True,
+) -> None:
+    fc = FileContent(path=file_path, content=content)
+    if in_remote:
+        try:
+            sdk.update_file(project_id=project_id, file_content=fc)
+        except Exception:  # noqa: BLE001
+            _ensure_remote_directory(
+                sdk=sdk,
+                project_id=project_id,
+                file_path=file_path,
+                created_dirs=created_dirs,
+            )
+            sdk.create_file(project_id=project_id, file_content=fc)
+    else:
+        _ensure_remote_directory(
+            sdk=sdk,
+            project_id=project_id,
+            file_path=file_path,
+            created_dirs=created_dirs,
+        )
+        try:
+            sdk.create_file(project_id=project_id, file_content=fc)
+        except Exception:  # noqa: BLE001
+            sdk.update_file(project_id=project_id, file_content=fc)
 
 
 def _ensure_model_configuration(
@@ -279,6 +341,13 @@ def push(
             help="Only upload files whose content changed since the last pull/push",
         ),
     ] = False,
+    create_project: Annotated[
+        bool,
+        typer.Option(
+            "--create-project/--no-create-project",
+            help="Create Looker project and initialize bare Git repo if it does not exist",
+        ),
+    ] = False,
 ) -> None:
     """
     Push local files to Looker, removing files on the instance that aren't being pushed.
@@ -294,10 +363,8 @@ def push(
     project_id = _resolve_project_id(folder_name, project_id_opt)
     lookml_dir = os.path.abspath(folder_name)
 
-    try:
-        sdk.update_session(models40.WriteApiSession(workspace_id="dev"))
-    except Exception as sess_err:  # noqa: BLE001
-        logger.debug(f"Session switch notice: {sess_err}")
+    if create_project:
+        _ensure_project_exists(sdk, project_id)
 
     if reset:
         logger.info(
@@ -397,19 +464,20 @@ def push(
         else {}
     )
     cached_hashes = prior_hashes if (only_changed and not reset) else {}
-    existing_remote = (
-        (sdk.all_project_files(project_id=project_id) or [])
-        if (only_changed and not file_opt and cached_hashes)
-        else None
-    )
-    remote_set = {_get_file_id(rf) for rf in (existing_remote or [])}
+    existing_remote = sdk.all_project_files(project_id=project_id) or []
+    remote_set = {_get_file_id(rf) for rf in existing_remote}
+    created_dirs = {
+        str(p)
+        for rf in remote_set
+        for p in Path(rf.replace("\\", "/")).parents
+        if str(p) not in (".", "/")
+    }
 
     successfully_pushed_paths = set()
     uploaded_files = []
     new_hashes = dict(prior_hashes) if file_opt else {}
     for f in files_to_push:
         structured_path = f["path"]
-        root_path = f["root_name"]
         content = f["content"]
         file_hash = _hash_content(content)
 
@@ -422,63 +490,21 @@ def push(
             new_hashes[structured_path] = file_hash
             continue
 
-        try:
-            logger.info(f"Uploading/Overwriting remote file: {structured_path}")
-            file_content = FileContent(path=structured_path, content=content)
-            try:
-                sdk.update_file(
-                    project_id=project_id,
-                    file_content=file_content,
-                )
-            except Exception:  # noqa: BLE001
-                try:
-                    sdk.create_file(
-                        project_id=project_id,
-                        file_content=file_content,
-                    )
-                except Exception:  # noqa: BLE001
-                    _ensure_remote_directory(
-                        sdk=sdk, project_id=project_id, file_path=structured_path
-                    )
-                    sdk.create_file(
-                        project_id=project_id,
-                        file_content=file_content,
-                    )
-            successfully_pushed_paths.add(structured_path)
-            new_hashes[structured_path] = file_hash
-            uploaded_files.append(f)
-            continue
-        except Exception as struct_err:  # noqa: BLE001
-            logger.debug(
-                f"Structured upload notice ({struct_err}), initiating fallback to project root..."
-            )
-
-        if root_path.endswith(".model.lkml"):
-            content = re.sub(
-                r'include:\s*["\']/views/\*\*/\*\.view\.lkml["\']',
-                'include: "/*.view.lkml"',
-                content,
-            )
-
-        root_file_content = FileContent(path=root_path, content=content)
-        try:
-            sdk.update_file(
-                project_id=project_id,
-                file_content=root_file_content,
-            )
-        except Exception:  # noqa: BLE001
-            sdk.create_file(
-                project_id=project_id,
-                file_content=root_file_content,
-            )
-        successfully_pushed_paths.add(root_path)
-        new_hashes[root_path] = _hash_content(content)
+        logger.info(f"Uploading/Overwriting remote file: {structured_path}")
+        _upsert_remote_file(
+            sdk=sdk,
+            project_id=project_id,
+            file_path=structured_path,
+            content=content,
+            created_dirs=created_dirs,
+            in_remote=structured_path in remote_set,
+        )
+        successfully_pushed_paths.add(structured_path)
+        new_hashes[structured_path] = file_hash
         uploaded_files.append(f)
 
     if not file_opt:
         logger.info("Retrieving remote file inventory to enforce one-way mirror...")
-        if existing_remote is None:
-            existing_remote = sdk.all_project_files(project_id=project_id) or []
         for rf in existing_remote:
             rf_path = _get_file_id(rf)
             if not sync_hidden and _is_hidden_path(rf_path):
@@ -776,12 +802,6 @@ def deploy_cmd(
     logger.info("Deployment completed successfully.")
 
 
-def _attr(obj: object, key: str, default: object = "") -> object:
-    return (
-        obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
-    ) or default
-
-
 def is_autogenerated_view(content: str) -> bool:
     """Return True if the LookML view starts with the # AUTOGENERATED header."""
     return content.lstrip().startswith("# AUTOGENERATED")
@@ -1002,17 +1022,6 @@ def _resolve_matching_tables(
     return matched
 
 
-def _upsert_remote_file(
-    sdk: ExtendedLooker40SDK, project_id: str, file_path: str, content: str
-) -> None:
-    fc = FileContent(path=file_path, content=content)
-    try:
-        sdk.update_file(project_id=project_id, file_content=fc)
-    except Exception:  # noqa: BLE001
-        _ensure_remote_directory(sdk=sdk, project_id=project_id, file_path=file_path)
-        sdk.create_file(project_id=project_id, file_content=fc)
-
-
 class _LookmlSecuritySummary(TypedDict):
     files: list[str]
     warnings: list[str]
@@ -1047,8 +1056,16 @@ def create_lookml_views(
     event_json: str | BigQueryAuditEvent | dict[str, object] | None = None,
     bq_security: bool = False,
     gcp_token: str | None = None,
+    create_project: bool = False,
+    reset: bool = True,
+    branch: bool = True,
+    out_dir: str | None = None,
 ) -> CreateLookmlViewsResult:
-    """Create or update LookML views from any Looker database connection via the Looker API."""
+    """Create or update LookML views remotely on the Looker instance via the Looker API.
+
+    Note: By default this generates views only on the remote Looker project and does
+    not pull or write files to local disk unless ``out_dir`` is provided.
+    """
     event_type = "manual"
     if event_json:
         ev_ds, ev_sch, ev_tbl, event_type = _parse_event_json(event_json)
@@ -1056,34 +1073,39 @@ def create_lookml_views(
 
     resolved_model = model_name or project_id
 
-    try:
-        sdk.update_session(models40.WriteApiSession(workspace_id="dev"))
-    except Exception as e:  # noqa: BLE001
-        logger.debug(f"Session switch notice: {e}")
+    if create_project:
+        _ensure_project_exists(sdk, project_id)
 
-    try:
-        sdk.reset_project_to_production(project_id=project_id)
-    except Exception:  # noqa: BLE001
+    if reset:
         try:
-            sdk.create_developer_copy(project_id=project_id)
             sdk.reset_project_to_production(project_id=project_id)
-        except Exception as e:  # noqa: BLE001
-            logger.debug(f"Developer copy / reset notice: {e}")
+        except Exception:  # noqa: BLE001
+            try:
+                sdk.create_developer_copy(project_id=project_id)
+                sdk.reset_project_to_production(project_id=project_id)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"Developer copy / reset notice: {e}")
 
     now_dt = datetime.now(UTC)
     now_iso = now_dt.isoformat()
-    branch_name = f"{branch_prefix.rstrip('/')}/{now_dt.strftime('%Y%m%d%H%M%S')}"
-    try:
-        sdk.create_git_branch(
-            project_id=project_id, body=models40.WriteGitBranch(name=branch_name)
-        )
-    except Exception:  # noqa: BLE001
+    branch_name = (
+        f"{branch_prefix.rstrip('/')}/{now_dt.strftime('%Y%m%d%H%M%S')}"
+        if branch
+        else ""
+    )
+    if branch:
         try:
-            sdk.update_git_branch(
+            sdk.create_git_branch(
                 project_id=project_id, body=models40.WriteGitBranch(name=branch_name)
             )
-        except Exception as e:  # noqa: BLE001
-            logger.debug(f"Branch switch notice: {e}")
+        except Exception:  # noqa: BLE001
+            try:
+                sdk.update_git_branch(
+                    project_id=project_id,
+                    body=models40.WriteGitBranch(name=branch_name),
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"Branch switch notice: {e}")
 
     targets = _resolve_matching_tables(
         sdk=sdk,
@@ -1096,6 +1118,9 @@ def create_lookml_views(
 
     synced_views: list[str] = []
     errors: list[dict[str, str]] = []
+    created_dirs: set[str] = set()
+    batches: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    new_file_folders: set[str] = set()
 
     for ds, sch, tbl in targets:
         target_folder = (
@@ -1151,13 +1176,26 @@ def create_lookml_views(
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"Delete before regenerate notice for {view_path}: {e}")
         else:
-            _ensure_remote_directory(
-                sdk=sdk, project_id=project_id, file_path=view_path
-            )
+            new_file_folders.add(target_folder)
 
+        batches.setdefault((target_folder, sch), []).append((tbl, view_path))
+
+    for (target_folder, sch), batch_items in batches.items():
+        if target_folder in new_file_folders:
+            _ensure_remote_directory(
+                sdk=sdk,
+                project_id=project_id,
+                file_path=f"{target_folder}/.keep",
+                created_dirs=created_dirs,
+            )
         sdk.generate_lookml_with_new_files(
             project_id=project_id,
-            body={"tables": [{"schema": sch, "table_name": tbl, "base_view": True}]},
+            body={
+                "tables": [
+                    {"schema": sch, "table_name": tbl, "base_view": True}
+                    for tbl, _ in batch_items
+                ]
+            },
             connection=connection,
             model_name=resolved_model,
             folder_name=target_folder,
@@ -1166,9 +1204,10 @@ def create_lookml_views(
             add_autogenerated_header=True,
             allow_update_without_header=allow_update_without_header,
         )
-        synced_views.append(view_path)
+        synced_views.extend(vp for _, vp in batch_items)
 
     security_files_changed: list[str] = []
+    deleted_sec_files: set[str] = set()
     security_summary: _LookmlSecuritySummary | None = None
     if bq_security and (targets or not errors):
         from lkr.tools.bq_security import (
@@ -1229,13 +1268,21 @@ def create_lookml_views(
 
         for sec_path, sec_content in sorted(bundle.files.items()):
             if proj_files.get(sec_path) != sec_content:
-                _upsert_remote_file(sdk, project_id, sec_path, sec_content)
+                _upsert_remote_file(
+                    sdk,
+                    project_id,
+                    sec_path,
+                    sec_content,
+                    created_dirs=created_dirs,
+                    in_remote=sec_path in proj_files,
+                )
                 security_files_changed.append(sec_path)
 
         for stale_sec in sorted(existing_sec_files - set(bundle.files)):
             try:
                 sdk.delete_file(project_id=project_id, file_path=stale_sec)
                 security_files_changed.append(stale_sec)
+                deleted_sec_files.add(stale_sec)
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"Delete stale security file notice ({stale_sec}): {e}")
 
@@ -1250,7 +1297,9 @@ def create_lookml_views(
                 proj_files[m_path], list(bundle.files)
             )
             if updated_m != proj_files[m_path]:
-                _upsert_remote_file(sdk, project_id, m_path, updated_m)
+                _upsert_remote_file(
+                    sdk, project_id, m_path, updated_m, created_dirs=created_dirs
+                )
                 security_files_changed.append(m_path)
 
         attr_res = sync_looker_security_attributes(
@@ -1266,6 +1315,17 @@ def create_lookml_views(
     status = "up_to_date"
     pr_url: str | None = None
     all_touched = [*synced_views, *security_files_changed]
+    if out_dir and all_touched:
+        out_root = Path(out_dir).resolve()
+        for rel_path in all_touched:
+            if rel_path not in deleted_sec_files:
+                dest = out_root / rel_path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(
+                    sdk.get_file_content(project_id=project_id, file_path=rel_path),
+                    encoding="utf-8",
+                )
+
     if all_touched:
         commit_msg = f"chore(lookml): auto-upsert {len(all_touched)} file(s)"
         try:
@@ -1431,6 +1491,35 @@ def create_cmd(
             help="Cloud Logging BigQueryAuditMetadata or webhook event JSON payload",
         ),
     ] = None,
+    create_project: Annotated[
+        bool,
+        typer.Option(
+            "--create-project/--no-create-project",
+            help="Create Looker project and initialize bare Git repo if it does not exist",
+        ),
+    ] = False,
+    reset: Annotated[
+        bool,
+        typer.Option(
+            "--reset/--no-reset",
+            help="Reset developer workspace to production before generating views",
+        ),
+    ] = True,
+    branch: Annotated[
+        bool,
+        typer.Option(
+            "--branch/--no-branch",
+            help="Create and switch to a timestamped Git branch before generating views",
+        ),
+    ] = True,
+    out_dir: Annotated[
+        str | None,
+        typer.Option(
+            "--out-dir",
+            "-o",
+            help="Optional local directory to pull/write generated LookML files into (by default create only generates files remotely on Looker)",
+        ),
+    ] = None,
     host: Annotated[
         str,
         typer.Option(
@@ -1449,7 +1538,8 @@ def create_cmd(
     ] = None,
 ) -> None:
     """
-    Create or update LookML views from database tables using Looker's generation API.
+    Create or update LookML views remotely on the Looker instance from database tables.
+    Does not pull or write files to local disk unless --out-dir / -o is provided.
     """
     sdk: ExtendedLooker40SDK = get_auth(ctx).get_current_sdk()
 
@@ -1472,6 +1562,10 @@ def create_cmd(
             event_json=ev,
             bq_security=bq_security,
             gcp_token=gcp_token,
+            create_project=create_project,
+            reset=reset,
+            branch=branch,
+            out_dir=out_dir,
         )
 
     if port is not None:
