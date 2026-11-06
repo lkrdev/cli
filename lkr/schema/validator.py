@@ -702,6 +702,7 @@ def validate_merge_query(
     if needs_merge_total:
         norm_spec["total"] = True
 
+    top_sorts = [s for s in raw_ts if isinstance(s, str)] if isinstance(raw_ts := norm_spec.get("sorts"), list) else []
     union_fields: set[str] = _dyn_names(top_dyn_items)
     for idx, sq in enumerate(sqs):
         sub_res = _validate_subquery_with_fallback(cast(dict[str, object], sq["query"]), model, cmap, candidates)
@@ -710,11 +711,15 @@ def validate_merge_query(
             errors.extend(f"$.source_queries[{idx}] ({sq.get('name', idx)}): {e}" for e in sub_res.errors)
         else:
             norm_q = cast(dict[str, object], sub_res.normalized_query["body"])
+            if norm_q.get("limit") in (None, "500"):
+                norm_q["limit"] = "5000"
             if needs_merge_total:
                 norm_q["total"] = True
+            nq_fields = _str_set(norm_q.get("fields"))
+            if top_sorts and not norm_q.get("sorts") and (sub_sorts := [s for s in top_sorts if (m := _SORT_ITEM_RE.match(s)) and m.group(1) in nq_fields]):
+                norm_q["sorts"] = sub_sorts
             sq["query"] = norm_q
-            raw_nq_fields = norm_q.get("fields")
-            union_fields.update(f for f in (raw_nq_fields if isinstance(raw_nq_fields, list) else []) if isinstance(f, str))
+            union_fields |= nq_fields
             if isinstance(dyn_str := norm_q.get("dynamic_fields"), str):
                 union_fields |= _dyn_names(_parse_dyn(dyn_str))
 

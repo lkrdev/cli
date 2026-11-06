@@ -52,6 +52,9 @@ String matching honors the model's `case_sensitive` setting and database dialect
 - Escape literal `"`, `%`, `_`, `,`, or `^` in LookML filter expressions and `matches (advanced)` with `^`: `"^_items"`, `"100^%"`, `"Santa Cruz^, CA"`, `"^^"`, `"^""`.
 - Escape a leading `-` (or leading space) only when it is the **first** character: `"^-100"` (hyphens inside `"e-commerce"` need no escape).
 - *(Standard Explore UI dropdown filters escape literal commas with `\` as `Santa Cruz\, CA`; LookML `filters:` and `matches (advanced)` always use `^,`.)*
+- **Grouping by `case:` / tier bucket dimensions:**
+  - **Do not copy parenthetical bucket descriptions into `filters`**: When a prompt lists the bucket labels of a `GROUP BY` dimension (e.g., *"Active (<30d), Warm (30-90d), At-Risk (91-180d), Churned (>180d)"*), include the dimension in `fields` without filtering it by that comma-separated description list.
+  - **Subset-scoped `case:` dimensions (`returns NULL for ...`)**: When grouping solely by a cohort-scoped `case:` dimension whose `description:` states it returns `NULL` outside a qualifying cohort (e.g., `"(returns NULL for shoppers with fewer than 3 items)"`), add `"<view.field>": "-NULL"` in `filters` so the non-qualifying `NULL` bucket is excluded (unless the query also groups by a broader all-users loyalty ladder that includes `0`/`1`-order tiers).
 
 ### 2. Dates and times (`dimension_group` timeframes & `type: date*`)
 
@@ -72,6 +75,8 @@ String matching honors the model's `case_sensitive` setting and database dialect
 | Future windows | `"next week"`, `"3 days from now"`, `"3 days from now for 2 weeks"` | `next` supports `week`, `month`, `quarter`, `fiscal quarter`, `year`, `fiscal year` only. |
 | `{day_of_week}` | `"Monday"`, `"after Monday"` | On a `_date` field, matches the most recent Monday; on a `_day_of_week` field, matches every Monday. |
 
+- **Moving up and down a `dimension_group` to pick the best filter timeframe:** Every `dimension_group` (`type: time`) exposes sibling timeframes over the same SQL timestamp (`_time`, `_date`, `_week`, `_month`, `_quarter`, `_year`, `_month_num`, `_hour_of_day`, `_day_of_week`). Grouping (`fields`) and filtering (`filters`) are independent—move **up** to `<group>_year` (`"2023,2024,2025,2026"` or `"2023 to 2027"`), move **down** to `<group>_date` / `<group>_time` (`"after 2023-01-01"`), or filter extract siblings (`_month_num: "11, 12"`, `_hour_of_day: "[0, 5]"`, `_day_of_week: "Saturday,Sunday"`) regardless of the `GROUP BY` timeframe in `fields`.
+  - **True `type: date*` vs. `type: string` month/year columns**: True `type: date*` timeframes expand `"2023,2024,2025,2026"` into full timestamp ranges and reject SQL `%` wildcards (`Invalid date filter syntax`). Only use prefix wildcards (`"2023-%,2024-%"`) on standalone `type: string` derived-table columns with no `dimension_group` siblings.
 - **Combining date conditions:** Join with `,` inside one filter for `OR` (`"today, 7 days ago"`). For `AND` bounds that cannot be written as `{start} to {end}` or `{start} for {n}`, filter two timeframes of the same `dimension_group` (`created_date: "after 2024-01-01", created_time: "before 2 days ago"`).
 - **Timestamp/date `NULL` checks:** Rather than filtering `${<group>_date}: "NULL"` (which applies `DATE()` / timezone casts), define one positive `type: yesno` dimension on the `raw` timeframe (`is_sold` -> `sql: ${sold_raw} IS NOT NULL ;;`) and filter `is_sold: "no"` or `"yes"` ([02-conditional-measures-and-bucketing.md](../agentic-lookml/references/02-conditional-measures-and-bucketing.md)).
 
