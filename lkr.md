@@ -344,7 +344,7 @@ $ lkr tools lookml [OPTIONS] COMMAND [ARGS]...
 * `push`: Push local files to Looker, removing files...
 * `pull`: Pull remote files from Looker to local...
 * `deploy`: Commit dev workspace and deploy Looker...
-* `create`: Create or update LookML views from...
+* `create`: Create or update LookML views remotely on...
 
 #### `lkr tools lookml push`
 
@@ -370,6 +370,7 @@ $ lkr tools lookml push [OPTIONS] {folder_name}
 * `--message <str>`: Commit message when deploying  [default: push from lkr cli]
 * `--sync-hidden, --include-hidden, --sync-dot-directories`: Enable syncing of hidden dot-directories (e.g. .agents/, .github/)
 * `--only-changed`: Only upload files whose content changed since the last pull/push
+* `--create-project / --no-create-project`: Create Looker project and initialize bare Git repo if it does not exist  [default: no-create-project]
 * `--help`: Show this message and exit.
 
 #### `lkr tools lookml pull`
@@ -418,7 +419,8 @@ $ lkr tools lookml deploy [OPTIONS] [folder_name]
 
 #### `lkr tools lookml create`
 
-Create or update LookML views from database tables using Looker&#x27;s generation API.
+Create or update LookML views remotely on the Looker instance from database tables.
+Does not pull or write files to local disk unless --out-dir / -o is provided.
 
 **Usage**:
 
@@ -444,6 +446,10 @@ $ lkr tools lookml create [OPTIONS]
 * `--gcp-token <str>`: GCP OAuth Bearer token for BigQuery/Data Catalog ACL discovery (defaults to GCP_ACCESS_TOKEN or ADC)  [env var: GCP_ACCESS_TOKEN, GOOGLE_OAUTH_ACCESS_TOKEN]
 * `--github-token <str>`: GitHub personal access token for opening PRs (defaults to GITHUB_TOKEN or GH_TOKEN)  [env var: GITHUB_TOKEN, GH_TOKEN]
 * `--event-json <str>`: Cloud Logging BigQueryAuditMetadata or webhook event JSON payload
+* `--create-project / --no-create-project`: Create Looker project and initialize bare Git repo if it does not exist  [default: no-create-project]
+* `--reset / --no-reset`: Reset developer workspace to production before generating views  [default: reset]
+* `--branch / --no-branch`: Create and switch to a timestamped Git branch before generating views  [default: branch]
+* `-o, --out-dir <str>`: Optional local directory to pull/write generated LookML files into (by default create only generates files remotely on Looker)
 * `--host <str>`: Host interface to bind the HTTP webhook listener to  [env var: HOST; default: 0.0.0.0]
 * `--port <int>`: Run as an HTTP webhook listener on the specified port  [env var: PORT]
 * `--help`: Show this message and exit.
