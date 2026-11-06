@@ -243,7 +243,10 @@ def discover_model_string_candidates(
             full_name = str(_get_attr(d, "name") or "")
             sql_expr = str(_get_attr(d, "sql") or "").strip()
             # ponytail: default to physical ${TABLE}.<col> dimensions; CASE WHEN literals are already visible in LookML
-            if not full_name or (not include_calculated and not re.match(r"^\$\{TABLE\}\.[a-zA-Z0-9_`\"$]+$", sql_expr)):
+            if not full_name or (
+                not include_calculated
+                and not re.match(r'^\$\{TABLE\}\.(?:[a-zA-Z0-9_$]+|"[^"]+"|`[^`]+`|\[[^\]]+\])$', sql_expr)
+            ):
                 continue
             tags = [str(t) for t in (_get_attr(d, "tags") or [])]
             if any(t in EXCLUDED_TAGS for t in tags):
@@ -325,7 +328,7 @@ def detect_dialect(sdk: Any, candidates: list[dict[str, Any]]) -> str:
                 if d_name:
                     return str(d_name)
             except Exception:
-                break
+                continue
     return "bigquery"
 
 
@@ -385,17 +388,26 @@ def cli_main(default_dialect: str | None = None) -> None:
         if not searchable_cols:
             raise RuntimeError(f"No searchable string columns found for model '{model_name}'.")
 
-        branch_sqls = [
-            generate_inline_branch_sql(
-                sdk=sdk,
-                model_name=model_name,
-                explore_name=col["explore_name"],
-                field_name=col["field_name"],
-                subtype=col["subtype"],
-                limit_per_field=args.limit_per_field,
-            )
-            for col in searchable_cols
-        ]
+        branch_sqls: list[str] = []
+        for col in searchable_cols:
+            try:
+                branch_sqls.append(
+                    generate_inline_branch_sql(
+                        sdk=sdk,
+                        model_name=model_name,
+                        explore_name=col["explore_name"],
+                        field_name=col["field_name"],
+                        subtype=col["subtype"],
+                        limit_per_field=args.limit_per_field,
+                    )
+                )
+            except Exception as exc:
+                print(
+                    f"Warning: Failed to generate SQL for {col['explore_name']}.{col['field_name']}: {exc}",
+                    file=sys.stderr,
+                )
+        if not branch_sqls:
+            raise RuntimeError(f"Failed to generate branch SQL for all searchable columns in model '{model_name}'.")
         dialect_key = args.dialect.strip() or detect_dialect(sdk, candidates)
         dialect_mod = resolve_dialect_module(dialect_key)
         pdt_steps = dialect_mod.build_persist_sql(build_union_all_sql(branch_sqls))

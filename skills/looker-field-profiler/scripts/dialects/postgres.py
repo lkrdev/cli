@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-DIALECT_NAMES = ("postgres", "alloydb", "cloudsql_postgres", "redshift")
+DIALECT_NAMES = ("postgres", "alloydb", "cloudsql_postgres")
 
 
 def build_persist_sql(union_select_sql: str, table_ref: str = "${SQL_TABLE_NAME}") -> list[str]:
