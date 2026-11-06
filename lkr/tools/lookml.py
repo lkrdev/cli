@@ -7,7 +7,7 @@ import re
 import tempfile
 import time
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, NotRequired, TypedDict
 
 import requests
@@ -130,9 +130,8 @@ def _resolve_project_id(folder_name: str | None, project_id_opt: str | None) -> 
 
 
 def _attr(obj: object, key: str, default: object = "") -> object:
-    return (
-        obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
-    ) or default
+    val = obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+    return default if val is None or (val == "" and default != "") else val
 
 
 def _ensure_project_exists(sdk: ExtendedLooker40SDK, project_id: str) -> None:
@@ -469,7 +468,7 @@ def push(
     created_dirs = {
         str(p)
         for rf in remote_set
-        for p in Path(rf.replace("\\", "/")).parents
+        for p in PurePosixPath(rf.replace("\\", "/")).parents
         if str(p) not in (".", "/")
     }
 
