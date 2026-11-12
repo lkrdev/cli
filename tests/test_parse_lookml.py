@@ -4504,3 +4504,306 @@ def test_inaccessible_sql_table_name_and_test_assert_field_errors() -> None:
         for e in t_errs
     )
 
+def test_parse_lookml_resolves_extended_across_inheritance_and_refinements(
+    tmp_path: Path,
+) -> None:
+    from lkr.parse import (
+        parse_lookml_database_compare,
+        parse_lookml_to_api,
+        parse_sql_to_lookml,
+    )
+
+    (tmp_path / "base.view.lkml").write_text(
+        (
+            "view: orders_base {\n"
+            "  extension: required\n"
+            "  sql_table_name: orders ;;\n"
+            "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+            "  dimension: raw_status { type: string sql: ${TABLE}.status ;; }\n"
+            "  dimension: order_status_label {\n"
+            "    type: string\n"
+            '    label: "Status"\n'
+            "    sql: LOWER(${raw_status}) ;;\n"
+            "    html: <b>{{ value }}</b> ;;\n"
+            "  }\n"
+            "  dimension: implicit_col { type: string }\n"
+            "  dimension: subtotal_plus_tax { type: number sql: ${TABLE}.subtotal + ${TABLE}.tax ;; }\n"
+            "  dimension: loc {\n"
+            "    type: location\n"
+            "    sql_latitude: ${TABLE}.lat ;;\n"
+            "    sql_longitude: ${TABLE}.lon ;;\n"
+            "  }\n"
+            "  dimension_group: window {\n"
+            "    type: duration\n"
+            "    sql_start: ${TABLE}.started_at ;;\n"
+            "    sql_end: ${TABLE}.ended_at ;;\n"
+            "  }\n"
+            "  measure: distinct_users {\n"
+            "    type: count_distinct\n"
+            "    sql_distinct_key: ${TABLE}.user_id ;;\n"
+            "    sql: ${TABLE}.user_id ;;\n"
+            "  }\n"
+            "}\n"
+            "view: +orders_base {\n"
+            "  dimension: order_status_label {\n"
+            '    label: "Base ${EXTENDED}"\n'
+            "    sql: COALESCE(${EXTENDED}, 'none') ;;\n"
+            "  }\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "mid.view.lkml").write_text(
+        (
+            'include: "base.view.lkml"\n'
+            "view: orders_mid {\n"
+            "  extends: [orders_base]\n"
+            "  sql_table_name: `proj.raw.${EXTENDED}` ;;\n"
+            "  dimension: order_status_label {\n"
+            "    sql: TRIM(${extended}) ;;\n"
+            "    html: <span>${EXTENDED}</span> ;;\n"
+            "  }\n"
+            "  dimension: implicit_col { sql: UPPER(${EXTENDED}) ;; }\n"
+            "  dimension: subtotal_plus_tax { sql: ${EXTENDED} * 2 ;; }\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "leaf.view.lkml").write_text(
+        (
+            'include: "mid.view.lkml"\n'
+            "view: orders_ext {\n"
+            "  extends: [orders_mid]\n"
+            "  dimension: order_status_label {\n"
+            '    label: "Final ${EXTENDED}"\n'
+            "    sql: UPPER(${ EXTENDED }) ;;\n"
+            "  }\n"
+            "  dimension: loc {\n"
+            "    sql_latitude: ROUND(${EXTENDED}, 4) ;;\n"
+            "    sql_longitude: ROUND(${extended}, 4) ;;\n"
+            "  }\n"
+            "  dimension_group: window {\n"
+            "    sql_start: TIMESTAMP(${EXTENDED}) ;;\n"
+            "    sql_end: TIMESTAMP(${extended}) ;;\n"
+            "  }\n"
+            "  measure: distinct_users {\n"
+            "    sql_distinct_key: COALESCE(${EXTENDED}, 0) ;;\n"
+            "  }\n"
+            "}\n"
+            "view: +orders_ext {\n"
+            "  dimension: order_status_label {\n"
+            "    sql: NULLIF(${EXTENDED}, '') ;;\n"
+            "  }\n"
+            "}\n"
+            "view: users {\n"
+            "  sql_table_name: `proj.raw.users` ;;\n"
+            "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+            "  dimension: deleted_at { type: string sql: ${TABLE}.deleted_at ;; }\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "shop.model.lkml").write_text(
+        (
+            'connection: "bq"\n'
+            'include: "*.view.lkml"\n'
+            "explore: orders_base_exp {\n"
+            "  extension: required\n"
+            "  from: orders_ext\n"
+            "  sql_table_name: `proj.raw.orders` ;;\n"
+            "  sql_always_where: ${orders_ext.order_status_label} != 'x' OR ${orders_ext.implicit_col} = 'Y' ;;\n"
+            "  sql_always_having: ${orders_ext.distinct_users} > 0 ;;\n"
+            "  join: users {\n"
+            "    type: left_outer\n"
+            "    relationship: many_to_one\n"
+            "    sql_table_name: `proj.raw.users` ;;\n"
+            "    sql_on: ${orders_ext.id} = ${users.id} ;;\n"
+            "    sql_where: ${users.deleted_at} IS NULL ;;\n"
+            "    sql_having: COUNT(${users.id}) > 0 ;;\n"
+            "    sql_foreign_key: ${orders_ext.id} ;;\n"
+            "  }\n"
+            "}\n"
+            "explore: orders_ext {\n"
+            "  extends: [orders_base_exp]\n"
+            "  sql_table_name: ${EXTENDED} ;;\n"
+            "  sql_always_where: ${EXTENDED} AND ${orders_ext.subtotal_plus_tax} > 0 ;;\n"
+            "  sql_always_having: (${EXTENDED}) AND ${orders_ext.distinct_users} < 1000 ;;\n"
+            "  join: users {\n"
+            "    sql_table_name: ${EXTENDED} ;;\n"
+            "    sql_on: (${EXTENDED}) AND ${users.deleted_at} IS NULL ;;\n"
+            "    sql_where: (${EXTENDED}) AND ${users.id} IS NOT NULL ;;\n"
+            "    sql_having: (${EXTENDED}) AND COUNT(${users.id}) < 100 ;;\n"
+            "    sql_foreign_key: COALESCE(${EXTENDED}, 0) ;;\n"
+            "  }\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    proj = parse_lookml(path=tmp_path)
+    assert proj.model is not None
+    m = proj.model["shop"]
+    assert m.view is not None and m.explore is not None
+    ov = m.view["orders_ext"]
+    assert isinstance(ov, LookmlView)
+    assert ov.sql_table_name and ov.sql_table_name.strip() == "`proj.raw.orders`"
+    assert ov.dimension is not None
+    assert (
+        ov.dimension["order_status_label"].sql
+        and ov.dimension["order_status_label"].sql.strip()
+        == "NULLIF(UPPER(TRIM(COALESCE(LOWER(${raw_status}), 'none'))), '')"
+    )
+    assert ov.dimension["order_status_label"].label == "Final Base Status"
+    assert (
+        ov.dimension["order_status_label"].html
+        and ov.dimension["order_status_label"].html.strip()
+        == "<span><b>{{ value }}</b></span>"
+    )
+    assert (
+        ov.dimension["implicit_col"].sql
+        and ov.dimension["implicit_col"].sql.strip() == "UPPER(${TABLE}.implicit_col)"
+    )
+    assert (
+        ov.dimension["subtotal_plus_tax"].sql
+        and ov.dimension["subtotal_plus_tax"].sql.strip()
+        == "(${TABLE}.subtotal + ${TABLE}.tax) * 2"
+    )
+    assert (
+        ov.dimension["loc"].sql_latitude
+        and ov.dimension["loc"].sql_latitude.strip() == "ROUND(${TABLE}.lat, 4)"
+    )
+    assert (
+        ov.dimension["loc"].sql_longitude
+        and ov.dimension["loc"].sql_longitude.strip() == "ROUND(${TABLE}.lon, 4)"
+    )
+    assert ov.dimension_group is not None
+    assert (
+        ov.dimension_group["window"].sql_start
+        and ov.dimension_group["window"].sql_start.strip()
+        == "TIMESTAMP(${TABLE}.started_at)"
+    )
+    assert (
+        ov.dimension_group["window"].sql_end
+        and ov.dimension_group["window"].sql_end.strip() == "TIMESTAMP(${TABLE}.ended_at)"
+    )
+    assert ov.measure is not None
+    assert (
+        ov.measure["distinct_users"].sql_distinct_key
+        and ov.measure["distinct_users"].sql_distinct_key.strip()
+        == "COALESCE(${TABLE}.user_id, 0)"
+    )
+
+    oe = m.explore["orders_ext"]
+    assert isinstance(oe, LookmlExplore)
+    assert oe.sql_table_name and oe.sql_table_name.strip() == "`proj.raw.orders`"
+    assert (
+        oe.sql_always_where
+        and oe.sql_always_where.strip()
+        == "(${orders_ext.order_status_label} != 'x' OR ${orders_ext.implicit_col} = 'Y') AND ${orders_ext.subtotal_plus_tax} > 0"
+    )
+    assert (
+        oe.sql_always_having
+        and oe.sql_always_having.strip()
+        == "(${orders_ext.distinct_users} > 0) AND ${orders_ext.distinct_users} < 1000"
+    )
+    assert oe.join is not None
+    uj = oe.join["users"]
+    assert uj.sql_table_name and uj.sql_table_name.strip() == "`proj.raw.users`"
+    assert (
+        uj.sql_on
+        and uj.sql_on.strip() == "(${orders_ext.id} = ${users.id}) AND ${users.deleted_at} IS NULL"
+    )
+    assert (
+        uj.sql_where
+        and uj.sql_where.strip() == "(${users.deleted_at} IS NULL) AND ${users.id} IS NOT NULL"
+    )
+    assert (
+        uj.sql_having
+        and uj.sql_having.strip() == "(COUNT(${users.id}) > 0) AND COUNT(${users.id}) < 100"
+    )
+    assert (
+        uj.sql_foreign_key
+        and uj.sql_foreign_key.strip() == "COALESCE(${orders_ext.id}, 0)"
+    )
+
+    # sql-lookml-compare matches order_status_label via transitive ${raw_status} and points to +orders_ext in leaf.view.lkml
+    sql = "SELECT id, status FROM `proj.raw.orders`"
+    cmp_res = parse_sql_to_lookml(sql=sql, path=tmp_path)
+    vm_ext = next(v for v in cmp_res.queries[0].views if v.view_name == "orders_ext")
+    f_map = {f.field_name: f for f in vm_ext.fields}
+    assert "order_status_label" in f_map
+    osl = f_map["order_status_label"]
+    assert osl.sql_column == "status"
+    assert osl.file == "leaf.view.lkml"
+    assert osl.line == 21
+    assert osl.sql_location is not None
+    assert osl.sql_location.file == "leaf.view.lkml"
+    assert osl.sql_location.line == 22
+
+    # lookml-to-api & lookml-database-compare see resolved SQL and labels
+    api_res = parse_lookml_to_api(path=tmp_path, model="shop", explore="orders_ext")
+    exp_api = api_res.lookml_model_explores["shop::orders_ext"]
+    api_dims = {d.name: d for d in exp_api.fields.dimensions}
+    assert api_dims["orders_ext.order_status_label"].sql is not None
+    assert (
+        api_dims["orders_ext.order_status_label"].sql.strip()
+        == "NULLIF(UPPER(TRIM(COALESCE(LOWER(${raw_status}), 'none'))), '')"
+    )
+    assert api_dims["orders_ext.order_status_label"].label_short == "Final Base Status"
+    assert exp_api.joins[0].sql_on is not None
+    assert (
+        exp_api.joins[0].sql_on.strip()
+        == "(${orders_ext.id} = ${users.id}) AND ${users.deleted_at} IS NULL"
+    )
+
+    db_cmp = parse_lookml_database_compare(path=tmp_path, columns=True)
+    tbl_cols = {t.table: set(t.columns) for t in db_cmp.tables}
+    assert "proj.raw.orders" in tbl_cols
+    assert {"id", "status", "subtotal", "tax", "user_id"} <= tbl_cols["proj.raw.orders"]
+
+
+def test_sql_lookml_compare_extended_derived_table_and_sql_table_name() -> None:
+    from lkr.parse import parse_lookml_database_compare, parse_sql_to_lookml
+
+    lkml = """
+    connection: "bq"
+    view: base_dt {
+      extension: required
+      derived_table: {
+        sql: SELECT id, status FROM `proj.raw.orders` ;;
+      }
+      dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }
+      dimension: status { type: string sql: ${TABLE}.status ;; }
+    }
+    view: active_orders {
+      extends: [base_dt]
+      derived_table: {
+        sql: SELECT * FROM (${EXTENDED}) WHERE status = 'active' ;;
+      }
+    }
+    view: orders_tbl {
+      sql_table_name: orders ;;
+      dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }
+    }
+    view: +orders_tbl {
+      sql_table_name: `proj.raw.${EXTENDED}` ;;
+    }
+    explore: active_orders {}
+    explore: orders_tbl {}
+    """
+    sql = "SELECT id, status FROM `proj.raw.orders`"
+    res = parse_sql_to_lookml(sql=sql, lookml=lkml)
+    by_view = {v.view_name: v for v in res.queries[0].views}
+    assert "active_orders" in by_view
+    assert {f.field_name for f in by_view["active_orders"].fields} == {"id", "status"}
+    assert "orders_tbl" in by_view
+    assert by_view["orders_tbl"].sql_table == "proj.raw.orders"
+
+    db_cmp = parse_lookml_database_compare(lookml=lkml, columns=True)
+    assert "proj.raw.orders" in {t.table for t in db_cmp.tables}
+
+
+
+
+
+

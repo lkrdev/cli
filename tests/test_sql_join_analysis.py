@@ -450,3 +450,102 @@ def test_inferred_relationships_and_mismatch_warning() -> None:
     # 4. orders.status = order_items.status -> neither is PK -> many_to_many
     assert ja[3].inferred_relationship == "many_to_many"
 
+
+def test_join_analysis_and_usages_resolve_extended_explore_and_join_sql() -> None:
+    lkml = """
+    model: shop {
+      explore: orders_base {
+        extension: required
+        from: orders
+        sql_always_where: ${orders.status} != 'cancelled' ;;
+        sql_always_having: ${orders.count} > 0 ;;
+        join: users {
+          type: left_outer
+          relationship: many_to_one
+          sql_on: ${orders.user_id} = ${users.id} ;;
+        }
+      }
+      explore: orders_ext {
+        extends: [orders_base]
+        sql_always_where: ${EXTENDED} AND ${orders.active} = TRUE ;;
+        sql_always_having: (${EXTENDED}) AND ${orders.count} < 500 ;;
+        join: users {
+          sql_on: (${EXTENDED}) AND ${users.deleted_at} IS NULL ;;
+        }
+      }
+      explore: +orders_ext {
+        join: users {
+          sql_on: (${EXTENDED}) AND ${users.verified} = TRUE ;;
+        }
+      }
+    }
+    view: orders {
+      sql_table_name: public.orders ;;
+      dimension: id { primary_key: yes sql: ${TABLE}.id ;; }
+      dimension: user_id { sql: ${TABLE}.user_id ;; }
+      dimension: status { sql: ${TABLE}.status ;; }
+      dimension: active { type: yesno sql: ${TABLE}.active ;; }
+      measure: count { type: count }
+    }
+    view: users {
+      sql_table_name: public.users ;;
+      dimension: id { primary_key: yes sql: ${TABLE}.id ;; }
+      dimension: deleted_at { sql: ${TABLE}.deleted_at ;; }
+      dimension: verified { type: yesno sql: ${TABLE}.verified ;; }
+    }
+    """
+    proj = parse_lookml(lookml=lkml).apply_defaults()
+    exp_base, exp_ref = _collect_declarations(proj, "explore", LookmlExplore)
+    chain = _build_chain("orders_ext", exp_base, exp_ref)
+    assert proj.model is not None
+    shop_model = proj.model["shop"]
+    assert shop_model.explore is not None
+    explore_obj = shop_model.explore["orders_ext"]
+    assert isinstance(explore_obj, LookmlExplore)
+    views_map = {
+        k: v for k, v in (shop_model.view or {}).items() if not isinstance(v, list)
+    }
+    graph = build_explore_join_graph(
+        "orders_ext", explore_obj, chain, views_map, model_name="shop"
+    )
+    u_join = graph.joins["users"]
+    assert u_join.equi_joins == [(("orders", "user_id"), ("users", "id"))]
+    assert (
+        u_join.sql_on is not None
+        and u_join.sql_on.strip()
+        == "((${orders.user_id} = ${users.id}) AND ${users.deleted_at} IS NULL) AND ${users.verified} = TRUE"
+    )
+    assert u_join.line == 22
+
+    sql = (
+        "SELECT o.id, u.id FROM public.orders o "
+        "LEFT JOIN public.users u ON o.user_id = u.id"
+    )
+    res = parse_sql_to_lookml(sql=sql, lookml=lkml, sql_schema="public")
+    q = res.queries[0]
+    assert len(q.join_analysis) == 1
+    assert q.join_analysis[0].status == "exact_match"
+    assert q.join_analysis[0].explore_name == "orders_ext"
+    assert q.join_analysis[0].matched_explore_join == "users"
+
+    usages_by_prop = {u.matched_property: u for u in q.usages}
+    assert "explore.sql_always_where" in usages_by_prop
+    assert (
+        usages_by_prop["explore.sql_always_where"].expression
+        == "(${orders.status} != 'cancelled') AND ${orders.active} = TRUE"
+    )
+    assert usages_by_prop["explore.sql_always_where"].line == 16
+    assert "explore.sql_always_having" in usages_by_prop
+    assert (
+        usages_by_prop["explore.sql_always_having"].expression
+        == "(${orders.count} > 0) AND ${orders.count} < 500"
+    )
+    assert usages_by_prop["explore.sql_always_having"].line == 17
+    assert "join.sql_on" in usages_by_prop
+    assert (
+        usages_by_prop["join.sql_on"].expression
+        == "((${orders.user_id} = ${users.id}) AND ${users.deleted_at} IS NULL) AND ${users.verified} = TRUE"
+    )
+    assert usages_by_prop["join.sql_on"].line == 24
+
+

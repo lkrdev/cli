@@ -1077,6 +1077,148 @@ xf.assembleModels = function(project, assembleOpts) {{
   return origAssembleModels(project, assembleOpts);
 }};
 
+const EXTENDED_TEST_RE = /\\$\\{{\\s*EXTENDED\\s*\\}}/i;
+const EXTENDED_RE = /\\$\\{{\\s*EXTENDED\\s*\\}}/gi;
+const SQL_WRAP_KEYS = new Set([
+  "sql", "sql_start", "sql_end", "sql_distinct_key",
+  "sql_latitude", "sql_longitude",
+  "sql_always_where", "sql_always_having",
+  "sql_on", "sql_where", "sql_having", "sql_foreign_key",
+]);
+
+function hasTopLevelOps(expr) {{
+  if (!expr) return false;
+  let paren = 0, i = 0, len = expr.length;
+  while (i < len) {{
+    const ch = expr[i];
+    if (ch === "'" || ch === '"' || ch === "`") {{
+      const q = ch;
+      i++;
+      while (i < len) {{
+        if (expr[i] === "\\\\" && q !== "`") {{ i += 2; continue; }}
+        if (expr[i] === q) {{ i++; break; }}
+        i++;
+      }}
+      continue;
+    }}
+    if ((ch === "$" || ch === "{{") && (expr[i + 1] === "{{" || expr[i + 1] === "%")) {{
+      const close = expr[i + 1] === "%" ? "%}}" : (ch === "{{" ? "}}}}" : "}}");
+      i += 2;
+      const end = expr.indexOf(close, i);
+      i = end === -1 ? len : end + close.length;
+      continue;
+    }}
+    if (ch === "(") {{ paren++; i++; continue; }}
+    if (ch === ")") {{ paren = Math.max(0, paren - 1); i++; continue; }}
+    if (paren === 0 && /[\\s+\\-*/%=<>!&|^~?,]/.test(ch)) return true;
+    i++;
+  }}
+  return false;
+}}
+
+function defaultFieldSql(obj) {{
+  if (!obj || typeof obj !== "object" || !obj.$name) return undefined;
+  const t = obj.$type, ft = obj.type;
+  if (t === "dimension") {{
+    if (obj.case != null || ft === "location" || ft === "distance" || String(ft || "").startsWith("duration_")) return undefined;
+  }} else if (t === "dimension_group") {{
+    if (ft === "duration") return undefined;
+  }} else if (t === "measure") {{
+    if (obj.case != null || ft === "count" || ft === "list") return undefined;
+  }} else {{
+    return undefined;
+  }}
+  const col = obj.$name.includes(".") ? "`" + obj.$name + "`" : obj.$name;
+  return "${{TABLE}}." + col;
+}}
+
+function resolveExtended(addVal, baseVal, key, parentKey) {{
+  if (typeof addVal !== "string" || typeof baseVal !== "string" || !EXTENDED_TEST_RE.test(addVal)) return addVal;
+  const trimBase = key === "html" || key === "sql_table_name" || SQL_WRAP_KEYS.has(key);
+  const parentStr = trimBase ? baseVal.trim() : baseVal;
+  const canWrap = SQL_WRAP_KEYS.has(key) && parentKey !== "derived_table" && hasTopLevelOps(parentStr);
+  return addVal.replace(EXTENDED_RE, (match, offset) => {{
+    if (!canWrap) return parentStr;
+    const before = addVal.slice(0, offset).trim();
+    const after = addVal.slice(offset + match.length).trim();
+    if ((!before && !after) || ((before.endsWith("(") || before.endsWith(",")) && (after.startsWith(")") || after.startsWith(",")))) {{
+      return parentStr;
+    }}
+    return `(${{parentStr}})`;
+  }});
+}}
+
+function mergeWithExtended(baseObject, addObject, parentKey) {{
+  const newObject = {{ ...baseObject }};
+  for (const key of Object.keys(addObject)) {{
+    if (["__proto__", "prototype", "constructor"].includes(key)) {{
+      throw new Error(`Attempted to set disallowed key ${{key}} from object ${{addObject.$name || "(anonymous)"}}`);
+    }}
+    let baseVal = baseObject[key];
+    const addVal = addObject[key];
+    if (key === "extension" && addVal === "required") continue;
+    if (key === "$name" && typeof addVal === "string" && addVal[0] === "+") continue;
+    let newVal;
+    if (Array.isArray(baseVal)) {{
+      newVal = baseVal.concat(undefined);
+    }} else if (baseVal && typeof baseVal === "object" && addVal && typeof addVal === "object") {{
+      newVal = mergeWithExtended(baseVal, addVal, key);
+    }} else if (typeof addVal === "string" && EXTENDED_TEST_RE.test(addVal)) {{
+      if (baseVal === undefined && key === "sql" && parentKey !== "derived_table") {{
+        baseVal = defaultFieldSql(baseObject);
+      }}
+      newVal = resolveExtended(addVal, baseVal, key, parentKey);
+    }} else {{
+      newVal = addVal;
+    }}
+    newObject[key] = newVal;
+  }}
+  return newObject;
+}}
+
+function collectObjects(root, rootPath, model, visited) {{
+  const [type, name] = rootPath;
+  visited.add(rootPath.map(String).join("\\0"));
+  const exts = Array.isArray(root.extends) ? root.extends : (root.extends ? [root.extends] : []);
+  const extPaths = exts.flat().filter(e => typeof e === "string").map(e => [type, e]);
+  const rawRefs = name[0] === "+" ? null : model[type]["+" + name];
+  const refPaths = !rawRefs ? []
+    : Array.isArray(rawRefs) ? rawRefs.map((_, ri) => [type, "+" + name, ri])
+    : [[type, "+" + name]];
+  const out = [];
+  for (const p of [...extPaths, root, ...refPaths]) {{
+    if (p === root) {{ out.push(root); continue; }}
+    const pk = p.map(String).join("\\0");
+    if (visited.has(pk)) continue;
+    let target = model;
+    for (const seg of p) target = target?.[seg];
+    if (target) out.push(...collectObjects(target, p, model, visited));
+  }}
+  return out;
+}}
+
+xf.applyExtensionsRefinements = function(project, {{ objectTypes = ["explore", "view"] }} = {{}}) {{
+  if (!project || !project.model || typeof project.model !== "object") return project;
+  for (const m of Object.keys(project.model)) {{
+    const model = project.model[m];
+    for (const objectType of objectTypes) {{
+      const collection = model[objectType];
+      if (!collection) continue;
+      const newObjects = {{}};
+      for (const key of Object.keys(collection)) {{
+        if (key[0] === "+") continue;
+        const obj = collection[key];
+        if (!obj || obj.extension === "required") continue;
+        const objectsToApply = collectObjects(obj, [objectType, key], model, new Set());
+        if (objectsToApply.length <= 1) continue;
+        newObjects[key] = objectsToApply.reduce((acc, item) => mergeWithExtended(acc, item, null), {{}});
+      }}
+      Object.assign(collection, newObjects);
+    }}
+  }}
+  return project;
+}};
+
 lp.parseFiles({{
   ...parseOpts,
   modelAssembly: true,

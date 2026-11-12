@@ -764,6 +764,8 @@ def _find_field_prop_location(
     fname: str,
     sub_key: str,
 ) -> LookmlSourceLocation | None:
+    best_exact: LookmlSourceLocation | None = None
+    best_fallback: LookmlSourceLocation | None = None
     for fpath, _, p_dict in chain:
         type_pos = p_dict.get(ftype, {})
         if not isinstance(type_pos, dict) or fname not in type_pos:
@@ -776,26 +778,41 @@ def _find_field_prop_location(
             if isinstance(case_p, dict):
                 when_p = case_p.get("when", {})
                 if isinstance(when_p, dict):
-                    if "sql" in when_p and isinstance(when_p["sql"], dict) and "$p" in when_p["sql"]:
-                        return _make_location(fpath, when_p["sql"]["$p"])
-                    if "$p" in when_p:
-                        return _make_location(fpath, when_p["$p"])
+                    if (
+                        "sql" in when_p
+                        and isinstance(when_p["sql"], dict)
+                        and "$p" in when_p["sql"]
+                        and (loc := _make_location(fpath, when_p["sql"]["$p"]))
+                    ):
+                        best_exact = loc
+                        continue
+                    if "$p" in when_p and (loc := _make_location(fpath, when_p["$p"])):
+                        best_exact = loc
+                        continue
                 elif isinstance(when_p, list) and when_p:
+                    matched_w = False
                     for item in when_p:
                         if (
                             isinstance(item, dict)
                             and "sql" in item
                             and isinstance(item["sql"], dict)
                             and "$p" in item["sql"]
+                            and (loc := _make_location(fpath, item["sql"]["$p"]))
                         ):
-                            return _make_location(fpath, item["sql"]["$p"])
-                if "$p" in case_p:
-                    return _make_location(fpath, case_p["$p"])
+                            best_exact = loc
+                            matched_w = True
+                            break
+                    if matched_w:
+                        continue
+                if "$p" in case_p and (loc := _make_location(fpath, case_p["$p"])):
+                    best_exact = loc
         elif sub_key in f_pos and isinstance(f_pos[sub_key], dict) and "$p" in f_pos[sub_key]:
-            return _make_location(fpath, f_pos[sub_key]["$p"])
+            if loc := _make_location(fpath, f_pos[sub_key]["$p"]):
+                best_exact = loc
         elif "sql" in f_pos and isinstance(f_pos["sql"], dict) and "$p" in f_pos["sql"]:
-            return _make_location(fpath, f_pos["sql"]["$p"])
-    return None
+            if loc := _make_location(fpath, f_pos["sql"]["$p"]):
+                best_fallback = loc
+    return best_exact or best_fallback
 
 
 def _chain_prop_loc(
@@ -804,6 +821,8 @@ def _chain_prop_loc(
     default_file: str,
     default_pos: list[int],
 ) -> LookmlSourceLocation:
+    best_exact: LookmlSourceLocation | None = None
+    best_parent: LookmlSourceLocation | None = None
     for fpath, _, p_dict in chain:
         curr: object = p_dict
         found = True
@@ -819,9 +838,8 @@ def _chain_prop_loc(
             and "$p" in curr
             and (loc := _make_location(fpath, curr["$p"]))
         ):
-            return loc
-    if len(prop_path) > 1:
-        for fpath, _, p_dict in chain:
+            best_exact = loc
+        elif len(prop_path) > 1:
             curr = p_dict
             found = True
             for part in prop_path[:-1]:
@@ -836,9 +854,11 @@ def _chain_prop_loc(
                 and "$p" in curr
                 and (loc := _make_location(fpath, curr["$p"]))
             ):
-                return loc
+                best_parent = loc
     return (
-        _make_location(default_file, default_pos)
+        best_exact
+        or best_parent
+        or _make_location(default_file, default_pos)
         or LookmlSourceLocation(
             file=default_file, line=1, end_line=1, position=default_pos
         )
