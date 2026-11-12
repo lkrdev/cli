@@ -897,6 +897,37 @@ def test_vgr_edge_cases(tmp_path: Path) -> None:
     assert arr_fail_data[0]["valid"] is True
     assert arr_fail_data[1]["valid"] is False
 
+    # 6. CLI lkr schema validate accepts multi-explore api_all.json + query map dict (--query-file)
+    api_all_path = tmp_path / "api_all.json"
+    api_all_path.write_text(
+        json.dumps({"all_lookml_models": [], "lookml_model_explores": {"thelook::order_items": MOCK_EXPLORE}}),
+        encoding="utf-8",
+    )
+    qmap_ok = tmp_path / "inline_queries.json"
+    qmap_ok.write_text(
+        json.dumps({"0": {"model": "thelook", "view": "order_items", "fields": ["order_items.status"]}}),
+        encoding="utf-8",
+    )
+    map_ok_res = runner.invoke(
+        app,
+        ["schema", "validate", "-m", "thelook", f"--explore-file={api_all_path}", f"--query-file={qmap_ok}"],
+    )
+    assert map_ok_res.exit_code == 0, map_ok_res.output
+    map_ok_data = json.loads(map_ok_res.stdout)
+    assert map_ok_data["0"]["valid"] is True and map_ok_data["0"]["errors"] == []
+
+    qmap_missing = tmp_path / "inline_missing.json"
+    qmap_missing.write_text(
+        json.dumps({"0": {"model": "thelook", "view": "no_such_explore", "fields": ["x.y"]}}),
+        encoding="utf-8",
+    )
+    map_miss_res = runner.invoke(
+        app,
+        ["schema", "validate", "-m", "thelook", f"--explore-file={api_all_path}", f"--query-file={qmap_missing}"],
+    )
+    assert map_miss_res.exit_code == 1
+    assert "no_such_explore" in json.loads(map_miss_res.stdout)["0"]["errors"][0]
+
 
 def test_py_explore_validator_windows_fallback_and_parity(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

@@ -10,6 +10,7 @@ from lkr.classes import LkrCtxObj
 from lkr.logger import logger
 from lkr.schema.builder import build_explore_query_schema, build_schema_context
 from lkr.schema.validator import (
+    ValidationResult,
     validate_batch_queries,
     validate_merge_query,
     validate_query,
@@ -192,49 +193,80 @@ def validate_command(
             raise typer.Exit(1)
         return
 
-    if schema is not None:
-        schema_data = json.loads(schema)
-    elif schema_file is not None:
-        schema_data = json.loads(schema_file.read_text(encoding="utf-8"))
+    is_query_map = (
+        isinstance(query_payload, dict)
+        and bool(query_payload)
+        and not any(
+            k in query_payload
+            for k in ("source_queries", "body", "fields", "view", "model", "result_format")
+        )
+        and all(isinstance(v, dict) for v in query_payload.values())
+    )
+    items = (
+        list(query_payload.values())
+        if is_query_map
+        else (query_payload if isinstance(query_payload, list) else [query_payload])
+    )
+    if schema is not None or schema_file is not None:
+        schema_data = (
+            json.loads(schema)
+            if schema is not None
+            else json.loads(cast(Path, schema_file).read_text(encoding="utf-8"))
+        )
+        results = (
+            validate_batch_queries(items, schema_data)
+            if is_query_map or isinstance(query_payload, list)
+            else [validate_query(query_payload, schema_data)]
+        )
     else:
-        first_item = (
-            query_payload[0]
-            if isinstance(query_payload, list) and query_payload
-            else query_payload
+        cached_file_data = (
+            _load_explore_data(ctx, model or "", explore or "", explore_file)
+            if explore_file is not None
+            else None
         )
-        body_obj = (
-            first_item.get("body")
-            if isinstance(first_item, dict) and isinstance(first_item.get("body"), dict)
-            else first_item
-        )
-        resolved_model = model or (
-            body_obj.get("model") if isinstance(body_obj, dict) else None
-        )
-        resolved_explore = explore or (
-            body_obj.get("view") if isinstance(body_obj, dict) else None
-        )
-        if not resolved_model or not resolved_explore:
-            logger.error(
-                "Must provide --model and --explore (or --schema / --schema-file) to generate schema for validation"
-            )
-            raise typer.Exit(1)
-        explore_data = _load_explore_data(
-            ctx, resolved_model, resolved_explore, explore_file
-        )
-        schema_data = build_explore_query_schema(
-            resolved_model, resolved_explore, explore_data
-        )
+        schema_cache: dict[tuple[str, str], dict[str, object] | str] = {}
 
-    if isinstance(query_payload, list):
-        results = validate_batch_queries(query_payload, schema_data)
-        typer.echo(json.dumps([r.to_dict() for r in results], indent=2))
-        if not all(r.valid for r in results):
-            raise typer.Exit(1)
-    else:
-        result = validate_query(query_payload, schema_data)
-        typer.echo(json.dumps(result.to_dict(), indent=2))
-        if not result.valid:
-            raise typer.Exit(1)
+        def _validate_one(item: object) -> ValidationResult:
+            body_obj = (
+                item.get("body")
+                if isinstance(item, dict) and isinstance(item.get("body"), dict)
+                else item
+            )
+            rm = model or (body_obj.get("model") if isinstance(body_obj, dict) else None)
+            rexp = explore or (body_obj.get("view") if isinstance(body_obj, dict) else None)
+            if not isinstance(rm, str) or not rm or not isinstance(rexp, str) or not rexp:
+                logger.error(
+                    "Must provide --model and --explore (or --schema / --schema-file) to generate schema for validation"
+                )
+                raise typer.Exit(1)
+            key = (rm, rexp)
+            if key not in schema_cache:
+                edata = (
+                    cached_file_data
+                    if cached_file_data is not None
+                    else _load_explore_data(ctx, rm, rexp, None)
+                )
+                if isinstance(lme := edata.get("lookml_model_explores"), dict) and (
+                    f"{rm}::{rexp}" not in lme and rexp not in lme
+                ):
+                    schema_cache[key] = f"$.body.view: unknown explore '{rexp}' in model '{rm}'"
+                else:
+                    schema_cache[key] = build_explore_query_schema(rm, rexp, edata)
+            sc = schema_cache[key]
+            if isinstance(sc, str):
+                return ValidationResult(valid=False, errors=[sc])
+            return validate_query(cast(dict[str, object], item), sc)
+
+        results = [_validate_one(it) for it in items]
+
+    out = (
+        {k: r.to_dict() for k, r in zip(query_payload.keys(), results)}
+        if is_query_map
+        else ([r.to_dict() for r in results] if isinstance(query_payload, list) else results[0].to_dict())
+    )
+    typer.echo(json.dumps(out, indent=2))
+    if not all(r.valid for r in results):
+        raise typer.Exit(1)
 
 
 @group.command(name="context")
