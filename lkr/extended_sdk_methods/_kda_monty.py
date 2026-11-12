@@ -94,7 +94,9 @@ def _bind_sdk(sdk: object, transport_options: object = None) -> None:
     _raw_run_key_driver_analysis = _raw_kda
 
 
-def _normalize_data_app(data: dict[str, object]) -> dict[str, object]:
+def _normalize_data_app(data: object) -> dict[str, object]:
+    if not isinstance(data, dict):
+        return {}
     ctx = data.get("context")
     if ctx is None:
         data["context"] = {}

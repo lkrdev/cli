@@ -662,15 +662,22 @@ fn encode_path_param(val: &Value) -> String {
         Value::Null => String::new(),
         other => other.to_string(),
     };
-    if raw
-        .as_bytes()
-        .windows(3)
-        .any(|w| w[0] == b'%' && w[1].is_ascii_hexdigit() && w[2].is_ascii_hexdigit())
-    {
-        return raw;
-    }
-    let mut out = String::with_capacity(raw.len());
-    for b in raw.bytes() {
+    let bytes = raw.as_bytes();
+    let mut out = String::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let mut b = bytes[i];
+        if b == b'%' {
+            if let Some(decoded) = bytes
+                .get(i + 1..i + 3)
+                .and_then(|s| std::str::from_utf8(s).ok())
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            {
+                b = decoded;
+                i += 2;
+            }
+        }
+        i += 1;
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
             out.push(b as char);
         } else {
