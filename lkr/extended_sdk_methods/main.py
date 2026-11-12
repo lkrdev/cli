@@ -231,6 +231,19 @@ class ExtendedLooker40SDK(Looker40SDK):
             transport_options=transport_options,
         )
 
+    def delete_developer_copy(
+        self,
+        project_id: str,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> None:
+        """Delete a dev mode copy of a project for the current user."""
+        project_id = self.encode_path_param(project_id)
+        self.delete(
+            path=f"/projects/{project_id}/developer_copy",
+            structure=None,
+            transport_options=transport_options,
+        )
+
     def generate_lookml(
         self,
         project_id: str,

@@ -144,6 +144,39 @@ def test_download_project_zip() -> None:
         ) == (True, 4)
 
 
+def test_delete_developer_copy() -> None:
+    mock_auth = MagicMock()
+    mock_auth.settings.base_url = "https://example.looker.com"
+    sdk = ExtendedLooker40SDK(
+        auth=mock_auth,
+        deserialize=MagicMock(),
+        serialize=MagicMock(),
+        transport=MagicMock(),
+        api_version="4.0",
+    )
+
+    with patch.object(sdk, "delete", return_value=None) as mock_delete:
+        assert sdk.delete_developer_copy(project_id="my project") is None
+        mock_delete.assert_called_once_with(
+            path="/projects/my%20project/developer_copy",
+            structure=None,
+            transport_options=None,
+        )
+
+    import pydantic_monty
+
+    seen: list[str] = []
+    with pydantic_monty.Monty() as m, m.checkout() as session:
+        assert (
+            session.feed_run(
+                'return delete_developer_copy("my project")',
+                external_lookup={"delete_developer_copy": lambda project_id: seen.append(project_id)},
+            )
+            is None
+        )
+    assert seen == ["my project"]
+
+
 def test_generate_lookml_with_new_files() -> None:
     mock_auth = MagicMock()
     mock_auth.settings.base_url = "https://example.looker.com"
