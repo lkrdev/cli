@@ -9,6 +9,10 @@ from lkr.extended_sdk_methods._kda_monty import (
     _bind_sdk as _bind_kda_sdk,
 )
 from lkr.extended_sdk_methods._kda_monty import (
+    _normalize_data_app,
+    _serialize_data_app_body,
+)
+from lkr.extended_sdk_methods._kda_monty import (
     decompile_kda_target as _decompile_kda_target,
 )
 from lkr.extended_sdk_methods._kda_monty import (
@@ -642,6 +646,51 @@ class ExtendedLooker40SDK(Looker40SDK):
                 transport_options=transport_options,
             ),
         )
+
+    def get_data_app(
+        self,
+        data_app_id: str,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> dict[str, object]:
+        """Retrieve a Looker Extension / Data App definition, entitlements, and parsed context dict.
+
+        Calls GET /data_app/{data_app_id}. `data_app_id` may be raw or URL-encoded.
+        Automatically parses the JSON-string `context` field into a dict.
+        """
+        data_app_id = self.encode_path_param(data_app_id)
+        data = cast(
+            dict[str, object],
+            self.get(
+                path=f"/data_app/{data_app_id}",
+                structure=dict,
+                transport_options=transport_options,
+            ),
+        )
+        return _normalize_data_app(data)
+
+    def update_data_app(
+        self,
+        data_app_id: str,
+        body: dict[str, object],
+        transport_options: transport.TransportOptions | None = None,
+    ) -> dict[str, object]:
+        """Partially update a Looker Extension / Data App, serializing `context` dict to JSON.
+
+        Calls PATCH /data_app/{data_app_id}. Automatically serializes `body["context"]`
+        if provided as a dict (or None) and parses `context` in the response into a dict.
+        """
+        data_app_id = self.encode_path_param(data_app_id)
+        request_body = _serialize_data_app_body(self._prepare_body(body))
+        data = cast(
+            dict[str, object],
+            self.patch(
+                path=f"/data_app/{data_app_id}",
+                structure=dict,
+                body=cast(api_methods.TBody, request_body),
+                transport_options=transport_options,
+            ),
+        )
+        return _normalize_data_app(data)
 
     def global_search_v2(
         self,

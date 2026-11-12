@@ -662,6 +662,13 @@ fn encode_path_param(val: &Value) -> String {
         Value::Null => String::new(),
         other => other.to_string(),
     };
+    if raw
+        .as_bytes()
+        .windows(3)
+        .any(|w| w[0] == b'%' && w[1].is_ascii_hexdigit() && w[2].is_ascii_hexdigit())
+    {
+        return raw;
+    }
     let mut out = String::with_capacity(raw.len());
     for b in raw.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
@@ -1024,13 +1031,40 @@ async fn execute_sdk_operation<T: SdkTransport>(
         "update_published_agent" | "unpublish_agent" => {
             body = Some(json!({}));
         }
+        "update_data_app" => {
+            if let Some(Value::Object(map)) = body.as_mut() {
+                if let Some(ctx) = map.get("context") {
+                    if !ctx.is_string() {
+                        let serialized = if ctx.is_null() {
+                            "{}".to_string()
+                        } else {
+                            serde_json::to_string(ctx).unwrap_or_else(|_| "{}".to_string())
+                        };
+                        map.insert("context".to_string(), Value::String(serialized));
+                    }
+                }
+            }
+        }
         _ => {}
     }
 
     let query_params = clean_query_params(&query_map);
-    transport
+    let mut result = transport
         .invoke(&op.http_method, &path, query_params, body, options)
-        .await
+        .await?;
+    if matches!(op.name.as_str(), "get_data_app" | "update_data_app") {
+        if let Some(obj) = result.as_object_mut() {
+            let parsed = match obj.get("context") {
+                None | Some(Value::Null) => json!({}),
+                Some(Value::String(s)) if s.trim().is_empty() => json!({}),
+                Some(Value::String(s)) => serde_json::from_str(s)
+                    .map_err(|e| format!("Invalid data_app context JSON: {e}"))?,
+                Some(other) => other.clone(),
+            };
+            obj.insert("context".to_string(), parsed);
+        }
+    }
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
