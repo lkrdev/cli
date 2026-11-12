@@ -4354,6 +4354,7 @@ def test_lookml_to_api_validate_rejects_raw_derived_table_sql_table_name() -> No
       dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }
     }
     view: base_rollup {
+      extends: [orders]
       derived_table: {
         sql: WITH cte AS (SELECT id, items FROM ${orders.SQL_TABLE_NAME})
              SELECT cte.id FROM cte, UNNEST(cte.items) AS item ;;
@@ -4442,6 +4443,64 @@ def test_dimension_group_chrg_month_passes_schema_validate(tmp_path: Path) -> No
     assert json.loads(r2.stdout)["valid"] is True
 
 
+def test_inaccessible_sql_table_name_and_test_assert_field_errors() -> None:
+    bad_dt_sql = """
+    connection: "bq"
+    view: orders { sql_table_name: `p.d.orders` ;; dimension: id { primary_key: yes sql: ${TABLE}.id ;; } }
+    view: dt_unjoined {
+      derived_table: { sql: SELECT id FROM ${orders.SQL_TABLE_NAME} ;; }
+      dimension: id { primary_key: yes sql: ${TABLE}.id ;; }
+    }
+    explore: dt_unjoined {}
+    """
+    r_dt = runner.invoke(
+        app, ["parse", "lookml-to-api", "--lookml", bad_dt_sql, "-m", "inline", "-e", "dt_unjoined", "--validate"]
+    )
+    assert r_dt.exit_code == 1
+    dt_errs = json.loads(r_dt.stdout)["lookml_model_explores"]["inline::dt_unjoined"]["errors"]
+    assert any(e["type"] == "inaccessible_view_ref" and e["view"] == "orders" for e in dt_errs)
 
+    sdt_ok = """
+    connection: "bq"
+    view: orders { sql_table_name: `p.d.orders` ;; dimension: id { primary_key: yes sql: ${TABLE}.id ;; } }
+    view: dt_joined {
+      derived_table: { sql: SELECT id FROM ${orders.SQL_TABLE_NAME} ;; }
+      dimension: id { primary_key: yes sql: ${TABLE}.id ;; }
+    }
+    explore: dt_joined {
+      join: _sdt_orders { from: orders sql: ;; relationship: one_to_one }
+    }
+    """
+    r_sdt = runner.invoke(
+        app, ["parse", "lookml-to-api", "--lookml", sdt_ok, "-m", "inline", "-e", "dt_joined", "--validate"]
+    )
+    assert r_sdt.exit_code == 0, r_sdt.output
 
+    bad_test_lkml = """
+    connection: "bq"
+    view: orders {
+      sql_table_name: `p.d.orders` ;;
+      dimension: id { primary_key: yes sql: ${TABLE}.id ;; }
+      measure: count { type: count }
+    }
+    explore: orders {}
+    test: undeclared_assert {
+      explore_source: orders {
+        column: id {}
+        derived_column: doubled { sql: ${id} * 2 ;; }
+      }
+      assert: check_ok {
+        expression: ${doubled} >= 0 AND ${orders.count} >= 0 ;;
+      }
+    }
+    """
+    r_test = runner.invoke(
+        app, ["parse", "lookml-to-api", "--lookml", bad_test_lkml, "-m", "inline", "-e", "orders", "--validate"]
+    )
+    assert r_test.exit_code == 1
+    t_errs = json.loads(r_test.stdout)["lookml_model_explores"]["inline::orders"]["errors"]
+    assert any(
+        e["type"] == "test_undeclared_assert_field" and e.get("fields") == ["orders.count"] and "undeclared_assert" in e["message"]
+        for e in t_errs
+    )
 

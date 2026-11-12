@@ -51,6 +51,8 @@ from lkr.parse.lookml import (
     LookmlNamedValueFormat,
     LookmlParameter,
     LookmlProject,
+    LookmlTest,
+    LookmlTestAssert,
     LookmlView,
     _default_table_sql,
     parse_lookml,
@@ -1553,6 +1555,9 @@ def _find_inaccessible_view_ref_errors(
     accessible_views: set[str],
     fields: tuple[ApiLookmlModelExploreField, ...],
     api_joins: list[ApiLookmlModelExploreJoins],
+    views_by_alias: dict[str, LookmlView] | None = None,
+    model_views: dict[str, LookmlView] | None = None,
+    joined_orig_views: set[str] | None = None,
 ) -> list[dict[str, object]]:
     pairs = dict.fromkeys(
         (owner, ref)
@@ -1573,7 +1578,7 @@ def _find_inaccessible_view_ref_errors(
         )
         if "." in ref
     )
-    return [
+    errors: list[dict[str, object]] = [
         {
             "type": "inaccessible_view_ref",
             "view": v_ref,
@@ -1585,11 +1590,130 @@ def _find_inaccessible_view_ref_errors(
             ),
         }
         for owner, ref in pairs
-        for v_ref, f_ref in (ref.split(".", 1),)
-        if f_ref != "SQL_TABLE_NAME"
-        and not v_ref.startswith("_")
-        and v_ref not in accessible_views
+        for v_ref, _f_ref in (ref.split(".", 1),)
+        if not v_ref.startswith("_") and v_ref not in accessible_views
     ]
+
+    def _extends_ancestors(start: LookmlView) -> set[str]:
+        anc: set[str] = set()
+        stack = list(_as_list(getattr(start, "extends", None)))
+        while stack:
+            ext = stack.pop()
+            if isinstance(ext, str) and ext not in anc:
+                anc.add(ext)
+                if (ev := (model_views or {}).get(ext)) is not None:
+                    stack.extend(_as_list(getattr(ev, "extends", None)))
+        return anc
+
+    queue: list[tuple[str, LookmlView, set[str]]] = [
+        (va, vo, _extends_ancestors(vo)) for va, vo in (views_by_alias or {}).items()
+    ]
+    seen_dt: set[int] = set()
+    dt_base_ok = accessible_views | (joined_orig_views or set())
+    while queue:
+        v_alias, v_obj, anc = queue.pop()
+        if id(v_obj) in seen_dt:
+            continue
+        seen_dt.add(id(v_obj))
+        dt = getattr(v_obj, "derived_table", None)
+        dt_sql = dt.get("sql") if isinstance(dt, dict) else getattr(dt, "sql", None)
+        if not isinstance(dt_sql, str) or not dt_sql.strip():
+            continue
+        if re.search(r"\$\{\s*EXTENDED\s*\}", dt_sql, flags=re.IGNORECASE):
+            for ext in _as_list(getattr(v_obj, "extends", None)):
+                if isinstance(ext, str) and model_views and ext in model_views:
+                    queue.append((ext, model_views[ext], anc))
+        for ref in dict.fromkeys(_extract_lookml_refs(dt_sql)):
+            if "." not in ref:
+                continue
+            v_ref, f_ref = ref.split(".", 1)
+            if v_ref.startswith("_"):
+                continue
+            ok = (
+                v_ref in dt_base_ok or v_ref in anc or v_ref == v_alias
+                if f_ref == "SQL_TABLE_NAME"
+                else v_ref in accessible_views
+            )
+            if not ok:
+                errors.append(
+                    {
+                        "type": "inaccessible_view_ref",
+                        "view": v_ref,
+                        "field": f"{v_alias}.derived_table.sql",
+                        "fields": [ref],
+                        "message": (
+                            f"Inaccessible view '{v_ref}' referenced via '${{{ref}}}' in '{v_alias}.derived_table.sql' "
+                            f"on explore '{explore_name}'; join '{v_ref}' (or bare-join '_sdt_{v_ref} {{ from: {v_ref} }}') or extend '{v_ref}'."
+                        ),
+                    }
+                )
+    return errors
+
+
+def _find_test_assert_field_errors(
+    explore_name: str,
+    base_alias: str,
+    model_obj: LookmlModel,
+) -> list[dict[str, object]]:
+    errors: list[dict[str, object]] = []
+    tests = model_obj.test if isinstance(model_obj.test, dict) else {}
+    for t_name, raw_t in sorted(tests.items()):
+        for t_obj in _as_list(raw_t):
+            if not isinstance(t_obj, LookmlTest):
+                continue
+            es_val = t_obj.explore_source
+            es = (
+                es_val.get(explore_name)
+                if isinstance(es_val, dict)
+                else (es_val if getattr(es_val, "name_", None) == explore_name else None)
+            )
+            if es is None:
+                continue
+            declared: set[str] = set()
+            for name, f_ref in (
+                *((k, getattr(v, "field", None)) for k, v in (es.column or {}).items()),
+                *((k, None) for k in (es.derived_column or {})),
+            ):
+                low = name.strip().lower()
+                declared.add(low)
+                declared.update(
+                    [f_ref.strip().lower()]
+                    if f_ref
+                    else [f"{base_alias}.{low}".lower(), f"{explore_name}.{low}".lower()]
+                )
+
+            assert_items: list[tuple[str, LookmlTestAssert]] = (
+                list(t_obj.assert_.items())
+                if isinstance(t_obj.assert_, dict)
+                else [
+                    (getattr(a, "name_", None) or f"assert_{i}", a)
+                    for i, a in enumerate(_as_list(t_obj.assert_))
+                    if isinstance(a, LookmlTestAssert)
+                ]
+            )
+            for a_name, a_obj in sorted(assert_items, key=lambda x: x[0]):
+                expr = getattr(a_obj, "expression", None)
+                if not isinstance(expr, str) or not expr:
+                    continue
+                stripped = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\'', " ", expr)
+                missing = [
+                    r
+                    for r in dict.fromkeys(_extract_lookml_refs(stripped))
+                    if r.strip().lower() not in declared
+                ]
+                if missing:
+                    errors.append(
+                        {
+                            "type": "test_undeclared_assert_field",
+                            "field": f"test.{t_name}.{a_name}",
+                            "fields": missing,
+                            "message": (
+                                f"Test '{t_name}' assert '{a_name}' on explore '{explore_name}' references "
+                                f"{missing} which must be declared as a column: or derived_column: in explore_source."
+                            ),
+                        }
+                    )
+    return errors
 
 
 def _extract_raw_dt_tables(dt_sql: str) -> list[str]:
@@ -2183,7 +2307,11 @@ def _build_explore_from_assembled(
             {base_alias, *(exp_obj.join or {})},
             (*all_dims, *all_meas, *all_filts, *all_params),
             api_joins,
+            views_by_alias=views_by_alias,
+            model_views=model_views,
+            joined_orig_views={base_view_name, *(jv_name for _, _, jv_name, _ in join_entries)},
         ),
+        *_find_test_assert_field_errors(explore_name, base_alias, model_obj),
         *_find_raw_derived_table_errors(views_by_alias, model_views),
         *_find_security_and_agg_table_errors(
             explore_name,

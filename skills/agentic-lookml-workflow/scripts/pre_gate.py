@@ -148,6 +148,7 @@ def _sql_meta(sql: str):
             top_chars.append(ch if depth == 0 else " ")
     top = "".join(top_chars)
     sel_exprs: list[str] = []
+    sel_aliases: list[str] = []
     end_kw = r"(?i)^(?:FROM|WHERE|GROUP|ORDER|LIMIT|HAVING|QUALIFY|UNION)\b"
     for sm in re.finditer(r"(?i)\bSELECT\b", clean):
         base_d, i, seg_start, segs = depths[sm.start()], sm.end(), sm.end(), []
@@ -169,9 +170,11 @@ def _sql_meta(sql: str):
             alias = am and (am.group(1) or am.group(2) or am.group(3))
             al = alias.lower() if alias and alias.upper() not in kw_skip else None
             core = re.sub(r"\s+", "", raw_e[: am.start()] if (am and al) else raw_e).lower()
+            core_clean = core.replace("`", "").replace('"', "")
+            src_col = core_clean.split(".")[-1] if re.match(r"^[a-z_]\w*(?:\.[a-z_]\w*)?$", core_clean) else ""
             if first_top:
                 sel_exprs.append(core)
-            src_col = core.split(".")[-1] if re.match(r"^[a-z_]\w*(?:\.[a-z_]\w*)?$", core) else ""
+                sel_aliases.append(al or src_col)
             if al and src_col in scales and al not in scales:
                 scales[al] = scales[src_col]
             if re.search(pct_re, raw_e) or src_col in pct_cols:
@@ -192,7 +195,7 @@ def _sql_meta(sql: str):
             if spec:
                 order_specs.append(spec)
     lm = re.search(r"(?i)\bLIMIT\s+(\d+)\b", top)
-    return scales, pct_cols, pct_idxs, sel_exprs, bool(om), order_specs, (int(lm.group(1)) if lm else None)
+    return scales, pct_cols, pct_idxs, sel_exprs, sel_aliases, bool(om), order_specs, (int(lm.group(1)) if lm else None)
 
 
 def _parse_ts(v):
@@ -258,7 +261,9 @@ def _drop_grain_keys(sql_rows, looker_rows, f_norm: list[str], dfs: list | None 
     return drop
 
 
-def _align_cols(sql_rows, looker_rows, scales, pct_cols, pct_idxs, looker_fields=None, dynamic_fields=None):
+def _align_cols(
+    sql_rows, looker_rows, scales, pct_cols, pct_idxs, looker_fields=None, dynamic_fields=None, sel_aliases=None
+):
     f_norm = [f.lower() for f in (looker_fields or [])]
     drop_l = _drop_grain_keys(sql_rows, looker_rows, f_norm, dynamic_fields)
 
@@ -268,7 +273,9 @@ def _align_cols(sql_rows, looker_rows, scales, pct_cols, pct_idxs, looker_fields
 
     sr_leaves = [{k.split(".")[-1].lower(): v for k, v in sr.items()} for sr in sql_rows]
     lr_leaves = [_norm_lr(lr) for lr in looker_rows]
-    s_keys, l_keys = list(sr_leaves[0]), list(lr_leaves[0])
+    ordered_s = [a for a in dict.fromkeys(sel_aliases or ()) if a in sr_leaves[0]]
+    s_keys = ordered_s + [k for k in sr_leaves[0] if k not in ordered_s]
+    l_keys = list(lr_leaves[0])
     bad_cols = [
         f"Row {i} column count mismatch: SQL={len(sr)} {list(sr)}, Looker={len(lr)} {list(lr)}"
         for i, (sr, lr) in enumerate(zip(sr_leaves, lr_leaves))
@@ -285,6 +292,23 @@ def _align_cols(sql_rows, looker_rows, scales, pct_cols, pct_idxs, looker_fields
         if sk in lr_leaves[0] or len(l_by_leaf.get(sk, ())) == 1
     }
     used_l = set(s_to_l.values())
+    for sk in s_keys:
+        if sk in s_to_l or not (st := {t for t in sk.split("_") if t}):
+            continue
+        cands = [
+            lk for lk in l_keys
+            if lk not in used_l
+            and (lt := {t for t in lk.split(".")[-1].split("_") if t})
+            and (st.issubset(lt) or lt.issubset(st))
+        ]
+        if len(cands) > 1:
+            cands = [
+                lk for lk in cands
+                if (ft := {t for t in lk.replace(".", "_").split("_") if t}) and (st.issubset(ft) or ft.issubset(st))
+            ]
+        if len(cands) == 1:
+            s_to_l[sk] = cands[0]
+            used_l.add(cands[0])
     s_to_l.update(dict(zip([k for k in s_keys if k not in s_to_l], [k for k in l_keys if k not in used_l])))
     cols = []
     for c_idx, sk in enumerate(s_keys):
@@ -330,13 +354,13 @@ def compare_row_sets(
         return False, [f"Row count mismatch: SQL={len(sql_rows)}, Looker={len(looker_rows)}"]
     if not sql_rows:
         return True, []
-    scales, pct_cols, pct_idxs, sel_exprs, has_order_by, order_specs, limit_n = _sql_meta(sql)
+    scales, pct_cols, pct_idxs, sel_exprs, sel_aliases, has_order_by, order_specs, limit_n = _sql_meta(sql)
     sr_leaves, lr_leaves, cols, _norm_lr, bad_cols = _align_cols(
-        sql_rows, looker_rows, scales, pct_cols, pct_idxs, looker_fields, dynamic_fields
+        sql_rows, looker_rows, scales, pct_cols, pct_idxs, looker_fields, dynamic_fields, sel_aliases
     )
     if bad_cols:
         return False, bad_cols
-    s_keys = list(sr_leaves[0])
+    s_keys = [sk for _, sk, _, _, _, _ in cols]
     order_idxs: list[int] = []
     s_ob = None
     tied_ob = False
@@ -451,9 +475,9 @@ def _ntile_conserved(
 ) -> bool:
     if len(sql_rows) < 2 or len(sql_rows) != len(looker_rows):
         return False
-    scales, pct_cols, pct_idxs, sel_exprs, _, _, _ = _sql_meta(sql)
+    scales, pct_cols, pct_idxs, sel_exprs, sel_aliases, _, _, _ = _sql_meta(sql)
     sr_leaves, lr_leaves, cols, _, bad_cols = _align_cols(
-        sql_rows, looker_rows, scales, pct_cols, pct_idxs, looker_fields, dynamic_fields
+        sql_rows, looker_rows, scales, pct_cols, pct_idxs, looker_fields, dynamic_fields, sel_aliases
     )
     if bad_cols or len(cols) < 2 or len(sel_exprs) != len(cols):
         return False
@@ -600,6 +624,14 @@ def main():
         payloads, iq_err = _parse_json_dict(inline_queries_json, "inline_queries_json")  # ty: ignore[unresolved-reference]
     except NameError:
         payloads, iq_err = {}, None
+    try:
+        explore_hashes, _ = _parse_json_dict(explore_hashes_json, "explore_hashes_json")  # ty: ignore[unresolved-reference]
+    except NameError:
+        explore_hashes = {}
+    try:
+        force_recheck_flag = str(force_recheck).lower() == "true"  # ty: ignore[unresolved-reference]
+    except NameError:
+        force_recheck_flag = False
     if iq_err:
         val_errors.append({"message": iq_err, "severity": "error"})
         data["validation_errors"] = val_errors
@@ -609,6 +641,21 @@ def main():
     for q in queries_list:
         idx = q.get("query_index")
         inline_q = payloads.get(str(idx)) or payloads.get(idx)
+        exp_name = (inline_q.get("view") if isinstance(inline_q, dict) else None) or (
+            q.get("inline_query").get("view") if isinstance(q.get("inline_query"), dict) else None
+        )
+        exp_hash = str(explore_hashes.get(exp_name) or "") if exp_name else ""
+        if (
+            not force_recheck_flag
+            and inline_q
+            and q.get("parity_status") == "matched"
+            and q.get("inline_query") == inline_q
+            and q.get("sql_query_id")
+            and (q.get("query_id") or q.get("query_slug"))
+            and exp_hash
+            and q.get("explore_hash") == exp_hash
+        ):
+            continue
         if inline_q:
             q_obj = create_query(body=inline_q) or {}  # ty: ignore[unresolved-reference]
             slug = q_obj.get("slug") or q_obj.get("client_id")
@@ -715,7 +762,7 @@ def main():
                     dynamic_fields=dfs,
                 )
             if not matched and isinstance(active_q, dict) and s_rows and len(s_rows) == len(l_rows) and not has_post_sql:
-                _, _, _, _, has_ob, _, _ = _sql_meta(stmt_sql)
+                _, _, _, _, _, has_ob, _, _ = _sql_meta(stmt_sql)
                 base_stmt = pinned_stmt if pinned_mode else stmt_sql
                 clean_sql = re.sub(r"(?:\s|--[^\n]*|/\*[\s\S]*?\*/|;)+$", "", base_stmt)
                 lim_match = re.search(r"(?i)\bLIMIT\s+(\d+)(?:\s+OFFSET\s+\d+)?\s*$", clean_sql)
@@ -779,6 +826,8 @@ def main():
                         break
             q["parity_status"] = "matched" if matched else "mismatched"
             q["mismatches"] = mismatches
+            if exp_hash:
+                q["explore_hash"] = exp_hash
             all_matched = all_matched and matched
         except Exception as e:
             q["parity_status"] = "error"

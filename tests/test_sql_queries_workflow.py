@@ -1476,6 +1476,8 @@ def test_case_filter_unescaped_comma_and_zero_hint_and_test_target_guard() -> No
       }
       view: p {
         dimension: id { primary_key: yes sql: ${TABLE}.id ;; }
+      }
+      view: p_subq_v {
         dimension: subq { sql: (SELECT COUNT(*) FROM ${unjoined_tbl.SQL_TABLE_NAME}) ;; }
       }
       view: ii {
@@ -1488,12 +1490,17 @@ def test_case_filter_unescaped_comma_and_zero_hint_and_test_target_guard() -> No
           sql_end: ${ch.now_raw} ;;
         }
       }
+      explore: bad_subq {
+        view_name: p_subq_v
+      }
     }
     """
     res_ref = parse_lookml_to_api(lookml=lkml_ref)
     bad_refs = [e for e in (res_ref.lookml_model_explores["m::p_bad"].errors or []) if e["type"] == "inaccessible_view_ref"]
     assert len(bad_refs) == 1 and bad_refs[0]["view"] == "ch" and bad_refs[0]["field"] == "ii.shelf_age"
     assert (res_ref.lookml_model_explores["m::p_ok"].errors or []) == []
+    subq_refs = [e for e in (res_ref.lookml_model_explores["m::bad_subq"].errors or []) if e["type"] == "inaccessible_view_ref"]
+    assert len(subq_refs) == 1 and subq_refs[0]["view"] == "unjoined_tbl"
 
 
 def test_pre_gate_half_away_round_cte_pct_table_calc_backing_and_test_gate() -> None:
@@ -1719,3 +1726,92 @@ def test_pre_gate_nondeterministic_ntile_shuffle_conservation_and_rejects_broken
     assert pre_gate_mod._ntile_conserved(
         s_cached, l_broken, ntile_sql, ["rf.score", "rf.count", "u.avg_age", "rf.avg_spend"]
     ) is False
+
+
+def test_pre_gate_select_order_token_matching_retry_cache_and_bare_pr_skip(tmp_path: Path) -> None:
+    # 1. SQL SELECT projection order overrides alphabetical dict key order (BTreeMap-like) + token-subset matching
+    sql_two = (
+        "SELECT avg_spend AS z_ltv, cnt AS a_customers FROM t;"
+        "SELECT id, ROUND(total, 1) AS total_rev FROM o"
+    )
+    # Alphabetically sorted SQL keys ("a_customers", "z_ltv"), while SELECT order is ("z_ltv", "a_customers")
+    s_alpha_sorted = [{"a_customers": 5, "z_ltv": 100.0}]
+    l_diff_names = [{"users.val_x": 100.0, "users.val_y": 5}]
+    assert compare_row_sets(
+        s_alpha_sorted,
+        l_diff_names,
+        sql="SELECT avg_spend AS z_ltv, cnt AS a_customers FROM t",
+        looker_fields=["users.val_x", "users.val_y"],
+    ) == (True, [])
+    # Token-subset matching: "avg_order_value" <-> "orders.order_value" when SQL SELECT order differs from fields order
+    assert compare_row_sets(
+        [{"avg_order_value": 55.0, "order_count": 3}],
+        [{"orders.count_orders": 3, "orders.order_value": 55.0}],
+        sql="SELECT aov AS avg_order_value, cnt AS order_count FROM o",
+        looker_fields=["orders.count_orders", "orders.order_value"],
+    ) == (True, [])
+
+    # 2. Retry caching: skips unchanged matched explore query, re-runs invalidated explore, force_recheck bypasses
+    calls: dict[str, list[str]] = {"create_q": [], "run_q": []}
+
+    def _run_pg(data_payload: object, hashes: dict[str, str], force: str = "false") -> _MontyResult:
+        return _run_monty(
+            SCRIPTS_DIR / "pre_gate.py",
+            {
+                "raw_sql": sql_two,
+                "connection_name": "bq",
+                "data_json": json.dumps(data_payload),
+                "inline_queries_json": json.dumps({
+                    "0": {"model": "m", "view": "e0", "fields": ["e0.z_ltv", "e0.a_customers"]},
+                    "1": {"model": "m", "view": "e1", "fields": ["e1.id", "e1.total_rev"]},
+                }),
+                "explore_hashes_json": json.dumps(hashes),
+                "force_recheck": force,
+            },
+            {
+                "create_sql_query": lambda body: {"slug": f"s_{len(body['sql'])}"},
+                "create_query": lambda body: (calls["create_q"].append(str(body["view"])), {"id": str(len(calls["create_q"])), "slug": f"q_{body['view']}"})[1],
+                "run_sql_query": lambda slug, **_kw: json.dumps(
+                    [{"a_customers": 5, "z_ltv": 100.0}] if "a_customers" in slug_sql(slug) else [{"id": 1, "total_rev": 9.5}]
+                ),
+                "run_inline_query": lambda body, **_kw: (
+                    calls["run_q"].append(str(body["view"])),
+                    json.dumps([{"e0.z_ltv": 100.0, "e0.a_customers": 5}] if body["view"] == "e0" else [{"e1.id": 1, "e1.total_rev": 9.5}]),
+                )[1],
+            },
+        )
+
+    def slug_sql(slug: str) -> str:
+        return "a_customers" if slug == f"s_{len('SELECT avg_spend AS z_ltv, cnt AS a_customers FROM t')}" else "total_rev"
+
+    r1 = _run_pg({"project_id": "p"}, {"e0": "h0", "e1": "h1"})
+    assert r1["passed"] is True and calls["create_q"] == ["e0", "e1"] and calls["run_q"] == ["e0", "e1"]
+
+    calls["create_q"].clear()
+    calls["run_q"].clear()
+    # Second run: only e1 hash changed -> e0 skipped completely, only e1 re-run
+    r2 = _run_pg(r1, {"e0": "h0", "e1": "h1_v2"})
+    assert r2["passed"] is True and calls["create_q"] == ["e1"] and calls["run_q"] == ["e1"]
+
+    calls["create_q"].clear()
+    calls["run_q"].clear()
+    # force_recheck="true" re-runs both even when hashes match
+    r3 = _run_pg(r2, {"e0": "h0", "e1": "h1_v2"}, force="true")
+    assert r3["passed"] is True and calls["create_q"] == ["e0", "e1"] and calls["run_q"] == ["e0", "e1"]
+
+    # 3. create_github_pr.sh skips cleanly on bare Looker repos
+    sess = tmp_path / "sess"
+    sess.mkdir()
+    (sess / "data.json").write_text(
+        json.dumps({"run_id": "r1", "git_remote_url": "/var/looker/bare_models/proj", "branch_name": "b1"}),
+        encoding="utf-8",
+    )
+    pr_res = subprocess.run(
+        ["bash", str(SCRIPTS_DIR / "create_github_pr.sh"), str(sess)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert pr_res.returncode == 0, pr_res.stderr
+    assert json.loads(pr_res.stdout) == {"skipped": True, "reason": "bare_git_repo"}
+
