@@ -662,8 +662,22 @@ fn encode_path_param(val: &Value) -> String {
         Value::Null => String::new(),
         other => other.to_string(),
     };
-    let mut out = String::with_capacity(raw.len());
-    for b in raw.bytes() {
+    let bytes = raw.as_bytes();
+    let mut out = String::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let mut b = bytes[i];
+        if b == b'%' {
+            if let Some(decoded) = bytes
+                .get(i + 1..i + 3)
+                .and_then(|s| std::str::from_utf8(s).ok())
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            {
+                b = decoded;
+                i += 2;
+            }
+        }
+        i += 1;
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
             out.push(b as char);
         } else {
@@ -1024,13 +1038,40 @@ async fn execute_sdk_operation<T: SdkTransport>(
         "update_published_agent" | "unpublish_agent" => {
             body = Some(json!({}));
         }
+        "update_data_app" => {
+            if let Some(Value::Object(map)) = body.as_mut() {
+                if let Some(ctx) = map.get("context") {
+                    if !ctx.is_string() {
+                        let serialized = if ctx.is_null() {
+                            "{}".to_string()
+                        } else {
+                            serde_json::to_string(ctx).unwrap_or_else(|_| "{}".to_string())
+                        };
+                        map.insert("context".to_string(), Value::String(serialized));
+                    }
+                }
+            }
+        }
         _ => {}
     }
 
     let query_params = clean_query_params(&query_map);
-    transport
+    let mut result = transport
         .invoke(&op.http_method, &path, query_params, body, options)
-        .await
+        .await?;
+    if matches!(op.name.as_str(), "get_data_app" | "update_data_app") {
+        if let Some(obj) = result.as_object_mut() {
+            let parsed = match obj.get("context") {
+                None | Some(Value::Null) => json!({}),
+                Some(Value::String(s)) if s.trim().is_empty() => json!({}),
+                Some(Value::String(s)) => serde_json::from_str(s)
+                    .map_err(|e| format!("Invalid data_app context JSON: {e}"))?,
+                Some(other) => other.clone(),
+            };
+            obj.insert("context".to_string(), parsed);
+        }
+    }
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------

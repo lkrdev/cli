@@ -618,6 +618,31 @@ fn main() {
             output_fields: vec![],
         },
         OperationMeta {
+            name: "get_data_app".to_string(),
+            http_method: "GET".to_string(),
+            path: "/data_app/{data_app_id}".to_string(),
+            doc: "Retrieve a Looker Extension / Data App with `context` parsed as a dict.".to_string(),
+            params: vec![
+                ParamMeta { name: "data_app_id".into(), location: "path".into(), required: true, type_str: "str".into() },
+                ParamMeta { name: "transport_options".into(), location: "options".into(), required: false, type_str: "TransportOptions | None".into() },
+            ],
+            return_type: "dict[str, Any]".to_string(),
+            output_fields: vec![],
+        },
+        OperationMeta {
+            name: "update_data_app".to_string(),
+            http_method: "PATCH".to_string(),
+            path: "/data_app/{data_app_id}".to_string(),
+            doc: "Partially update a Looker Extension / Data App, serializing `context` dict to JSON and parsing response `context`.".to_string(),
+            params: vec![
+                ParamMeta { name: "data_app_id".into(), location: "path".into(), required: true, type_str: "str".into() },
+                ParamMeta { name: "body".into(), location: "body".into(), required: true, type_str: "dict[str, Any]".into() },
+                ParamMeta { name: "transport_options".into(), location: "options".into(), required: false, type_str: "TransportOptions | None".into() },
+            ],
+            return_type: "dict[str, Any]".to_string(),
+            output_fields: vec![],
+        },
+        OperationMeta {
             name: "create_ci_run".to_string(),
             http_method: "POST".to_string(),
             path: "/projects/{project_id}/ci/run".to_string(),

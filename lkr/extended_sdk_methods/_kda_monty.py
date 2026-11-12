@@ -94,6 +94,27 @@ def _bind_sdk(sdk: object, transport_options: object = None) -> None:
     _raw_run_key_driver_analysis = _raw_kda
 
 
+def _normalize_data_app(data: object) -> dict[str, object]:
+    if not isinstance(data, dict):
+        return {}
+    ctx = data.get("context")
+    if ctx is None:
+        data["context"] = {}
+    elif isinstance(ctx, str):
+        data["context"] = json.loads(ctx) if ctx.strip() else {}
+    return data
+
+
+def _serialize_data_app_body(request_body: object) -> object:
+    if isinstance(request_body, dict) and "context" in request_body and not isinstance(request_body["context"], str):
+        ctx_val = request_body["context"]
+        return {
+            **request_body,
+            "context": json.dumps({} if ctx_val is None else ctx_val),
+        }
+    return request_body
+
+
 # --- MONTY_KDA_PREAMBLE ---
 TIME_SUFFIXES = (
     "_date",

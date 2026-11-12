@@ -825,4 +825,64 @@ return profile_fields(
         assert m_res["profiles"]["order_items.created_date"]["stats"]["min_date"] == "2024-01-01"
 
 
+def test_data_app() -> None:
+    """Verify get_data_app and update_data_app handle raw/encoded IDs and treat context as dict."""
+    mock_auth = MagicMock()
+    mock_auth.settings.base_url = "https://example.looker.com"
+    sdk = ExtendedLooker40SDK(
+        auth=mock_auth,
+        deserialize=MagicMock(),
+        serialize=MagicMock(),
+        transport=MagicMock(),
+        api_version="4.0",
+    )
+
+    with patch.object(
+        sdk,
+        "get",
+        return_value={
+            "id": "genai_extensions::data_apps_showcase",
+            "context": '{"hide_dashboard_header": true, "layout": "unset"}',
+        },
+    ) as mock_get:
+        res = sdk.get_data_app("genai_extensions::data_apps_showcase")
+        assert res["id"] == "genai_extensions::data_apps_showcase"
+        assert res["context"] == {"hide_dashboard_header": True, "layout": "unset"}
+        mock_get.assert_called_once_with(
+            path="/data_app/genai_extensions%3A%3Adata_apps_showcase",
+            structure=dict,
+            transport_options=None,
+        )
+
+    with patch.object(
+        sdk,
+        "get",
+        return_value={"id": "genai_extensions::data_apps_showcase", "context": None},
+    ) as mock_get:
+        res_empty = sdk.get_data_app("genai_extensions%3A%3Adata_apps_showcase")
+        assert res_empty["context"] == {}
+        mock_get.assert_called_once_with(
+            path="/data_app/genai_extensions%3A%3Adata_apps_showcase",
+            structure=dict,
+            transport_options=None,
+        )
+
+    payload: dict[str, object] = {"context": {"hide_dashboard_header": False}}
+    with patch.object(
+        sdk,
+        "patch",
+        return_value={
+            "id": "genai_extensions::data_apps_showcase",
+            "context": '{"hide_dashboard_header": false}',
+        },
+    ) as mock_patch:
+        updated = sdk.update_data_app("genai_extensions::data_apps_showcase", body=payload)
+        assert payload["context"] == {"hide_dashboard_header": False}
+        assert updated["context"] == {"hide_dashboard_header": False}
+        mock_patch.assert_called_once_with(
+            path="/data_app/genai_extensions%3A%3Adata_apps_showcase",
+            structure=dict,
+            body={"context": '{"hide_dashboard_header": false}'},
+            transport_options=None,
+        )
 
