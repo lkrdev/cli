@@ -301,7 +301,7 @@ $ lkr tools user-attribute-updater [OPTIONS]
 
 **Options**:
 
-* `--host <str>`: [env var: HOST; default: 127.0.0.1]
+* `--host <str>`: [env var: HOST; default: 0.0.0.0]
 * `--port <int>`: [env var: PORT; default: 8080]
 * `--help`: Show this message and exit.
 

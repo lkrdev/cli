@@ -25,7 +25,7 @@ if not logger:
 
 @group.command()
 def user_attribute_updater(
-    host: str = typer.Option(default="127.0.0.1", envvar="HOST"),
+    host: str = typer.Option(default="0.0.0.0", envvar="HOST"),
     port: int = typer.Option(default=8080, envvar="PORT"),
 ) -> None:
     api = FastAPI()
@@ -90,7 +90,7 @@ def user_attribute_updater(
         except Exception as e:  # noqa: BLE001
             return AttributeUpdaterResponse(success=False, message=str(e))
 
-    @api.get("")
+    @api.get("/")
     def health() -> dict[str, str]:
         return {"status": "ok"}
 

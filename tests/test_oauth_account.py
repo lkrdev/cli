@@ -517,3 +517,89 @@ def test_add_access_token_env_vars_only_until_expiry(
     assert len(api_key_calls) == 2
     assert runner.invoke(app, ["auth", "list"]).exit_code == 1
 
+
+def test_dev_flag_api_key_and_oauth(
+    temp_db: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from unittest.mock import MagicMock
+
+    from typer.testing import CliRunner
+
+    from lkr.auth_service import DbOAuthSession
+    from lkr.main import app
+
+    monkeypatch.setattr("lkr.auth_service.os.path.expanduser", lambda _p: temp_db)
+    for var in ("LOOKERSDK_CLIENT_ID", "LOOKERSDK_CLIENT_SECRET", "LOOKERSDK_BASE_URL"):
+        monkeypatch.delenv(var, raising=False)
+
+    runner = CliRunner()
+
+    # 1) Partial API key (--client-id + --client-secret without --base-url) fails fast instead of falling back to OAuth
+    with caplog.at_level("WARNING", logger="lkr"):
+        res_missing = runner.invoke(
+            app, ["--client-id=id1", "--client-secret=sec1", "--dev", "auth", "list"]
+        )
+    assert res_missing.exit_code == 1
+    assert "Ignoring --dev flag" not in caplog.text
+    for var in ("LOOKERSDK_CLIENT_ID", "LOOKERSDK_CLIENT_SECRET", "LOOKERSDK_BASE_URL"):
+        monkeypatch.delenv(var, raising=False)
+
+    # 2) Complete API key + --dev honors use_production=False
+    fake_sdk = MagicMock()
+    api_key_calls: list[bool] = []
+
+    def fake_init_api_key(
+        _api_key: LookerApiKey, use_production: bool = True
+    ) -> MagicMock:
+        api_key_calls.append(use_production)
+        return fake_sdk
+
+    monkeypatch.setattr("lkr.auth_service.init_api_key_sdk", fake_init_api_key)
+    res_api = runner.invoke(
+        app,
+        [
+            "--client-id=id1",
+            "--client-secret=sec1",
+            "--base-url=https://acme.cloud.looker.com",
+            "--dev",
+            "auth",
+            "whoami",
+        ],
+    )
+    assert res_api.exit_code == 0
+    assert api_key_calls == [False]
+    assert "Ignoring --dev flag" not in caplog.text
+    for var in ("LOOKERSDK_CLIENT_ID", "LOOKERSDK_CLIENT_SECRET", "LOOKERSDK_BASE_URL"):
+        monkeypatch.delenv(var, raising=False)
+
+    # 3) --dev with valid cached prod OAuth token switches to dev, next non-dev switches back to prod once, and dev OAuth never switches to prod
+    switched: list[str] = []
+    monkeypatch.setattr(
+        DbOAuthSession,
+        "_switch_to_workspace",
+        lambda self, ws: switched.append(ws),
+    )
+    monkeypatch.setattr("lkr.auth_service.Looker40SDK.me", lambda _self: MagicMock())
+    monkeypatch.setattr("lkr.auth_service.Looker40SDK.session", lambda _self: MagicMock())
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="lkr"):
+        assert runner.invoke(app, ["--dev", "auth", "whoami"]).exit_code == 0
+        assert runner.invoke(app, ["auth", "whoami"]).exit_code == 0
+        assert runner.invoke(app, ["auth", "whoami"]).exit_code == 0
+    assert switched == ["dev", "production"]
+    assert "Ignoring --dev flag" not in caplog.text
+
+    # dev OAuth token (use_production=False) without --dev never switches to production
+    conn = sqlite3.connect(temp_db)
+    conn.execute("UPDATE auth SET use_production = 0 WHERE instance_name = 'active-inst'")
+    conn.commit()
+    conn.close()
+    switched.clear()
+    assert runner.invoke(app, ["auth", "whoami"]).exit_code == 0
+    assert switched == []
+
+    # 4) --force-oauth ignores partial LOOKERSDK_* env vars
+    monkeypatch.setenv("LOOKERSDK_CLIENT_ID", "stray-id")
+    assert runner.invoke(app, ["--force-oauth", "--dev", "auth", "list"]).exit_code == 0
+
+

@@ -133,11 +133,18 @@ def callback(
         base_url=base_url,
     )
     ctx.obj["ctx_lkr"] = ctx_obj
-    # if the user passes --dev, but lkrCtxObj.use_sdk is oauth, then we need to log a warning saying we're ignoring the --dev flag
-    if dev and ctx_obj.use_sdk == "oauth" and not base_url:
-        logger.warning(
-            "Ignoring --dev flag because OAuth token tracks dev/prod mode."
-        )
+    if not force_oauth and (client_id or client_secret) and not ctx_obj.api_key:
+        missing = [
+            flag
+            for flag, val in (
+                ("--base-url", base_url),
+                ("--client-id", client_id),
+                ("--client-secret", client_secret),
+            )
+            if not val
+        ]
+        logger.error(f"Incomplete API key configuration. Missing: {', '.join(missing)}")
+        raise typer.Exit(1)
 
     if log_level:
         from lkr.logger import set_log_level

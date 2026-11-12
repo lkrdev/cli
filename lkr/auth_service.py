@@ -5,7 +5,7 @@ import sys
 import types
 import urllib.parse
 from datetime import UTC, datetime, timedelta
-from typing import Self, Union, cast
+from typing import Literal, Self, Union, cast
 
 import requests
 import typer
@@ -216,15 +216,17 @@ class DbOAuthSession(OAuthSession):
                 raise typer.Exit(1)
         self.new_token_callback(self.token)
 
-    def _switch_to_dev_mode(self) -> Response:
-        logger.debug("Switching to dev mode")
+    def _switch_to_workspace(
+        self, workspace_id: Literal["dev", "production"]
+    ) -> Response:
+        logger.debug(f"Switching to {workspace_id} mode")
         config = self.settings.read_config()
         if "base_url" in config:
             url = f"{config['base_url']}/api/{LOOKER_API_VERSION}/session"
             return self.transport.request(
                 method=HttpMethod.PATCH,
                 path=url,
-                body=json.dumps({"workspace_id": "dev"}).encode("utf-8"),
+                body=json.dumps({"workspace_id": workspace_id}).encode("utf-8"),
                 transport_options={
                     "headers": {
                         "Content-Type": "application/json",
@@ -234,6 +236,9 @@ class DbOAuthSession(OAuthSession):
             )
         else:
             raise ValueError("Base URL not found in settings")
+
+    def _switch_to_dev_mode(self) -> Response:
+        return self._switch_to_workspace("dev")
 
 
 def get_auth_session(
@@ -512,6 +517,11 @@ class SqlLiteAuth:
         self.conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_instance_name ON auth(instance_name)"
         )
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(auth)").fetchall()}
+        if "session_dev" not in cols:
+            self.conn.execute(
+                "ALTER TABLE auth ADD COLUMN session_dev BOOLEAN DEFAULT 0"
+            )
         self.conn.commit()
 
     def __enter__(self) -> Self:
@@ -644,7 +654,32 @@ class SqlLiteAuth:
                 import sys
 
                 try:
+                    was_authenticated = sdk.auth.is_authenticated
                     sdk.auth.authenticate({})
+                    if current_auth.use_production and isinstance(
+                        sdk.auth, DbOAuthSession
+                    ):
+                        if not target_use_production:
+                            if was_authenticated:
+                                sdk.auth._switch_to_dev_mode()
+                            self.conn.execute(
+                                "UPDATE auth SET session_dev = 1 WHERE instance_name = ?",
+                                (current_auth.instance_name,),
+                            )
+                            self.conn.commit()
+                        else:
+                            row = self.conn.execute(
+                                "SELECT session_dev FROM auth WHERE instance_name = ?",
+                                (current_auth.instance_name,),
+                            ).fetchone()
+                            if row and row["session_dev"]:
+                                if was_authenticated:
+                                    sdk.auth._switch_to_workspace("production")
+                                self.conn.execute(
+                                    "UPDATE auth SET session_dev = 0 WHERE instance_name = ?",
+                                    (current_auth.instance_name,),
+                                )
+                                self.conn.commit()
                 except Exception as e:
                     if (
                         current_auth.refresh_token
