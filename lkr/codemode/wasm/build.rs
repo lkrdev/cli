@@ -386,6 +386,18 @@ fn main() {
             output_fields: vec![],
         },
         OperationMeta {
+            name: "download_project_zip".to_string(),
+            http_method: "GET".to_string(),
+            path: "/projects/{project_id}/download_zip".to_string(),
+            doc: "Download a zip of the project's current workspace directory.".to_string(),
+            params: vec![
+                ParamMeta { name: "project_id".into(), location: "path".into(), required: true, type_str: "str".into() },
+                ParamMeta { name: "transport_options".into(), location: "options".into(), required: false, type_str: "TransportOptions | None".into() },
+            ],
+            return_type: "bytes".to_string(),
+            output_fields: vec![],
+        },
+        OperationMeta {
             name: "get_file_content".to_string(),
             http_method: "GET".to_string(),
             path: "/projects/{project_id}/file/content".to_string(),

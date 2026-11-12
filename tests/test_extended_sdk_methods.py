@@ -112,6 +112,38 @@ def test_generate_lookml() -> None:
         assert kwargs["body"] == request.model_dump()
 
 
+def test_download_project_zip() -> None:
+    mock_auth = MagicMock()
+    mock_auth.settings.base_url = "https://example.looker.com"
+    sdk = ExtendedLooker40SDK(
+        auth=mock_auth,
+        deserialize=MagicMock(),
+        serialize=MagicMock(),
+        transport=MagicMock(),
+        api_version="4.0",
+    )
+
+    with patch.object(sdk, "get") as mock_get:
+        mock_get.return_value = b"PK\x05\x06" + b"\x00" * 18
+        res = sdk.download_project_zip(project_id="my project")
+        assert res.startswith(b"PK")
+        mock_get.assert_called_once_with(
+            path="/projects/my%20project/download_zip",
+            structure=bytes,
+            transport_options=None,
+        )
+
+    import pydantic_monty
+
+    from lkr.codemode.type import to_primitive
+
+    with pydantic_monty.Monty() as m, m.checkout() as session:
+        assert session.feed_run(
+            'b = download_project_zip("my project"); return isinstance(b, bytes), len(b)',
+            external_lookup={"download_project_zip": lambda project_id: to_primitive(b"PK\x05\x06")},
+        ) == (True, 4)
+
+
 def test_generate_lookml_with_new_files() -> None:
     mock_auth = MagicMock()
     mock_auth.settings.base_url = "https://example.looker.com"

@@ -804,3 +804,80 @@ def test_push_create_project_and_no_root_fallback(
         )
         assert res_err.exit_code != 0
         assert isinstance(res_err.exception, RuntimeError)
+
+
+def test_pull_zip_default_and_fallback(
+    tmp_path: Path, mock_sdk: MagicMock, mock_auth: MagicMock
+) -> None:
+    import io
+    import zipfile
+
+    project_dir = tmp_path / "test_project"
+    project_dir.mkdir()
+    local_orphan = project_dir / "orphan.view.lkml"
+    local_orphan.write_text("view: orphan {}")
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("./models/pulled.model.lkml", 'connection: "bq"')
+        zf.writestr(".git/HEAD", "ref: refs/heads/main\n")
+        zf.writestr(".gitignore", "*.pyc\n")
+        zf.writestr(".agents/skills/doc.md", "# Agent Doc")
+        zf.writestr("remote_unsupported.doc", "ignored")
+        zf.writestr("../outside/escape.lkml", "malicious")
+    zip_bytes = buf.getvalue()
+
+    mock_sdk.download_project_zip.return_value = zip_bytes
+
+    with (
+        patch("lkr.tools.lookml.get_auth", return_value=mock_auth),
+        patch("lkr.tools.lookml.logger.warning") as mock_warn,
+    ):
+        res = runner.invoke(app, ["tools", "lookml", "pull", str(project_dir)])
+        assert res.exit_code == 0
+        assert (project_dir / "models" / "pulled.model.lkml").read_text() == 'connection: "bq"'
+        assert not local_orphan.exists()
+        assert not (project_dir / ".git").exists()
+        assert not (project_dir / ".agents" / "skills" / "doc.md").exists()
+        assert not (outside_dir / "escape.lkml").exists()
+        mock_sdk.all_project_files.assert_not_called()
+        mock_sdk.get_file_content.assert_not_called()
+        mock_warn.assert_any_call(
+            "Remote file 'remote_unsupported.doc' has an extension not supported by Looker."
+        )
+        mock_warn.assert_any_call(
+            "Path traversal detected and blocked: ../outside/escape.lkml"
+        )
+
+        # --sync-hidden includes .agents but still excludes .git
+        res_hidden = runner.invoke(
+            app, ["tools", "lookml", "pull", str(project_dir), "--sync-hidden"]
+        )
+        assert res_hidden.exit_code == 0
+        assert (project_dir / ".agents" / "skills" / "doc.md").read_text() == "# Agent Doc"
+        assert not (project_dir / ".git").exists()
+
+    # Fallback when download_project_zip errors or returns invalid zip
+    mock_sdk.download_project_zip.side_effect = [
+        RuntimeError("404 Not Found"),
+        b"not a zip",
+    ]
+    for _ in range(2):
+        fallback_dir = tmp_path / "fallback_project"
+        fallback_dir.mkdir(exist_ok=True)
+        mock_sdk.all_project_files.reset_mock()
+        mock_sdk.get_file_content.reset_mock()
+        mock_sdk.all_project_files.return_value = [{"id": "views/orders.view.lkml"}]
+        mock_sdk.get_file_content.return_value = "view: orders {}"
+
+        with patch("lkr.tools.lookml.get_auth", return_value=mock_auth):
+            res_fb = runner.invoke(app, ["tools", "lookml", "pull", str(fallback_dir)])
+            assert res_fb.exit_code == 0
+        assert (fallback_dir / "views" / "orders.view.lkml").read_text() == "view: orders {}"
+        mock_sdk.all_project_files.assert_called_once_with(project_id="fallback_project")
+        mock_sdk.get_file_content.assert_called_once_with(
+            project_id="fallback_project", file_path="views/orders.view.lkml"
+        )
+
