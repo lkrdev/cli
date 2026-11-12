@@ -1160,7 +1160,7 @@ function mergeWithExtended(baseObject, addObject, parentKey) {{
     if (key === "$name" && typeof addVal === "string" && addVal[0] === "+") continue;
     let newVal;
     if (Array.isArray(baseVal)) {{
-      newVal = baseVal.concat(undefined);
+      newVal = baseVal.concat(addVal);
     }} else if (baseVal && typeof baseVal === "object" && addVal && typeof addVal === "object") {{
       newVal = mergeWithExtended(baseVal, addVal, key);
     }} else if (typeof addVal === "string" && EXTENDED_TEST_RE.test(addVal)) {{
