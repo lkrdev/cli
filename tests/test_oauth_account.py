@@ -572,21 +572,31 @@ def test_dev_flag_api_key_and_oauth(
     for var in ("LOOKERSDK_CLIENT_ID", "LOOKERSDK_CLIENT_SECRET", "LOOKERSDK_BASE_URL"):
         monkeypatch.delenv(var, raising=False)
 
-    # 3) --dev with valid cached prod OAuth token switches to dev mode without warning
-    switched = []
+    # 3) --dev with valid cached prod OAuth token switches to dev, next non-dev switches back to prod once, and dev OAuth never switches to prod
+    switched: list[str] = []
     monkeypatch.setattr(
         DbOAuthSession,
-        "_switch_to_dev_mode",
-        lambda self: switched.append(self.use_production),
+        "_switch_to_workspace",
+        lambda self, ws: switched.append(ws),
     )
     monkeypatch.setattr("lkr.auth_service.Looker40SDK.me", lambda _self: MagicMock())
     monkeypatch.setattr("lkr.auth_service.Looker40SDK.session", lambda _self: MagicMock())
     caplog.clear()
     with caplog.at_level("WARNING", logger="lkr"):
-        res_oauth = runner.invoke(app, ["--dev", "auth", "whoami"])
-    assert res_oauth.exit_code == 0
-    assert switched == [False]
+        assert runner.invoke(app, ["--dev", "auth", "whoami"]).exit_code == 0
+        assert runner.invoke(app, ["auth", "whoami"]).exit_code == 0
+        assert runner.invoke(app, ["auth", "whoami"]).exit_code == 0
+    assert switched == ["dev", "production"]
     assert "Ignoring --dev flag" not in caplog.text
+
+    # dev OAuth token (use_production=False) without --dev never switches to production
+    conn = sqlite3.connect(temp_db)
+    conn.execute("UPDATE auth SET use_production = 0 WHERE instance_name = 'active-inst'")
+    conn.commit()
+    conn.close()
+    switched.clear()
+    assert runner.invoke(app, ["auth", "whoami"]).exit_code == 0
+    assert switched == []
 
     # 4) --force-oauth ignores partial LOOKERSDK_* env vars
     monkeypatch.setenv("LOOKERSDK_CLIENT_ID", "stray-id")
