@@ -530,6 +530,89 @@ return {"single": single, "merged": merged}
         ]
 
 
+def test_execute_looker_query_long_sql_aliases_and_monty() -> None:
+    from pathlib import Path
+
+    import pydantic_monty
+
+    long_view = (
+        "category_sku_price_facts_distribution_centers_inventory_items_order_items_"
+        "user_click_facts_user_item_volume_facts_user_warehouse_proximity_facts_fields"
+    )
+    long_dim = f"{long_view}.order_line_archetype"
+    long_meas = f"{long_view}.total_sale_price"
+    stem = long_view.replace("_", "")[:126]
+    assert len(long_dim) == 172 and len(stem) == 126
+
+    sql_0 = (
+        f"SELECT CASE WHEN t.x = 'AS' THEN 0 ELSE 1 END AS {stem}_2, "
+        f"CASE WHEN t.x = 'AS' THEN 'Core' ELSE 'Other' END AS {stem}_3, "
+        f"SUM(t.sale_price) AS {stem}_4 "
+        f"FROM (SELECT 1 AS x, 10.0 AS sale_price) AS {stem}_1 GROUP BY 1, 2"
+    )
+    sql_1 = f"SELECT CASE WHEN t.x = 'AS' THEN 'Core' ELSE 'Other' END AS {stem}_2, COUNT(*) AS inventory_items_count FROM (SELECT 1 AS x) AS {stem}_1 GROUP BY 1"
+
+    created_sql: list[dict[str, object]] = []
+
+    def fake_riq(fmt: str, body: dict[str, object]) -> object:
+        assert fmt == "sql"
+        return sql_0 if body.get("view") == "order_items" else sql_1
+
+    def fake_create_sql(body: dict[str, object]) -> dict[str, str]:
+        created_sql.append(body)
+        return {"slug": "slug_long"}
+
+    def fake_run_sql(slug: str, result_format: str = "json") -> list[dict[str, object]]:
+        return [{f"{stem}_3": "Core", f"{stem}_4": 300.0, "inventory_items_count": 50}]
+
+    spec: dict[str, object] = {
+        "source_queries": [
+            {"query": {"model": "thelook", "view": "order_items", "fields": [long_dim, long_meas]}},
+            {"query": {"model": "thelook", "view": "inventory_items", "fields": [long_dim, "inventory_items.count"]}},
+        ],
+        "sorts": [f"{long_dim} desc"],
+    }
+
+    mock_auth = MagicMock()
+    mock_auth.settings.base_url = "https://example.looker.com"
+    sdk = ExtendedLooker40SDK(
+        auth=mock_auth,
+        deserialize=MagicMock(),
+        serialize=MagicMock(),
+        transport=MagicMock(),
+        api_version="4.0",
+    )
+    with (
+        patch.object(sdk, "run_inline_query", side_effect=fake_riq),
+        patch.object(sdk, "create_sql_query", side_effect=fake_create_sql),
+        patch.object(sdk, "run_sql_query", side_effect=fake_run_sql),
+    ):
+        rows = sdk.execute_looker_query(spec)
+
+    expected = [{long_dim: "Core", long_meas: 300.0, "inventory_items.count": 50}]
+    assert rows == expected
+    merged_sql = str(created_sql[0]["sql"])
+    assert f"LEFT JOIN cte_1 ON cte_0.{stem}_3 = cte_1.{stem}_2" in merged_sql
+    assert f"SELECT cte_0.{stem}_3 AS {stem}_3, cte_0.{stem}_4 AS {stem}_4, cte_1.inventory_items_count AS inventory_items_count" in merged_sql
+    assert f"ORDER BY {stem}_3 DESC" in merged_sql
+
+    repo_root = Path(__file__).resolve().parent.parent
+    _, preamble = (repo_root / "lkr/extended_sdk_methods/_kda_monty.py").read_text(encoding="utf-8").split(
+        "# --- MONTY_KDA_PREAMBLE ---", 1
+    )
+    with pydantic_monty.Monty() as m, m.checkout() as session:
+        m_rows = session.feed_run(
+            preamble + f"\nreturn execute_looker_query({spec!r})\n",
+            external_lookup={
+                "run_inline_query": fake_riq,
+                "create_sql_query": fake_create_sql,
+                "run_sql_query": fake_run_sql,
+                "lookml_model_explore": lambda m_name, e_name, fields=None: {"connection_name": "bq"},
+            },
+        )
+        assert m_rows == expected
+
+
 def test_profile_fields_sdk_and_monty() -> None:
     from pathlib import Path
 
