@@ -476,6 +476,18 @@ fn main() {
             output_fields: vec![],
         },
         OperationMeta {
+            name: "delete_developer_copy".to_string(),
+            http_method: "DELETE".to_string(),
+            path: "/projects/{project_id}/developer_copy".to_string(),
+            doc: "Delete a dev mode copy of a project for the current user.".to_string(),
+            params: vec![
+                ParamMeta { name: "project_id".into(), location: "path".into(), required: true, type_str: "str".into() },
+                ParamMeta { name: "transport_options".into(), location: "options".into(), required: false, type_str: "TransportOptions | None".into() },
+            ],
+            return_type: "None".to_string(),
+            output_fields: vec![],
+        },
+        OperationMeta {
             name: "generate_lookml".to_string(),
             http_method: "POST".to_string(),
             path: "/projects/{project_id}/generate".to_string(),
