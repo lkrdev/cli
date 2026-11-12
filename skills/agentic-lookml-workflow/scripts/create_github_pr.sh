@@ -8,6 +8,10 @@ export GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 
 RUN_ID=$(jq -r '.run_id' "$DATA_JSON")
 REPO=$(jq -r '.git_remote_url' "$DATA_JSON")
+if [[ -z "$REPO" || "$REPO" == "null" || "$REPO" == /* || "$REPO" == .* || "$REPO" == file://* || "$REPO" == *bare_models* || "$REPO" != */* ]]; then
+  echo '{"skipped": true, "reason": "bare_git_repo"}'
+  exit 0
+fi
 HEAD_BRANCH=$(jq -r '.branch_name' "$DATA_JSON")
 BASE_BRANCH=$(jq -r '.production_branch // "main"' "$DATA_JSON")
 
