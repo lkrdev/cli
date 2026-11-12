@@ -77,39 +77,61 @@ def _collect_declarations[T](
 
             pos_key = f"{rel_key}.{category}"
             file_pos = pos_files.get(pos_key, {})
-            obj_pos_map = file_pos.get(obj_type, {}) if isinstance(file_pos, dict) else {}
-            if not isinstance(obj_pos_map, dict):
-                obj_pos_map = {}
 
-            objs_dict = getattr(file_entry, obj_type, None)
-            if not isinstance(objs_dict, dict):
-                continue
+            def _scan_container(
+                container: object, pos_container: object, fpath: str
+            ) -> None:
+                obj_pos_map = (
+                    pos_container.get(obj_type, {})
+                    if isinstance(pos_container, dict)
+                    else {}
+                )
+                if not isinstance(obj_pos_map, dict):
+                    obj_pos_map = {}
 
-            for o_key, o_val in objs_dict.items():
-                if o_key.startswith("+"):
-                    target_name = o_key[1:]
-                    o_list = o_val if isinstance(o_val, list) else [o_val]
-                    p_raw = obj_pos_map.get(o_key, [])
-                    p_list = (
-                        [p_raw[str(i)] for i in range(len(o_list)) if str(i) in p_raw]
-                        if isinstance(p_raw, dict) and "$p" not in p_raw
-                        else ([p_raw] if isinstance(p_raw, dict) else p_raw)
+                objs_dict = getattr(container, obj_type, None)
+                if not isinstance(objs_dict, dict):
+                    return
+
+                for o_key, o_val in objs_dict.items():
+                    if o_key.startswith("+"):
+                        target_name = o_key[1:]
+                        o_list = o_val if isinstance(o_val, list) else [o_val]
+                        p_raw = obj_pos_map.get(o_key, [])
+                        p_list = (
+                            [p_raw[str(i)] for i in range(len(o_list)) if str(i) in p_raw]
+                            if isinstance(p_raw, dict) and "$p" not in p_raw
+                            else ([p_raw] if isinstance(p_raw, dict) else p_raw)
+                        )
+                        for idx, o_item in enumerate(o_list):
+                            if isinstance(o_item, cls):
+                                p_item = (
+                                    p_list[idx]
+                                    if isinstance(p_list, list) and idx < len(p_list)
+                                    else {}
+                                )
+                                ref_decls.setdefault(target_name, []).append(
+                                    (fpath, o_item, p_item if isinstance(p_item, dict) else {})
+                                )
+                    elif isinstance(o_val, cls):
+                        p_item = obj_pos_map.get(o_key, {})
+                        base_decls.setdefault(o_key, []).append(
+                            (fpath, o_val, p_item if isinstance(p_item, dict) else {})
+                        )
+
+            _scan_container(file_entry, file_pos, file_path)
+            nested_models = getattr(file_entry, "model", None)
+            if isinstance(nested_models, dict):
+                nested_model_pos = (
+                    file_pos.get("model", {}) if isinstance(file_pos, dict) else {}
+                )
+                for m_name, m_obj in nested_models.items():
+                    m_pos = (
+                        nested_model_pos.get(m_name, {})
+                        if isinstance(nested_model_pos, dict)
+                        else {}
                     )
-                    for idx, o_item in enumerate(o_list):
-                        if isinstance(o_item, cls):
-                            p_item = (
-                                p_list[idx]
-                                if isinstance(p_list, list) and idx < len(p_list)
-                                else {}
-                            )
-                            ref_decls.setdefault(target_name, []).append(
-                                (file_path, o_item, p_item if isinstance(p_item, dict) else {})
-                            )
-                elif isinstance(o_val, cls):
-                    p_item = obj_pos_map.get(o_key, {})
-                    base_decls.setdefault(o_key, []).append(
-                        (file_path, o_val, p_item if isinstance(p_item, dict) else {})
-                    )
+                    _scan_container(m_obj, m_pos, file_path)
 
     return base_decls, ref_decls
 
