@@ -41,6 +41,7 @@ def _bind_sdk(sdk: object, transport_options: object = None) -> None:
             return None
 
         def _inner(*a: object, **kw: object) -> object:
+            assert fn is not None
             if transport_options is not None and "transport_options" not in kw:
                 kw["transport_options"] = transport_options
             res = fn(*a, **kw)
@@ -1528,6 +1529,158 @@ def _sql_alias(name: object) -> str:
     return "".join(c if (c.isalnum() or c == "_") else "_" for c in str(name))
 
 
+def _extract_select_aliases(sql: str) -> list[tuple[str, str]]:
+    n, i, depth = len(sql), 0, 0
+    in_select = False
+    cur_start = -1
+    items: list[tuple[str, int]] = []
+    last_as = -1
+    stop_kws = ("FROM", "WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "UNION", "INTERSECT", "EXCEPT", "QUALIFY", "WINDOW")
+
+    while i < n:
+        c = sql[i]
+        if c == "-" and i + 1 < n and sql[i + 1] == "-":
+            nl = sql.find("\n", i + 2)
+            i = nl + 1 if nl != -1 else n
+            continue
+        if c == "/" and i + 1 < n and sql[i + 1] == "*":
+            end = sql.find("*/", i + 2)
+            i = end + 2 if end != -1 else n
+            continue
+        if c in ("'", '"', "`"):
+            q = c
+            i += 1
+            while i < n:
+                if sql[i] == "\\" and q != "`" and i + 1 < n:
+                    i += 2
+                elif sql[i] == q:
+                    if i + 1 < n and sql[i + 1] == q:
+                        i += 2
+                    else:
+                        i += 1
+                        break
+                else:
+                    i += 1
+            continue
+        if c == "(":
+            depth += 1
+            i += 1
+            continue
+        if c == ")":
+            if depth > 0:
+                depth -= 1
+            i += 1
+            continue
+        if depth == 0:
+            if in_select and c == ",":
+                items.append((sql[cur_start:i], last_as - cur_start if last_as >= cur_start else -1))
+                cur_start = i + 1
+                last_as = -1
+                i += 1
+                continue
+            if (c.isalnum() or c == "_") and (i == 0 or (not (sql[i - 1].isalnum() or sql[i - 1] == "_") and sql[i - 1] != ".")):
+                j = i + 1
+                while j < n and (sql[j].isalnum() or sql[j] == "_"):
+                    j += 1
+                kw = sql[i:j].upper()
+                if not in_select and kw == "SELECT":
+                    in_select = True
+                    cur_start = j
+                elif in_select and kw in stop_kws and (j == n or sql[j] != "."):
+                    items.append((sql[cur_start:i], last_as - cur_start if last_as >= cur_start else -1))
+                    in_select = False
+                    break
+                elif in_select and kw == "AS":
+                    last_as = i
+                i = j
+                continue
+        i += 1
+    if in_select and cur_start >= 0:
+        items.append((sql[cur_start:], last_as - cur_start if last_as >= cur_start else -1))
+
+    out: list[tuple[str, str]] = []
+    for item, as_off in items:
+        if as_off >= 0:
+            raw_id = item[as_off + 2 :]
+            if not raw_id.lstrip().startswith(('"', "`")):
+                raw_id = raw_id.split("--", 1)[0].split("/*", 1)[0]
+            alias = raw_id.strip().strip('`"[] ')
+            if alias and all(ch.isalnum() or ch == "_" for ch in alias):
+                out.append((item[:as_off].strip(), alias))
+    return out
+
+
+def _suffix_num(alias: str) -> int:
+    pos = alias.rfind("_")
+    return int(alias[pos + 1 :]) if pos > 0 and alias[pos + 1 :].isdigit() else 0
+
+
+def _looks_like_case_sort(expr: str) -> bool:
+    up = expr.upper()
+    if "CASE" not in up or " THEN " not in up:
+        return False
+    thens = [p.lstrip() for p in up.split(" THEN ")[1:]]
+    return bool(thens) and all(t[:1].isdigit() for t in thens)
+
+
+def _resolve_cte_aliases(fields: list[str], sql: str) -> dict[str, str]:
+    select_cols = _extract_select_aliases(sql)
+    if not select_cols:
+        return {f: _sql_alias(f) for f in fields}
+
+    exact_idx = {a: i for i, (_, a) in enumerate(select_cols)}
+    lower_idx = {a.lower(): i for i, (_, a) in enumerate(select_cols)}
+    resolved: dict[str, str] = {}
+    used_idx: set[int] = set()
+    unresolved: list[str] = []
+
+    for f in fields:
+        if f in resolved:
+            continue
+        raw = _sql_alias(f)
+        idx = exact_idx.get(raw)
+        if idx is None:
+            idx = lower_idx.get(raw.lower())
+        if idx is not None and idx not in used_idx:
+            used_idx.add(idx)
+            resolved[f] = select_cols[idx][1]
+        else:
+            unresolved.append(f)
+
+    if not unresolved:
+        return resolved
+
+    unused = [(i, expr, a) for i, (expr, a) in enumerate(select_cols) if i not in used_idx]
+    cands_by_field: dict[str, list[tuple[int, str, str]]] = {}
+    groups: dict[tuple[int, ...], list[str]] = {}
+    for f in unresolved:
+        stripped = _sql_alias(f).replace("_", "").lower()
+        cands = []
+        for item in unused:
+            _, _, a = item
+            pos = a.rfind("_")
+            base_a = a[:pos] if pos > 0 and a[pos + 1 :].isdigit() else a
+            base_clean = base_a.replace("_", "").lower()
+            if base_clean and stripped.startswith(base_clean) and (base_clean == stripped or len(base_clean) >= min(len(stripped), 28)):
+                cands.append(item)
+        cands_by_field[f] = cands
+        if cands:
+            groups.setdefault(tuple(c[0] for c in cands), []).append(f)
+        else:
+            resolved[f] = _sql_alias(f)
+
+    for gf_list in groups.values():
+        cands = cands_by_field[gf_list[0]]
+        if len(gf_list) == 1:
+            resolved[gf_list[0]] = max(cands, key=lambda item: (_suffix_num(item[2]), item[0]))[2]
+        else:
+            non_sort = [c for c in cands if not _looks_like_case_sort(c[1])]
+            picked = non_sort if len(non_sort) >= len(gf_list) else cands[-len(gf_list) :]
+            for i, gf in enumerate(gf_list):
+                resolved[gf] = picked[i][2] if i < len(picked) else _sql_alias(gf)
+    return resolved
+
+
 def _strip_trailing_limit(sql: str) -> str:
     toks = sql.rstrip().rsplit(None, 2)
     if len(toks) >= 2 and toks[-2].upper() == "LIMIT" and toks[-1].isdigit():
@@ -1644,15 +1797,10 @@ def execute_looker_query(
             raise RuntimeError("SQL Runner methods unavailable on SDK")
 
         ctes = []
+        cte_aliases: list[dict[str, str]] = []
         field_origin: dict[str, tuple[int, str]] = {}
         alias_to_field: dict[str, str] = {}
         for idx, qb in enumerate(q_bodies):
-            for f in _as_strs(qb.get("fields")):
-                if f not in field_origin:
-                    alias = _sql_alias(f)
-                    field_origin[f] = (idx, alias)
-                    alias_to_field[alias] = f
-                    alias_to_field[alias.lower()] = f
             raw_sql = run_inline_query("sql", qb)
             if not isinstance(raw_sql, str) or not raw_sql.strip() or raw_sql.lstrip().startswith(("{", "[")):
                 raise RuntimeError(f"Expected SQL string from run_inline_query, got: {raw_sql!r}")
@@ -1661,12 +1809,29 @@ def execute_looker_query(
                 sql = _strip_trailing_limit(sql)
             ctes.append(f"cte_{idx} AS (\n{sql}\n)")
 
+            q_flds = _as_strs(qb.get("fields"))
+            q_aliases = _resolve_cte_aliases(q_flds, sql)
+            cte_aliases.append(q_aliases)
+            for f in q_flds:
+                if f not in field_origin:
+                    src_alias = q_aliases[f]
+                    out_alias = src_alias
+                    if out_alias.lower() in alias_to_field:
+                        n = 2
+                        out_alias = f"{src_alias[:124]}_{n}"
+                        while out_alias.lower() in alias_to_field:
+                            n += 1
+                            out_alias = f"{src_alias[: 127 - len(str(n))]}_{n}"
+                    field_origin[f] = (idx, out_alias)
+                    alias_to_field[out_alias] = f
+                    alias_to_field[out_alias.lower()] = f
+
         joins = []
         for idx, (mfields, jtype) in enumerate(joins_meta, start=1):
             if not mfields:
                 raise ValueError(f"source_queries[{idx}] is missing merge_fields")
             on_sql = " AND ".join(
-                f"cte_0.{_sql_alias(m['field_name'])} = cte_{idx}.{_sql_alias(m['source_field_name'])}"
+                f"cte_0.{cte_aliases[0].get(fn := str(m['field_name']), _sql_alias(fn))} = cte_{idx}.{cte_aliases[idx].get(sfn := str(m['source_field_name']), _sql_alias(sfn))}"
                 for m in mfields
             )
             joins.append(f"{'INNER JOIN' if jtype == 'inner' else 'LEFT JOIN'} cte_{idx} ON {on_sql}")
@@ -1675,15 +1840,28 @@ def execute_looker_query(
             [f for f in _as_strs(spec_dict.get("fields")) if f in field_origin]
             + list(field_origin.keys())
         )
-        select_sql = ", ".join(f"cte_{field_origin[f][0]}.{field_origin[f][1]} AS {field_origin[f][1]}" for f in projected)
+        select_sql = ", ".join(
+            f"cte_{field_origin[f][0]}.{cte_aliases[field_origin[f][0]][f]} AS {field_origin[f][1]}"
+            for f in projected
+        )
         sql_lines = [f"WITH {', '.join(ctes)}", f"SELECT {select_sql}", f"FROM cte_0 {' '.join(joins)}"]
 
         if not final_tcs:
-            order_cols = [
-                f"{field_origin[c][1] if (c := s.strip().split()[0]) in field_origin else _sql_alias(c)} {'DESC' if len(s.strip().split()) > 1 and s.strip().split()[1].lower() == 'desc' else 'ASC'}"
-                for s in (spec_dict.get("sorts") or [])
-                if isinstance(s, str) and s.strip() and s != "__UNSORTED__"
-            ]
+            order_cols = []
+            for s in spec_dict.get("sorts") or []:
+                if isinstance(s, str) and s.strip() and s != "__UNSORTED__":
+                    parts = s.strip().split()
+                    c = parts[0]
+                    col_ref = (
+                        field_origin[c][1]
+                        if c in field_origin
+                        else (
+                            field_origin[c[:-7]][1]
+                            if c.endswith("__sort_") and c[:-7] in field_origin
+                            else _sql_alias(c)
+                        )
+                    )
+                    order_cols.append(f"{col_ref} {'DESC' if len(parts) > 1 and parts[1].lower() == 'desc' else 'ASC'}")
             if order_cols:
                 sql_lines.append(f"ORDER BY {', '.join(order_cols)}")
             if (lim_val := spec_dict.get("limit")) is not None and str(lim_val).strip() not in ("", "-1"):
