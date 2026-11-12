@@ -644,7 +644,15 @@ class SqlLiteAuth:
                 import sys
 
                 try:
+                    was_authenticated = sdk.auth.is_authenticated
                     sdk.auth.authenticate({})
+                    if (
+                        was_authenticated
+                        and not target_use_production
+                        and current_auth.use_production
+                        and isinstance(sdk.auth, DbOAuthSession)
+                    ):
+                        sdk.auth._switch_to_dev_mode()
                 except Exception as e:
                     if (
                         current_auth.refresh_token
