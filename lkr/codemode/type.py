@@ -18,7 +18,7 @@ def to_primitive(obj: object) -> object:
     seen: set[int] = set()
 
     def _to_primitive(o: object) -> object:
-        if isinstance(o, (str, int, float, bool, type(None))):
+        if isinstance(o, (str, bytes, int, float, bool, type(None))):
             return o
 
         obj_id = id(o)

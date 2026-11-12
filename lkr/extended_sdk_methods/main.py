@@ -112,6 +112,23 @@ class ExtendedLooker40SDK(Looker40SDK):
             ),
         )
 
+    def download_project_zip(
+        self,
+        project_id: str,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> bytes:
+        """Download a zip of the project's current workspace directory."""
+        project_id = self.encode_path_param(project_id)
+        path = f"/projects/{project_id}/download_zip"
+        return cast(
+            bytes,
+            self.get(
+                path=path,
+                structure=bytes,
+                transport_options=transport_options,
+            ),
+        )
+
     def get_file_content(
         self,
         project_id: str,

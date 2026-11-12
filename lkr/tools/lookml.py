@@ -1,11 +1,13 @@
 import base64
 import fnmatch
 import hashlib
+import io
 import json
 import os
 import re
 import tempfile
 import time
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Annotated, NotRequired, TypedDict
@@ -653,62 +655,90 @@ def pull(
         logger.info(
             f"Retrieving remote files for project {project_id} to pull into {target_dir}..."
         )
-        existing_remote = sdk.all_project_files(project_id=project_id) or []
-
         remote_paths = set()
         synced_hashes: dict[str, str] = {}
-        pull_failures: list[str] = []
-        for rf in existing_remote:
-            rf_path = _get_file_id(rf)
+
+        def _safe_local_path(rf_path: str) -> str | None:
+            if not rf_path or ".git" in rf_path.split("/"):
+                return None
             if not sync_hidden and _is_hidden_path(rf_path):
-                continue
+                return None
             if os.path.basename(rf_path) in IGNORED_FILES:
-                continue
+                return None
             if not any(rf_path.endswith(ext) for ext in VALID_EXTENSIONS):
                 logger.warning(
                     f"Remote file '{rf_path}' has an extension not supported by Looker."
                 )
-                continue
+                return None
             if rf_path.endswith(".gitkeep"):
-                continue
-
+                return None
             local_path = os.path.join(target_dir, rf_path)
             resolved_local = os.path.abspath(local_path)
             try:
                 if os.path.commonpath([target_dir, resolved_local]) != target_dir:
                     logger.warning(f"Path traversal detected and blocked: {rf_path}")
-                    continue
+                    return None
             except ValueError:
                 logger.warning(f"Path traversal detected and blocked: {rf_path}")
-                continue
+                return None
+            return local_path
 
-            try:
-                content = _fetch_file_with_retry(rf_path)
-            except Exception as e:  # noqa: BLE001
-                if "not found" in str(e).lower():
-                    logger.debug(
-                        f"Remote file {rf_path} not found in dev workspace (likely a deleted ghost file in git tracking)."
-                    )
-                else:
-                    logger.error(
-                        f"Failed to fetch content for remote file {rf_path}: {e}"
-                    )
-                    pull_failures.append(rf_path)
-                continue
+        pulled_files: list[tuple[str, str, str]] | None = None
+        try:
+            with zipfile.ZipFile(
+                io.BytesIO(sdk.download_project_zip(project_id=project_id))
+            ) as zf:
+                entries: list[tuple[str, str, str]] = []
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    rf_path = info.filename.replace("\\", "/").removeprefix("./")
+                    local_path = _safe_local_path(rf_path)
+                    if local_path:
+                        entries.append(
+                            (rf_path, local_path, zf.read(info).decode("utf-8"))
+                        )
+                pulled_files = entries
+        except Exception as zip_err:  # noqa: BLE001
+            logger.debug(
+                f"Project zip download failed for {project_id}, falling back to per-file pull: {zip_err}"
+            )
 
+        if pulled_files is None:
+            pulled_files = []
+            pull_failures: list[str] = []
+            for rf in sdk.all_project_files(project_id=project_id) or []:
+                rf_path = _get_file_id(rf)
+                local_path = _safe_local_path(rf_path)
+                if not local_path:
+                    continue
+                try:
+                    pulled_files.append(
+                        (rf_path, local_path, _fetch_file_with_retry(rf_path))
+                    )
+                except Exception as e:  # noqa: BLE001
+                    if "not found" in str(e).lower():
+                        logger.debug(
+                            f"Remote file {rf_path} not found in dev workspace (likely a deleted ghost file in git tracking)."
+                        )
+                    else:
+                        logger.error(
+                            f"Failed to fetch content for remote file {rf_path}: {e}"
+                        )
+                        pull_failures.append(rf_path)
+            if pull_failures:
+                logger.error(
+                    f"Pull aborted before orphan cleanup due to {len(pull_failures)} failed file(s): {', '.join(pull_failures)}"
+                )
+                raise typer.Exit(1)
+
+        for rf_path, local_path, content in pulled_files:
             remote_paths.add(rf_path)
             synced_hashes[rf_path] = _hash_content(content)
-
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
             with open(local_path, "w", encoding="utf-8") as f:
                 f.write(content)
             logger.info(f"Pulled file: {rf_path}")
-
-        if pull_failures:
-            logger.error(
-                f"Pull aborted before orphan cleanup due to {len(pull_failures)} failed file(s): {', '.join(pull_failures)}"
-            )
-            raise typer.Exit(1)
 
         _save_sync_hashes(target_dir, project_id, synced_hashes, base_url)
 
