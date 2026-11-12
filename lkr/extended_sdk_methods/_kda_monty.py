@@ -1676,8 +1676,8 @@ def _resolve_cte_aliases(fields: list[str], sql: str) -> dict[str, str]:
         else:
             non_sort = [c for c in cands if not _looks_like_case_sort(c[1])]
             picked = non_sort if len(non_sort) >= len(gf_list) else cands[-len(gf_list) :]
-            for gf, c in zip(gf_list, picked):
-                resolved[gf] = c[2]
+            for i, gf in enumerate(gf_list):
+                resolved[gf] = picked[i][2] if i < len(picked) else _sql_alias(gf)
     return resolved
 
 
