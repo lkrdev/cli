@@ -1670,15 +1670,17 @@ def _find_test_assert_field_errors(
             if es is None:
                 continue
             declared: set[str] = set()
+            es_cols = es.get("column") if isinstance(es, dict) else getattr(es, "column", None)
+            es_derived = es.get("derived_column") if isinstance(es, dict) else getattr(es, "derived_column", None)
             for name, f_ref in (
-                *((k, getattr(v, "field", None)) for k, v in (es.column or {}).items()),
-                *((k, None) for k in (es.derived_column or {})),
+                *((k, v.get("field") if isinstance(v, dict) else getattr(v, "field", None)) for k, v in (es_cols.items() if isinstance(es_cols, dict) else ())),
+                *((k, None) for k in (es_derived or ())),
             ):
                 low = name.strip().lower()
                 declared.add(low)
                 declared.update(
                     [f_ref.strip().lower()]
-                    if f_ref
+                    if isinstance(f_ref, str) and f_ref
                     else [f"{base_alias}.{low}".lower(), f"{explore_name}.{low}".lower()]
                 )
 

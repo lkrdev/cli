@@ -227,13 +227,11 @@ def validate_command(
         schema_cache: dict[tuple[str, str], dict[str, object] | str] = {}
 
         def _validate_one(item: object) -> ValidationResult:
-            body_obj = (
-                item.get("body")
-                if isinstance(item, dict) and isinstance(item.get("body"), dict)
-                else item
-            )
-            rm = model or (body_obj.get("model") if isinstance(body_obj, dict) else None)
-            rexp = explore or (body_obj.get("view") if isinstance(body_obj, dict) else None)
+            if not isinstance(item, dict):
+                return ValidationResult(valid=False, errors=["Query payload must be a JSON object"])
+            body_obj = b if isinstance(b := item.get("body"), dict) else item
+            rm = model or body_obj.get("model")
+            rexp = explore or body_obj.get("view")
             if not isinstance(rm, str) or not rm or not isinstance(rexp, str) or not rexp:
                 logger.error(
                     "Must provide --model and --explore (or --schema / --schema-file) to generate schema for validation"

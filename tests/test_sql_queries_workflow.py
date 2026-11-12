@@ -1799,19 +1799,20 @@ def test_pre_gate_select_order_token_matching_retry_cache_and_bare_pr_skip(tmp_p
     r3 = _run_pg(r2, {"e0": "h0", "e1": "h1_v2"}, force="true")
     assert r3["passed"] is True and calls["create_q"] == ["e0", "e1"] and calls["run_q"] == ["e0", "e1"]
 
-    # 3. create_github_pr.sh skips cleanly on bare Looker repos
-    sess = tmp_path / "sess"
-    sess.mkdir()
-    (sess / "data.json").write_text(
-        json.dumps({"run_id": "r1", "git_remote_url": "/var/looker/bare_models/proj", "branch_name": "b1"}),
-        encoding="utf-8",
-    )
-    pr_res = subprocess.run(
-        ["bash", str(SCRIPTS_DIR / "create_github_pr.sh"), str(sess)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert pr_res.returncode == 0, pr_res.stderr
-    assert json.loads(pr_res.stdout) == {"skipped": True, "reason": "bare_git_repo"}
+    # 3. create_github_pr.sh skips cleanly on bare Looker repos (POSIX bash script)
+    if os.name != "nt":
+        sess = tmp_path / "sess"
+        sess.mkdir()
+        (sess / "data.json").write_text(
+            json.dumps({"run_id": "r1", "git_remote_url": "/var/looker/bare_models/proj", "branch_name": "b1"}),
+            encoding="utf-8",
+        )
+        pr_res = subprocess.run(
+            ["bash", str(SCRIPTS_DIR / "create_github_pr.sh"), str(sess)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert pr_res.returncode == 0, pr_res.stderr
+        assert json.loads(pr_res.stdout) == {"skipped": True, "reason": "bare_git_repo"}
 
