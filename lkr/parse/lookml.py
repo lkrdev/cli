@@ -13,7 +13,7 @@ _StrList = Annotated[
     ),
 ]
 
-LOOKML_PARSER_VERSION = "9.0.0"
+LOOKML_PARSER_VERSION = "9.3.1"
 LOOKML_CACHE_DIR = Path(
     os.getenv("LKR_CACHE_DIR", Path.home() / ".lkr" / "lookml-parser")
 )
@@ -954,10 +954,6 @@ const origAssembleModels = xf.assembleModels;
   const {{ extraManifestContent, constants: cliConstants, ...parseOpts }} = JSON.parse(rawStdin);
 
 xf.assembleModels = function(project, assembleOpts) {{
-  for (const f of Object.values(project.file || {{}})) {{
-    if (typeof f.$file_path === "string") f.$file_path = f.$file_path.replace(/\\\\/g, "/");
-    if (typeof f.$file_rel === "string") f.$file_rel = f.$file_rel.replace(/\\\\/g, "/");
-  }}
   if (extraManifestContent && project.file) {{
     const manFile = {{
       ...lp.parse(extraManifestContent, {{ strings: true }}),
@@ -1148,72 +1144,54 @@ function resolveExtended(addVal, baseVal, key, parentKey) {{
   }});
 }}
 
-function mergeWithExtended(baseObject, addObject, parentKey) {{
-  const newObject = {{ ...baseObject }};
-  for (const key of Object.keys(addObject)) {{
-    if (["__proto__", "prototype", "constructor"].includes(key)) {{
-      throw new Error(`Attempted to set disallowed key ${{key}} from object ${{addObject.$name || "(anonymous)"}}`);
-    }}
-    let baseVal = baseObject[key];
-    const addVal = addObject[key];
-    if (key === "extension" && addVal === "required") continue;
-    if (key === "$name" && typeof addVal === "string" && addVal[0] === "+") continue;
-    let newVal;
-    if (Array.isArray(baseVal)) {{
-      newVal = baseVal.concat(addVal);
-    }} else if (baseVal && typeof baseVal === "object" && addVal && typeof addVal === "object") {{
-      newVal = mergeWithExtended(baseVal, addVal, key);
-    }} else if (typeof addVal === "string" && EXTENDED_TEST_RE.test(addVal)) {{
-      if (baseVal === undefined && key === "sql" && parentKey !== "derived_table") {{
-        baseVal = defaultFieldSql(baseObject);
+const toPathKey = parts => parts.map(p => String(p).replace(/\\\\/g, "\\\\\\\\").replace(/\\./g, "\\\\.")).join(".");
+
+function resolveExtendedInNode(node, pathParts, parentKey, modelFiles, project, idx) {{
+  if (!node || typeof node !== "object" || Array.isArray(node)) return;
+  for (const [k, v] of Object.entries(node)) {{
+    if (k[0] === "$") continue;
+    const nextParts = [...pathParts, k];
+    if (typeof v === "string" && EXTENDED_TEST_RE.test(v)) {{
+      const sources = idx[toPathKey(nextParts)];
+      if (!sources || !sources.length) continue;
+      let acc;
+      for (const [fIdx, ...inFile] of sources) {{
+        const fKey = modelFiles[fIdx];
+        const fObj = project.file[fKey] || project.file[fKey + ".lkml"];
+        let rawVal = fObj?.[inFile[0]] !== undefined ? fObj : fObj?.model?.[pathParts[1]];
+        for (const seg of inFile) rawVal = rawVal?.[seg];
+        if (rawVal === undefined) continue;
+        if (typeof rawVal === "string" && EXTENDED_TEST_RE.test(rawVal)) {{
+          if (acc === undefined && k === "sql" && parentKey !== "derived_table" && (idx[toPathKey(pathParts)]?.length ?? 0) > 1) {{
+            acc = defaultFieldSql(node);
+          }}
+          acc = resolveExtended(rawVal, acc, k, parentKey);
+        }} else {{
+          acc = rawVal;
+        }}
       }}
-      newVal = resolveExtended(addVal, baseVal, key, parentKey);
-    }} else {{
-      newVal = addVal;
+      if (acc !== undefined) node[k] = acc;
+    }} else if (v && typeof v === "object" && !Array.isArray(v)) {{
+      resolveExtendedInNode(v, nextParts, k, modelFiles, project, idx);
     }}
-    newObject[key] = newVal;
   }}
-  return newObject;
 }}
 
-function collectObjects(root, rootPath, model, visited) {{
-  const [type, name] = rootPath;
-  visited.add(rootPath.map(String).join("\\0"));
-  const exts = Array.isArray(root.extends) ? root.extends : (root.extends ? [root.extends] : []);
-  const extPaths = exts.flat().filter(e => typeof e === "string").map(e => [type, e]);
-  const rawRefs = name[0] === "+" ? null : model[type]["+" + name];
-  const refPaths = !rawRefs ? []
-    : Array.isArray(rawRefs) ? rawRefs.map((_, ri) => [type, "+" + name, ri])
-    : [[type, "+" + name]];
-  const out = [];
-  for (const p of [...extPaths, root, ...refPaths]) {{
-    if (p === root) {{ out.push(root); continue; }}
-    const pk = p.map(String).join("\\0");
-    if (visited.has(pk)) continue;
-    let target = model;
-    for (const seg of p) target = target?.[seg];
-    if (target) out.push(...collectObjects(target, p, model, visited));
-  }}
-  return out;
-}}
-
-xf.applyExtensionsRefinements = function(project, {{ objectTypes = ["explore", "view"] }} = {{}}) {{
-  if (!project || !project.model || typeof project.model !== "object") return project;
-  for (const m of Object.keys(project.model)) {{
-    const model = project.model[m];
-    for (const objectType of objectTypes) {{
+const origApplyExtensionsRefinements = xf.applyExtensionsRefinements;
+xf.applyExtensionsRefinements = function(project, applyOpts = {{}}) {{
+  origApplyExtensionsRefinements(project, {{ ...applyOpts, indexRefinementsExtensions: true }});
+  const idx = project?.indexRefinementsExtensions;
+  if (!idx || !project?.model || !project?.file) return project;
+  for (const [m, model] of Object.entries(project.model)) {{
+    const rawFiles = Array.isArray(model.$file_path) ? model.$file_path : (model.$file_path ? [model.$file_path] : []);
+    const modelFiles = rawFiles.map(full => full.replace(/\\.lkml$/, ""));
+    for (const objectType of (applyOpts.objectTypes || ["explore", "view"])) {{
       const collection = model[objectType];
       if (!collection) continue;
-      const newObjects = {{}};
-      for (const key of Object.keys(collection)) {{
-        if (key[0] === "+") continue;
-        const obj = collection[key];
-        if (!obj || obj.extension === "required") continue;
-        const objectsToApply = collectObjects(obj, [objectType, key], model, new Set());
-        if (objectsToApply.length <= 1) continue;
-        newObjects[key] = objectsToApply.reduce((acc, item) => mergeWithExtended(acc, item, null), {{}});
+      for (const [key, obj] of Object.entries(collection)) {{
+        if (key[0] === "+" || !obj || obj.extension === "required") continue;
+        resolveExtendedInNode(obj, ["model", m, objectType, key], null, modelFiles, project, idx);
       }}
-      Object.assign(collection, newObjects);
     }}
   }}
   return project;
@@ -1226,6 +1204,7 @@ lp.parseFiles({{
   positions: true,
   strings: true,
   legacyFileMetadata: true,
+  cache: false,
   console: []
 }}).then(p => {{
   if (p.positions && p.positions.file && !p.positions.file.manifest && p.positions.file["inline.model"] && p.manifest) {{
