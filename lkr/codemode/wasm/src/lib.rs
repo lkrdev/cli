@@ -1052,6 +1052,20 @@ async fn execute_sdk_operation<T: SdkTransport>(
                 }
             }
         }
+        "alert_details" => {
+            if let Some(Value::Array(arr)) = query_map.get("alert_ids") {
+                let csv = arr
+                    .iter()
+                    .filter_map(|v| match v {
+                        Value::String(s) => Some(s.clone()),
+                        Value::Null => None,
+                        other => Some(other.to_string()),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                query_map.insert("alert_ids".to_string(), Value::String(csv));
+            }
+        }
         _ => {}
     }
 

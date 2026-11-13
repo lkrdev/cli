@@ -692,6 +692,27 @@ class ExtendedLooker40SDK(Looker40SDK):
         )
         return _normalize_data_app(data)
 
+    def alert_details(
+        self,
+        alert_ids: Sequence[str] | str | None = None,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> list[dict[str, object]]:
+        """Get execution details and history for alerts (GET /alert_details)."""
+        ids_param = (
+            alert_ids
+            if alert_ids is None or isinstance(alert_ids, str)
+            else ",".join(str(x) for x in alert_ids)
+        )
+        return cast(
+            list[dict[str, object]],
+            self.get(
+                path="/alert_details",
+                structure=list,
+                query_params=self._qp(alert_ids=ids_param),
+                transport_options=transport_options,
+            ),
+        )
+
     def global_search_v2(
         self,
         term: str,

@@ -886,3 +886,44 @@ def test_data_app() -> None:
             transport_options=None,
         )
 
+
+def test_alert_details() -> None:
+    """Verify alert_details handles None, CSV str, and sequence alert_ids."""
+    mock_auth = MagicMock()
+    mock_auth.settings.base_url = "https://example.looker.com"
+    sdk = ExtendedLooker40SDK(
+        auth=mock_auth,
+        deserialize=MagicMock(),
+        serialize=MagicMock(),
+        transport=MagicMock(),
+        api_version="4.0",
+    )
+
+    sample = [{"alert_id": "1", "query_slug": "abc"}]
+    with patch.object(sdk, "get", return_value=sample) as mock_get:
+        assert sdk.alert_details() == sample
+        mock_get.assert_called_once_with(
+            path="/alert_details",
+            structure=list,
+            query_params={},
+            transport_options=None,
+        )
+
+    with patch.object(sdk, "get", return_value=sample) as mock_get:
+        sdk.alert_details(["1", "2"])
+        mock_get.assert_called_once_with(
+            path="/alert_details",
+            structure=list,
+            query_params={"alert_ids": "1,2"},
+            transport_options=None,
+        )
+
+    with patch.object(sdk, "get", return_value=sample) as mock_get:
+        sdk.alert_details("3,4")
+        mock_get.assert_called_once_with(
+            path="/alert_details",
+            structure=list,
+            query_params={"alert_ids": "3,4"},
+            transport_options=None,
+        )
+
