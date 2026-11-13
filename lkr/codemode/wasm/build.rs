@@ -643,6 +643,18 @@ fn main() {
             output_fields: vec![],
         },
         OperationMeta {
+            name: "alert_details".to_string(),
+            http_method: "GET".to_string(),
+            path: "/alert_details".to_string(),
+            doc: "Get execution details and history for alerts.".to_string(),
+            params: vec![
+                ParamMeta { name: "alert_ids".into(), location: "query".into(), required: false, type_str: "Sequence[str | int] | str | int | None".into() },
+                ParamMeta { name: "transport_options".into(), location: "options".into(), required: false, type_str: "TransportOptions | None".into() },
+            ],
+            return_type: "list[dict[str, Any]]".to_string(),
+            output_fields: vec![],
+        },
+        OperationMeta {
             name: "create_ci_run".to_string(),
             http_method: "POST".to_string(),
             path: "/projects/{project_id}/ci/run".to_string(),
