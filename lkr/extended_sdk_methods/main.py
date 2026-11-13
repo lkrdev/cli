@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import cast
 
 from looker_sdk.rtl import api_methods, transport
@@ -694,15 +694,16 @@ class ExtendedLooker40SDK(Looker40SDK):
 
     def alert_details(
         self,
-        alert_ids: Sequence[str] | str | None = None,
+        alert_ids: Sequence[str | int] | str | int | None = None,
         transport_options: transport.TransportOptions | None = None,
     ) -> list[dict[str, object]]:
         """Get execution details and history for alerts (GET /alert_details)."""
-        ids_param = (
-            alert_ids
-            if alert_ids is None or isinstance(alert_ids, str)
-            else ",".join(str(x) for x in alert_ids)
-        )
+        if alert_ids is None or isinstance(alert_ids, str):
+            ids_param = alert_ids
+        elif isinstance(alert_ids, Iterable):
+            ids_param = ",".join(str(x) for x in alert_ids)
+        else:
+            ids_param = str(alert_ids)
         return cast(
             list[dict[str, object]],
             self.get(

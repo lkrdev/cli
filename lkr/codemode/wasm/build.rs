@@ -648,7 +648,7 @@ fn main() {
             path: "/alert_details".to_string(),
             doc: "Get execution details and history for alerts.".to_string(),
             params: vec![
-                ParamMeta { name: "alert_ids".into(), location: "query".into(), required: false, type_str: "Sequence[str] | str | None".into() },
+                ParamMeta { name: "alert_ids".into(), location: "query".into(), required: false, type_str: "Sequence[str | int] | str | int | None".into() },
                 ParamMeta { name: "transport_options".into(), location: "options".into(), required: false, type_str: "TransportOptions | None".into() },
             ],
             return_type: "list[dict[str, Any]]".to_string(),

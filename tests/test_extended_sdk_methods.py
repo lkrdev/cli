@@ -927,3 +927,12 @@ def test_alert_details() -> None:
             transport_options=None,
         )
 
+    with patch.object(sdk, "get", return_value=sample) as mock_get:
+        sdk.alert_details(123)
+        mock_get.assert_called_once_with(
+            path="/alert_details",
+            structure=list,
+            query_params={"alert_ids": "123"},
+            transport_options=None,
+        )
+
