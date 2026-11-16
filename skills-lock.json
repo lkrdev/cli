@@ -1,65 +1,75 @@
 {
-  "version": 1,
+  "version": 2,
   "skills": {
     "lookml-access-grants": {
       "source": "looker-open-source/looker-skills",
       "sourceType": "github",
       "skillPath": "skills/lookml-access-grants/SKILL.md",
-      "computedHash": "89fb55cd7e2c9ac9f05c630dbfc881992090294e4f8b007cb03733f6a3a36262"
+      "computedHash": "2de692e00a6d0b5d9a65a405f06446cf2026bf6afb98d3c142e8acf1bad5e9af",
+      "commit": "ce5ad43e76d57affddb8b54e472b6408dad352ca"
     },
     "lookml-explore": {
       "source": "looker-open-source/looker-skills",
       "sourceType": "github",
       "skillPath": "skills/lookml-explore/SKILL.md",
-      "computedHash": "c5554a05d0e6e558cac73106defccae72138c23b349371b49e662ac9f95953b2"
+      "computedHash": "f7aed7098e58ee63998243eefe10f208258bb57b4f31df6da52aaf843073816e",
+      "commit": "ce5ad43e76d57affddb8b54e472b6408dad352ca"
     },
     "lookml-fields": {
       "source": "looker-open-source/looker-skills",
       "sourceType": "github",
       "skillPath": "skills/lookml-fields/SKILL.md",
-      "computedHash": "d16c6a78f01e62d4e032f5996fac47d9033a959311f2e5511aa121e584bf31d7"
+      "computedHash": "3118b0c67fdc86e16ce6646e1156ada01718ee32fa01fa373adeaab9638834b6",
+      "commit": "ce5ad43e76d57affddb8b54e472b6408dad352ca"
     },
     "lookml-liquid": {
       "source": "looker-open-source/looker-skills",
       "sourceType": "github",
       "skillPath": "skills/lookml-liquid/SKILL.md",
-      "computedHash": "e136691ec30f3a84156e551ffb221be956034a610a95158045b21ce8f2b42fa9"
+      "computedHash": "a9ef77d3d342448cfc1ae7e2410e5de3d7435f88304141fe5bb107e9566dee92",
+      "commit": "ce5ad43e76d57affddb8b54e472b6408dad352ca"
     },
     "lookml-model": {
       "source": "looker-open-source/looker-skills",
       "sourceType": "github",
       "skillPath": "skills/lookml-model/SKILL.md",
-      "computedHash": "55ebcdd9b5c92bc0c3ce9c296c88edb3ac36ead0302726def0d97cadbf4faa57"
+      "computedHash": "6a907bd65d62e31cacde85031cb6e9240063b48174493d5b745c2623e75c1b23",
+      "commit": "ce5ad43e76d57affddb8b54e472b6408dad352ca"
     },
     "lookml-ojof": {
       "source": "lkrdev/ojof-gym",
       "sourceType": "github",
       "skillPath": "tasks/task_synth_test_01/environment/skills/lookml-ojof/SKILL.md",
-      "computedHash": "3fd78481969e4b625c0f766e15c7111f842728d897e01189e8fa50c7a1d528f4"
+      "computedHash": "0a40c9cd9201cebb2dfa64d907ece307a2627cbbc2e44c04fbcbb458a920efc8",
+      "commit": "34d4a144081daa9c40fdec8ccbe1b72e445166c4"
     },
     "lookml-refinements": {
       "source": "looker-open-source/looker-skills",
       "sourceType": "github",
       "skillPath": "skills/lookml-refinements/SKILL.md",
-      "computedHash": "af3632508af03afc4302dcb166573fab8051f921cebe64d70d58cd5f2ea8f4b8"
+      "computedHash": "0693da3addd00d62fab1224e52aaaa69ab52488ba20fe55c0275f570a1635ae2",
+      "commit": "ce5ad43e76d57affddb8b54e472b6408dad352ca"
     },
     "lookml-sets": {
       "source": "looker-open-source/looker-skills",
       "sourceType": "github",
       "skillPath": "skills/lookml-sets/SKILL.md",
-      "computedHash": "21508c3bde39a213758f1e4535cd94e3e6ed6bd643b2c21e54eeb6a7cb71967c"
+      "computedHash": "96d660a610c0ff8fb422cba1f0d9f9717e53b50b982b21ad9eac0a1e26fc3fc8",
+      "commit": "ce5ad43e76d57affddb8b54e472b6408dad352ca"
     },
     "lookml-tests": {
       "source": "looker-open-source/looker-skills",
       "sourceType": "github",
       "skillPath": "skills/lookml-tests/SKILL.md",
-      "computedHash": "72786aede2ba8c3404d9c83117e83df048329b2aa4ff4637437e3c67d5953a92"
+      "computedHash": "1e056e5dc945b4ff8dccd3c252369881313975b2e1ab6ee9298dff14490dcd39",
+      "commit": "ce5ad43e76d57affddb8b54e472b6408dad352ca"
     },
     "lookml-view": {
       "source": "looker-open-source/looker-skills",
       "sourceType": "github",
       "skillPath": "skills/lookml-view/SKILL.md",
-      "computedHash": "cf640d7aebe066f592f8eb6766c0112e918338a0dbcaeac8aa07f505cbb08e26"
+      "computedHash": "3080edaa3849cf616a730116e3d6d0d78f65e5cd8665c4473a2cd53e455aef11",
+      "commit": "ce5ad43e76d57affddb8b54e472b6408dad352ca"
     }
   }
 }

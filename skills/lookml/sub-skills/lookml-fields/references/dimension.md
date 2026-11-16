@@ -8,7 +8,7 @@ description: Use this skill to create or modify LookML Dimensions. Covers basic 
 ## 1. Core Standards
 
 1.  **Naming Convention**: Use `snake_case` for all dimension names.
-    -   **Boolean (`type: yesno`)**: Always use **positive polarity** prefixed with `is_` or `has_` (e.g., `is_active`, `is_sold` with `sql: ${sold_raw} IS NOT NULL ;;`, `has_churned`). Never define negated names (`is_not_sold`, `is_unsold`, `is_inactive`) and never create an opposite `type: yesno` field alongside an existing positive one—filter the single positive field with `"yes"` or `"no"` instead.
+    -   **Boolean**: Prefix with `is_` or `has_` (e.g., `is_active`, `has_churned`).
     -   **Dates**: Avoid "date" or "time" suffix (e.g., `created`, NOT `created_date`).
     -   **Logical**: Rename cryptic database columns to human-readable names (e.g., `product_n` -> `product_name`).
 2.  **Required Parameters**:
@@ -27,7 +27,7 @@ description: Use this skill to create or modify LookML Dimensions. Covers basic 
 ## 2. Advanced Features
 
 -   `group_label`: Group related fields in the field picker.
--   `drill_fields`: *(Out of scope for now — omit unless explicitly requested by the user, and do not flag missing drill paths in reviews.)* List of fields to show when drilling into this dimension.
+-   `drill_fields`: List of fields to show when drilling into this dimension.
 -   `link`: Create external links (e.g., Google, Salesforce) or internal links.
 -   `html`: formatting using Liquid (e.g., color coding).
 
