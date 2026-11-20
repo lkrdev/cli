@@ -546,6 +546,19 @@ fn main() {
             output_fields: vec![],
         },
         OperationMeta {
+            name: "deploy_webhook".to_string(),
+            http_method: "POST".to_string(),
+            path: "/webhooks/projects/{project_id}/deploy".to_string(),
+            doc: "Trigger a Looker project deployment webhook (POST /webhooks/projects/{project_id}/deploy).".to_string(),
+            params: vec![
+                ParamMeta { name: "project_id".into(), location: "path".into(), required: true, type_str: "str".into() },
+                ParamMeta { name: "secret".into(), location: "custom".into(), required: true, type_str: "str".into() },
+                ParamMeta { name: "transport_options".into(), location: "options".into(), required: false, type_str: "TransportOptions | None".into() },
+            ],
+            return_type: "dict[str, Any]".to_string(),
+            output_fields: vec![],
+        },
+        OperationMeta {
             name: "publish_agent".to_string(),
             http_method: "POST".to_string(),
             path: "/internal/agents/{agent_id}/publish".to_string(),

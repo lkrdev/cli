@@ -521,6 +521,29 @@ class ExtendedLooker40SDK(Looker40SDK):
 
     developer_copy = create_developer_copy
 
+    def deploy_webhook(
+        self,
+        project_id: str,
+        secret: str,
+        transport_options: transport.TransportOptions | None = None,
+    ) -> dict[str, object]:
+        """Trigger a Looker project deployment webhook (POST /webhooks/projects/{project_id}/deploy)."""
+        url = f"{self.auth.settings.base_url.rstrip('/')}/webhooks/projects/{self.encode_path_param(project_id)}/deploy"
+        headers: dict[str, str] = dict((transport_options or {}).get("headers") or {})
+        if secret:
+            headers["X-Looker-Deploy-Secret"] = secret
+        opts: transport.TransportOptions = {"headers": headers} if headers else {}
+        if transport_options and "timeout" in transport_options:
+            opts["timeout"] = transport_options["timeout"]
+        response = self.transport.request(
+            transport.HttpMethod.POST,
+            url,
+            authenticator=None,
+            transport_options=opts,
+        )
+        res = self._return(response, dict)
+        return cast(dict[str, object], res if isinstance(res, dict) else {})
+
     def publish_agent(
         self,
         agent_id: str,
