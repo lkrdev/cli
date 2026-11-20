@@ -798,6 +798,9 @@ $ lkr parse sql-lookml-compare [OPTIONS]
 * `--lkml-schema <str>`: Schema/dataset override for LookML views  [env var: LKR_LKML_SCHEMA]
 * `--offline`: Skip live Looker connection and column metadata lookups
 * `--compact`: Omit duplicate per-field cross-references, 0-indexed positions, and empty defaults
+* `--check`: Exit non-zero on missing Quick Start match, target Explore fan/chasm traps, missing aggregate measures, or incomplete Bronze foundation
+* `--data-file <path>`: Optional workflow data.json or inline_queries.json to verify Quick Start alignment against inline_query
+* `--base-path <path>`: Optional baseline LookML directory to identify newly added Bronze views in --check
 * `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
 * `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)
 * `--help`: Show this message and exit.

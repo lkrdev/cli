@@ -1816,3 +1816,145 @@ def test_pre_gate_select_order_token_matching_retry_cache_and_bare_pr_skip(tmp_p
         assert pr_res.returncode == 0, pr_res.stderr
         assert json.loads(pr_res.stdout) == {"skipped": True, "reason": "bare_git_repo"}
 
+
+def test_pre_gate_rejects_tpcds_q2_false_positives_and_aligns_unaliased_round() -> None:
+    tpcds_q2_sql = (
+        "WITH wswscs AS ("
+        "SELECT d_week_seq, SUM(CASE WHEN d_day_name = 'Sunday' THEN sales_price END) AS sun_sales "
+        "FROM web_sales JOIN date_dim ON d_date_sk = ws_sold_date_sk GROUP BY d_week_seq"
+        ") "
+        "SELECT d_week_seq1, ROUND(sun_sales1 / sun_sales2, 2), sun_sales1 / sun_sales2 "
+        "FROM (SELECT d_week_seq AS d_week_seq1, sun_sales AS sun_sales1 FROM wswscs) y, "
+        "(SELECT d_week_seq AS d_week_seq2, sun_sales AS sun_sales2 FROM wswscs) z "
+        "WHERE d_week_seq1 = d_week_seq2 - 53 ORDER BY d_week_seq1"
+    )
+    # 1a. Synthetic *_fields.pk trailing column is NEVER stripped (even on ungrouped SQL or CTE-aggregated SQL)
+    ok_synth, diffs_synth = compare_row_sets(
+        [{"d_week_seq1": 1, "f0_": 1.23, "f1_": 1.2345}],
+        [{"y.d_week_seq1": 1, "y_z_fields.sun_ratio": 1.234, "y_z_fields.raw_ratio": 1.2345, "y_z_fields.pk": "1_54"}],
+        sql=tpcds_q2_sql,
+        looker_fields=["y.d_week_seq1", "y_z_fields.sun_ratio", "y_z_fields.raw_ratio", "y_z_fields.pk"],
+        exp_view="wswscs",
+    )
+    assert ok_synth is False and "column count mismatch" in diffs_synth[0]
+
+    ok_row_synth, _ = compare_row_sets(
+        [{"first_name": "Ada"}],
+        [{"users.first_name": "Ada", "orders_users_fields.pk": "1_2"}],
+        sql="SELECT first_name FROM users",
+        looker_fields=["users.first_name", "orders_users_fields.pk"],
+        exp_view="users",
+    )
+    assert ok_row_synth is False
+
+    # 1b. Trailing base PK / no_group is rejected when SQL has GROUP BY or CTE aggregation
+    ok_grp_pk, _ = compare_row_sets(
+        [{"dept": "Men"}],
+        [{"products.dept": "Men", "products.id": 10}],
+        sql="SELECT dept FROM products GROUP BY dept",
+        looker_fields=["products.dept", "products.id"],
+        exp_view="products",
+    )
+    assert ok_grp_pk is False
+
+    # 2. Unaliased ROUND(..., 2) records scale by projection index (f0_..f10_) without loosening unrounded f1_
+    many_round_sql = "SELECT k, " + ", ".join(f"ROUND(v{i}, 2)" for i in range(11)) + " FROM t"
+    s_11 = [{"k": "w1", **{f"f{i}_": round(10.0 + i + 0.126, 2) for i in range(11)}}]
+    # Scramble dict key order so f10_ appears before f2_
+    s_11_scrambled = [{"f10_": s_11[0]["f10_"], "k": "w1", **{f"f{i}_": s_11[0][f"f{i}_"] for i in range(10)}}]
+    l_11 = [{"t.k": "w1", **{f"t.m{i}": 10.0 + i + 0.1261 for i in range(11)}}]
+    l_fields_11 = ["t.k", *[f"t.m{i}" for i in range(11)]]
+    assert compare_row_sets(s_11_scrambled, l_11, sql=many_round_sql, looker_fields=l_fields_11) == (True, [])
+
+    # Unrounded anonymous column (f1_ in tpcds_q2_sql) still enforces 4-decimal precision
+    ok_unrounded, _ = compare_row_sets(
+        [{"d_week_seq1": 1, "f0_": 1.23, "f1_": 1.23}],
+        [{"y.d_week_seq1": 1, "y.r0": 1.2341, "y.r1": 1.2341}],
+        sql=tpcds_q2_sql,
+        looker_fields=["y.d_week_seq1", "y.r0", "y.r1"],
+    )
+    assert ok_unrounded is False
+
+    # 3. Aggregate SQL rejects dimension-only inline_query (0 measures), while allowing NDT CTE rollups & dedup GROUP BY
+    def fake_explore(lookml_model_name: str, explore_name: str, **_kw: object) -> dict[str, object]:
+        if explore_name == "user_rank_ndt":
+            return {
+                "view_name": "user_rank_ndt",
+                "sql_table_name": "(SELECT user_id, SUM(sale_price) FROM orders GROUP BY 1)",
+                "joins": [],
+                "fields": {"measures": [{"name": "user_rank_ndt.count"}]},
+            }
+        return {
+            "view_name": "web_sales",
+            "sql_table_name": "`proj.ds.web_sales`",
+            "joins": [{"name": "web_sales_fields", "sql": "", "sql_table_name": None}],
+            "fields": {"measures": [{"name": "web_sales.total_sales"}]},
+        }
+
+    res_zero_m = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {
+            "raw_sql": tpcds_q2_sql,
+            "connection_name": "bq",
+            "data_json": '{"project_id": "p"}',
+            "inline_queries_json": json.dumps({
+                "0": {
+                    "model": "m",
+                    "view": "web_sales",
+                    "fields": ["web_sales.d_week_seq1", "web_sales_fields.sun_ratio", "web_sales_fields.raw_ratio"],
+                }
+            }),
+        },
+        {
+            "create_sql_query": lambda **_kw: {"slug": "s0"},
+            "create_query": lambda **_kw: {"id": "1", "slug": "q0"},
+            "lookml_model_explore": fake_explore,
+            "run_sql_query": lambda **_kw: '[{"d_week_seq1": 1, "f0_": 1.23, "f1_": 1.23}]',
+            "run_inline_query": lambda **_kw: '[{"web_sales.d_week_seq1": 1, "web_sales_fields.sun_ratio": 1.23, "web_sales_fields.raw_ratio": 1.23}]',
+        },
+    )
+    assert res_zero_m["passed"] is False
+    assert "0 measures" in cast("list[str]", res_zero_m["queries"][0].get("mismatches"))[0]
+
+    # NDT CTE rollup with dimension projection passes
+    ndt_sql = "WITH u AS (SELECT user_id, SUM(sale_price) AS ltv FROM orders GROUP BY 1) SELECT user_id, ltv FROM u"
+    res_ndt_ok = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {
+            "raw_sql": ndt_sql,
+            "connection_name": "bq",
+            "data_json": '{"project_id": "p"}',
+            "inline_queries_json": json.dumps({
+                "0": {"model": "m", "view": "user_rank_ndt", "fields": ["user_rank_ndt.user_id", "user_rank_ndt.ltv"]}
+            }),
+        },
+        {
+            "create_sql_query": lambda **_kw: {"slug": "s_ndt"},
+            "create_query": lambda **_kw: {"id": "2", "slug": "q_ndt"},
+            "lookml_model_explore": fake_explore,
+            "run_sql_query": lambda **_kw: '[{"user_id": 7, "ltv": 250.0}]',
+            "run_inline_query": lambda **_kw: '[{"user_rank_ndt.user_id": 7, "user_rank_ndt.ltv": 250.0}]',
+        },
+    )
+    assert res_ndt_ok["passed"] is True
+
+    # Measureless deduplication GROUP BY (no aggregate functions) passes
+    res_dedup_ok = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {
+            "raw_sql": "SELECT dept FROM web_sales GROUP BY dept;",
+            "connection_name": "bq",
+            "data_json": '{"project_id": "p"}',
+            "inline_queries_json": json.dumps({"0": {"model": "m", "view": "web_sales", "fields": ["web_sales.dept"]}}),
+        },
+        {
+            "create_sql_query": lambda **_kw: {"slug": "s_d"},
+            "create_query": lambda **_kw: {"id": "3", "slug": "q_d"},
+            "lookml_model_explore": fake_explore,
+            "run_sql_query": lambda **_kw: '[{"dept": "Men"}]',
+            "run_inline_query": lambda **_kw: '[{"web_sales.dept": "Men"}]',
+        },
+    )
+    assert res_dedup_ok["passed"] is True
+
+

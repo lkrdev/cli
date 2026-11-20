@@ -164,6 +164,7 @@ __all__ = [
     "QueryLookmlMapping",
     "SqlLookmlCompareResult",
     "SqlToLookmlResult",
+    "check_sql_lookml_compare",
     "parse_sql_to_lookml",
 ]
 
@@ -2989,25 +2990,8 @@ def _analyze_query_joins(
             {bv_tail} if bv_tail else set()
         )
 
-        # Precompute explore-level safety warnings (fan trap detection)
-        o2m_joins = [
-            j
-            for j in target_graph.joins.values()
-            if (j.relationship or "").lower() in ("one_to_many", "many_to_many")
-        ]
-        explore_safety_warnings = [
-            JoinSafetyWarning(
-                rule="fan_trap",
-                severity="warning",
-                message=(
-                    f"Potential fan trap detected: join '{j1.name}' ({j1.relationship}) "
-                    f"and join '{j2.name}' ({j2.relationship}) create a multi-fanout path "
-                    "which can multiply aggregate calculations"
-                ),
-                joins=[j1.name, j2.name],
-            )
-            for j1, j2 in itertools.combinations(o2m_joins, 2)
-        ]
+        # Precompute explore-level safety warnings (fan/chasm trap detection; OJOF ON FALSE is disjoint)
+        explore_safety_warnings = _explore_trap_warnings(target_graph, m_views)
 
         j_meta = [
             (
@@ -3111,6 +3095,14 @@ def _analyze_query_joins(
                             matched_j, matched_inverted = cand_j, cand_inv
                             break
 
+            if matched_j is None and not is_unnest_join:
+                left_j = _find_join_node(left_name, left_alias, j_meta)
+                right_j = _find_join_node(right_name, right_alias, j_meta)
+                if right_j and _is_ojof_join(right_j) and (
+                    (left_j and _is_ojof_join(left_j)) or bool({left_name, left_alias} & base_names)
+                ):
+                    matched_j = right_j
+
             safety_warnings = list(explore_safety_warnings)
             precedents: list[JoinPrecedent] = []
 
@@ -3162,7 +3154,7 @@ def _analyze_query_joins(
                 lkml_type = _normalize_lookml_join_type(matched_j.type)
                 type_match = (
                     True
-                    if is_unnest_join and "UNNEST(" in (matched_j.sql or "").upper()
+                    if _is_ojof_join(matched_j) or (is_unnest_join and "UNNEST(" in (matched_j.sql or "").upper())
                     else (sql_type == lkml_type)
                 )
 
@@ -3771,3 +3763,355 @@ def compact_sql_to_lookml(result: SqlToLookmlResult) -> CompactSqlToLookmlResult
         if isinstance(dialect_val := pruned.get("dialect"), str):
             out["dialect"] = dialect_val
     return out
+
+
+def _is_ojof_join(j: LookmlExploreJoinNode) -> bool:
+    return (
+        (j.type or "").lower() == "full_outer"
+        and (j.sql_on or "").strip().rstrip(";").strip().upper() == "FALSE"
+    )
+
+
+def _explore_trap_warnings(
+    graph: LookmlExploreJoinGraph, m_views: Mapping[str, LookmlView]
+) -> list[JoinSafetyWarning]:
+    o2m = [
+        j
+        for j in graph.joins.values()
+        if (j.relationship or "").lower() in ("one_to_many", "many_to_many")
+        and not _is_ojof_join(j)
+    ]
+    return [
+        JoinSafetyWarning(
+            rule="fan_trap",
+            severity="warning",
+            message=(
+                f"Potential fan trap detected: join '{j1.name}' ({j1.relationship}) "
+                f"and join '{j2.name}' ({j2.relationship}) create a multi-fanout path "
+                "which can multiply aggregate calculations"
+            ),
+            joins=[j1.name, j2.name],
+        )
+        for j1, j2 in itertools.combinations(o2m, 2)
+    ] + [
+        JoinSafetyWarning(
+            rule="chasm_trap",
+            severity="warning",
+            message=(
+                f"Potential chasm trap detected: many_to_many join '{j.name}' targets "
+                f"view '{j.target_view}' with no primary_key"
+            ),
+            joins=[j.name],
+        )
+        for j in o2m
+        if (j.relationship or "").lower() == "many_to_many"
+        and not _view_pk_columns(m_views.get(j.target_view))
+    ]
+
+
+def _parse_iq_dfs(iq: Mapping[str, object]) -> list[dict[str, object]]:
+    raw = iq.get("dynamic_fields")
+    try:
+        items = (
+            json.loads(raw)
+            if isinstance(raw, str) and raw.strip().startswith("[")
+            else (raw if isinstance(raw, list) else [])
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    return [d for d in items if isinstance(d, dict)]
+
+
+def _norm_activity_weighted(f: str) -> str:
+    v, _, leaf = f.partition(".")
+    return f"*.avg_{leaf[22:]}" if v.endswith("_fields") and leaf.startswith("avg_activity_weighted_") else f
+
+
+def _quick_start_matches_iq(
+    q_dict: Mapping[str, object],
+    iq: Mapping[str, object],
+    base_alias: str,
+    dfs: list[dict[str, object]],
+    *,
+    is_row_sql: bool,
+    has_sql_limit: bool,
+) -> bool:
+    df_names = {
+        str(n).lower()
+        for d in dfs
+        if (n := d.get("table_calculation") or d.get("measure") or d.get("dimension"))
+    }
+    custom_refs = {
+        _qualify_field_ref(r, base_alias).lower()
+        for d in dfs
+        if d.get("dimension") or d.get("measure")
+        for r in (
+            ([str(d["based_on"])] if d.get("based_on") else [])
+            + re.findall(r"\$\{(\w+(?:\.\w+)?)\}", str(d.get("expression") or ""))
+        )
+    }
+    raw_flds = iq.get("fields")
+    iq_fields = [
+        _qualify_field_ref(str(f), base_alias).lower()
+        for f in (raw_flds if isinstance(raw_flds, list) else [])
+        if str(f).lower() not in df_names
+    ]
+    qs_fields = [
+        u.field.lower()
+        for u in _collect_query_block_fields(q_dict, base_alias)
+        if u.used_in in ("dimensions", "measures")
+    ]
+    dropped_grain: str | None = None
+    if is_row_sql and len(iq_fields) == len(qs_fields) + 1 and iq_fields[-1] not in qs_fields:
+        tail = iq_fields[-1]
+        vp, _, lf = tail.partition(".")
+        if tail == "common_helpers.no_group" or (
+            not vp.endswith("_fields") and (lf in ("id", "pk") or lf.endswith("_id"))
+        ):
+            dropped_grain = tail
+            iq_fields = iq_fields[:-1]
+
+    iq_set, qs_set = set(iq_fields) | custom_refs, set(qs_fields)
+    if iq_set != qs_set:
+        norm_iq = {_norm_activity_weighted(f) for f in iq_set}
+        norm_qs = {
+            f"*.{lf}" if (lf := f.split(".", 1)[-1]).startswith("avg_") and f"*.{lf}" in norm_iq else f
+            for f in qs_set
+        }
+        if norm_iq != norm_qs:
+            return False
+
+    qs_filters: dict[str, str] = {}
+    f_val = q_dict.get("filters")
+    for item in f_val if isinstance(f_val, list) else ([f_val] if f_val is not None else []):
+        if isinstance(item, dict):
+            for k, v in item.items():
+                if not str(k).startswith("$"):
+                    qs_filters[_qualify_field_ref(str(k), base_alias).lower()] = str(v).strip()
+        elif isinstance(item, str) and ":" in item:
+            k, v = item.split(":", 1)
+            qs_filters[_qualify_field_ref(k.strip(), base_alias).lower()] = v.strip().strip('"')
+    raw_iq_f = iq.get("filters")
+    iq_filters = {
+        _qualify_field_ref(str(k), base_alias).lower(): str(v).strip()
+        for k, v in (raw_iq_f.items() if isinstance(raw_iq_f, Mapping) else ())
+        if str(k).lower() not in df_names
+    }
+    if qs_filters != iq_filters:
+        return False
+
+    def _parse_sorts(val: object, skip: set[str]) -> list[tuple[str, str]]:
+        out_s: list[tuple[str, str]] = []
+        for item in val if isinstance(val, list) else ([val] if val is not None else []):
+            if isinstance(item, dict):
+                for k, v in item.items():
+                    ks = str(k).strip()
+                    if not ks.startswith("$") and ks.lower() not in skip:
+                        out_s.append((_qualify_field_ref(ks, base_alias).lower(), str(v or "asc").strip().lower()))
+            elif isinstance(item, str) and item.strip():
+                parts = item.replace(":", " ").split()
+                if parts and parts[0].lower() not in skip:
+                    d_ref = parts[1].lower() if len(parts) > 1 and parts[1].lower() in ("asc", "desc") else "asc"
+                    out_s.append((_qualify_field_ref(parts[0], base_alias).lower(), d_ref))
+        return out_s
+
+    qs_sorts = _parse_sorts(q_dict.get("sorts"), set())
+    iq_sorts = [(f, d) for f, d in _parse_sorts(iq.get("sorts"), df_names) if f != dropped_grain]
+    if qs_sorts != iq_sorts and [(_norm_activity_weighted(f), d) for f, d in iq_sorts] != [
+        (f"*.{lf}" if (lf := f.split(".", 1)[-1]).startswith("avg_") else f, d) for f, d in qs_sorts
+    ]:
+        return False
+
+    qs_lim = int(s) if q_dict.get("limit") is not None and (s := str(q_dict["limit"]).strip()).isdigit() else None
+    iq_lim = int(s) if iq.get("limit") is not None and (s := str(iq["limit"]).strip()).isdigit() else None
+    return not (
+        (qs_lim is not None or (iq_lim is not None and (has_sql_limit or iq_lim != 500))) and qs_lim != iq_lim
+    )
+
+
+def check_sql_lookml_compare(
+    result: SqlToLookmlResult,
+    *,
+    path: Path | str | None = None,
+    lookml_file: Path | str | None = None,
+    lookml: str | None = None,
+    manifest: Path | str | None = None,
+    constants: dict[str, str] | None = None,
+    data_file: Path | str | None = None,
+    base_path: Path | str | None = None,
+) -> list[str]:
+    """Deterministically verify Quick Start alignment, Explore safety warnings, measure usage, and Bronze coverage."""
+    errors: list[str] = []
+    project = parse_lookml(
+        path=path, file=lookml_file, lookml=lookml, manifest=manifest, constants=constants
+    ).apply_defaults()
+    exp_base_decls, exp_ref_decls = _collect_declarations(project, "explore", LookmlExplore)
+    models: dict[str, LookmlModel] = project.model or {}
+    views_by_model = _build_views_by_model(models)
+    graphs_by_key = {
+        (m_name, e_name): build_explore_join_graph(
+            explore_name=e_name,
+            explore_obj=e_obj,
+            explore_chain=_build_chain(e_name, exp_base_decls, exp_ref_decls),
+            model_views=m_obj.view or {},
+            model_name=m_name,
+        )
+        for m_name, m_obj in models.items()
+        for e_name, e_val in (m_obj.explore or {}).items()
+        for e_obj in _as_list(e_val)
+        if isinstance(e_obj, LookmlExplore)
+    }
+
+    iq_by_idx: dict[int, dict[str, object]] = {}
+    gen_bronze: set[str] = set()
+    if data_file is not None:
+        try:
+            raw_data: object = json.loads(Path(data_file).read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"Failed to parse data-file JSON: {e}")
+            raw_data = None
+        if isinstance(raw_data, dict):
+            if isinstance(q_list := raw_data.get("queries"), list):
+                for idx, item in enumerate(q_list):
+                    if isinstance(item, dict) and isinstance(iq_obj := item.get("inline_query"), dict):
+                        q_i = item.get("query_index")
+                        iq_by_idx[int(q_i) if isinstance(q_i, int) else idx] = iq_obj
+            else:
+                iq_by_idx = {int(str(k)): v for k, v in raw_data.items() if str(k).isdigit() and isinstance(v, dict)}
+            if isinstance(gbs := raw_data.get("generated_bronze_files"), list):
+                gen_bronze = {str(gf).lstrip("./") for gf in gbs}
+
+    c_queries = compact_sql_to_lookml(result).get("queries") or []
+    all_modeled_tables = {
+        t
+        for m_views in views_by_model.values()
+        for v_name, v_obj in m_views.items()
+        for t in (v_name.lower(), (_view_table_tail(v_obj) or "").lower())
+        if t
+    }
+    wildcard_prefixes = [t[:-1] for t in all_modeled_tables if t.endswith("*")]
+    root_dir = Path(path) if path is not None and Path(path).is_dir() else None
+    base_dir = Path(base_path) if base_path is not None and Path(base_path).is_dir() else None
+    bronze_views = (
+        [
+            bv
+            for bv in sorted((root_dir / "bronze").rglob("*.view.lkml"))
+            if (stem := bv.name[: -len(".view.lkml")]) not in ("common_helpers", "calendar_dates")
+            and "__" not in stem
+        ]
+        if root_dir is not None and (root_dir / "bronze").is_dir()
+        else []
+    )
+    checked_bronze: set[str] = set()
+
+    for qi, qm in enumerate(result.queries):
+        cq = c_queries[qi] if qi < len(c_queries) else {}
+        eqs: list[object] = raw_eqs if isinstance(raw_eqs := cq.get("explore_queries"), list) else []
+        cte_names = {c.name.lower() for c in (qm.parsed_query.ctes or []) if c.name}
+        phys_tables = [
+            t
+            for t in qm.parsed_query.tables
+            if t.name and t.name.lower() not in cte_names and not t.name.lower().startswith("unnest(")
+        ]
+
+        has_sql_agg = False
+        has_sql_limit = qm.parsed_query.limit is not None
+        try:
+            ast_q = sqlglot.parse_one(qm.raw_sql, read=result.dialect)
+            has_sql_agg = any(not isinstance(ag.parent, exp.Window) for ag in ast_q.find_all(exp.AggFunc))
+            has_sql_limit = has_sql_limit or (ast_q.args.get("limit") is not None)
+        except Exception:  # noqa: BLE001
+            has_sql_agg = bool(_ANY_AGG_RE.search(qm.raw_sql))
+        is_row_sql = not (has_sql_agg or qm.parsed_query.group_by or qm.parsed_query.having)
+
+        iq = iq_by_idx.get(qi)
+        dfs_list = _parse_iq_dfs(iq) if iq is not None else []
+        has_custom_m = any(d.get("measure") for d in dfs_list)
+        target_keys: set[tuple[str, str]] = set()
+        if iq is not None:
+            t_exp, t_mod = str(iq.get("view") or "").strip(), str(iq.get("model") or "").strip()
+            cand_exps = [
+                (mn, eo)
+                for mn, mo in models.items()
+                if not t_mod or mn == t_mod
+                for eo in _as_list((mo.explore or {}).get(t_exp))
+                if isinstance(eo, LookmlExplore)
+            ]
+            if not cand_exps:
+                errors.append(f"Query {qi}: target explore '{t_exp}' not found in LookML model.")
+            else:
+                mn, eo = cand_exps[0]
+                target_keys.add((mn, t_exp))
+                g = graphs_by_key.get((mn, t_exp))
+                b_alias = g.base_alias if g else (eo.from_ or eo.view_name or t_exp)
+                q_blocks = [
+                    qd
+                    for qv in (eo.query or {}).values()
+                    for qd in (qv if isinstance(qv, list) else [qv])
+                    if isinstance(qd, Mapping)
+                ]
+                if not any(
+                    _quick_start_matches_iq(
+                        qd, iq, b_alias, dfs_list, is_row_sql=is_row_sql, has_sql_limit=has_sql_limit
+                    )
+                    for qd in q_blocks
+                ):
+                    errors.append(
+                        f"Query {qi}: explore '{t_exp}' has no Quick Start query: block matching inline_query."
+                    )
+                elif phys_tables and not any(eq.explore_name == t_exp for eq in qm.explore_queries):
+                    errors.append(
+                        f"Query {qi}: Quick Start query: block on explore '{t_exp}' has zero SQL lineage overlap."
+                    )
+        elif not eqs:
+            errors.append(f"Query {qi}: missing Quick Start explore_queries match in sql-lookml-compare.")
+            target_keys = {(em.model_name, em.explore_name) for em in qm.explores}
+        else:
+            first_eq = eq0 if isinstance(eq0 := eqs[0], dict) else {}
+            target_keys.add((str(first_eq.get("model_name") or ""), str(first_eq.get("explore_name") or "")))
+
+        for tk in target_keys:
+            if g := graphs_by_key.get(tk):
+                for w in _explore_trap_warnings(g, views_by_model.get(g.model_name or "", {})):
+                    errors.append(f"Query {qi} ({g.explore_name}): {w.rule} — {w.message}")
+
+        if (
+            has_sql_agg
+            and not has_custom_m
+            and not any(fm.field_type == "measure" for vm in qm.views for fm in vm.fields)
+        ):
+            errors.append(f"Query {qi}: aggregate SQL query matched zero LookML measures.")
+
+        for vm in qm.views:
+            if vm.unmodeled_db_columns:
+                errors.append(
+                    f"Query {qi}: view '{vm.view_name}' has unmodeled_db_columns: {vm.unmodeled_db_columns}."
+                )
+        for pt in phys_tables:
+            t_low = pt.name.lower()
+            if t_low not in all_modeled_tables and not any(t_low.startswith(pfx) for pfx in wildcard_prefixes):
+                errors.append(f"Query {qi}: physical table '{pt.name}' has no modeled LookML view.")
+            if root_dir is not None:
+                for bv in bronze_views:
+                    stem = bv.name[: -len(".view.lkml")]
+                    s_low = stem.lower()
+                    if s_low != t_low and not (s_low.endswith("_*") and t_low.startswith(s_low[:-1])):
+                        continue
+                    rel_bv = bv.relative_to(root_dir).as_posix()
+                    if rel_bv in checked_bronze:
+                        continue
+                    checked_bronze.add(rel_bv)
+                    if rel_bv not in gen_bronze and not (base_dir is not None and not (base_dir / rel_bv).exists()):
+                        continue
+                    sub = bv.parent.relative_to(root_dir / "bronze")
+                    for folder, ext in (("bronze/explores", "explore"), ("tests/bronze", "test")):
+                        if not any(
+                            (root_dir / folder / d / f"{stem}{sfx}.{ext}.lkml").exists()
+                            for d in (sub, Path("."))
+                            for sfx in ("", "_base")
+                        ):
+                            errors.append(
+                                f"New Bronze view '{rel_bv}' is missing {folder}/{stem}{{,_base}}.{ext}.lkml."
+                            )
+
+    return errors

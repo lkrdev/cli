@@ -54,7 +54,7 @@ jobs:
         if: steps.check.outputs.has_lookml == 'true'
         run: |
           uv tool install "lkr-dev-cli[parse]"
-          if ! lkr parse lookml snapshot --help 2>&1 | grep -q -- "--allow-additions" || ! lkr parse lookml-to-api --help 2>&1 | grep -q -- "--base-path" || ! lkr parse sql-lookml-compare --help 2>&1 | grep -q -- "--compact"; then
+          if ! lkr parse lookml snapshot --help 2>&1 | grep -q -- "--allow-additions" || ! lkr parse lookml-to-api --help 2>&1 | grep -q -- "--base-path" || ! lkr parse sql-lookml-compare --help 2>&1 | grep -q -- "--check"; then
             uv tool install --force "lkr-dev-cli[parse] @ git+https://github.com/lkrdev/cli.git"
           fi
 
@@ -66,17 +66,37 @@ jobs:
           LOOKML_REVIEWERS: ${{ vars.LOOKML_REVIEWERS }}
         run: |
           BASE_ARGS=()
+          COMPARE_BASE_ARGS=()
           if [[ -n "$BASE_REF" ]] && git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1; then
             rm -rf /tmp/base-branch
             git worktree add --detach /tmp/base-branch "origin/$BASE_REF"
+            COMPARE_BASE_ARGS=(--base-path "/tmp/base-branch")
             if [[ -d "/tmp/base-branch/${LOOKML_DIR#./}" ]] && find "/tmp/base-branch/${LOOKML_DIR#./}" \( -name "*.lkml" -o -name "*.snap.json.md" -o -name "*.snap.strings.json" -o -name "*.snap.json" \) 2>/dev/null | grep -q .; then
               BASE_ARGS=(--base-path "/tmp/base-branch/${LOOKML_DIR#./}")
+              COMPARE_BASE_ARGS=(--base-path "/tmp/base-branch/${LOOKML_DIR#./}")
             elif find "/tmp/base-branch" \( -name "*.lkml" -o -name "*.snap.json.md" -o -name "*.snap.strings.json" -o -name "*.snap.json" \) 2>/dev/null | grep -q .; then
               BASE_ARGS=(--base-path "/tmp/base-branch")
             fi
           fi
 
           lkr parse lookml-to-api --path "$LOOKML_DIR" "${BASE_ARGS[@]}" --validate >/dev/null
+
+          rm -f /tmp/compare_data.json /tmp/compare_input.sql
+          DATA_FILE=$(find ./data -name "data.json" 2>/dev/null | head -n 1 || true)
+          if [[ -n "$DATA_FILE" && -f "$DATA_FILE" ]]; then
+            cp "$DATA_FILE" /tmp/compare_data.json
+          elif [[ -n "$PR_NUMBER" ]]; then
+            gh pr view "$PR_NUMBER" --json body --jq '.body' 2>/dev/null \
+              | awk '/<summary><code>data\.json<\/code><\/summary>/{f=1;next} f&&/^```json/{j=1;next} j&&/^```/{exit} j' > /tmp/compare_data.json || true
+          fi
+          SQL_FILE=$(find ./data -name "input.sql" 2>/dev/null | head -n 1 || true)
+          [[ -n "$SQL_FILE" && -s "$SQL_FILE" ]] && cp "$SQL_FILE" /tmp/compare_input.sql \
+            || { [[ -s /tmp/compare_data.json ]] && jq -r '[.queries[]?.sql // empty | select(length > 0)] | join(";\n")' /tmp/compare_data.json > /tmp/compare_input.sql || true; }
+          if [[ -s /tmp/compare_input.sql ]]; then
+            DATA_COMPARE_ARGS=()
+            [[ -s /tmp/compare_data.json ]] && DATA_COMPARE_ARGS=(--data-file /tmp/compare_data.json)
+            lkr parse sql-lookml-compare --offline --compact --check --sql-file /tmp/compare_input.sql --path "$LOOKML_DIR" "${DATA_COMPARE_ARGS[@]}" "${COMPARE_BASE_ARGS[@]}" >/dev/null
+          fi
 
           lkr parse lookml snapshot --path "$LOOKML_DIR" "${BASE_ARGS[@]}" --allow-additions --format json --output /tmp/snapshot_check.json || true
           if [[ ! -f /tmp/snapshot_check.json ]]; then
