@@ -972,7 +972,7 @@ async fn execute_sdk_operation<T: SdkTransport>(
         return execute_generate_lookml_with_new_files(transport, &bound).await;
     }
 
-    let options = bound
+    let mut options = bound
         .get("transport_options")
         .cloned()
         .filter(|v| !v.is_null());
@@ -1028,6 +1028,12 @@ async fn execute_sdk_operation<T: SdkTransport>(
         "delete_project_directory" => {
             if let Some(dir_path) = bound.get("directory_path") {
                 query_map.insert("path".to_string(), dir_path.clone());
+            }
+        }
+        "deploy_webhook" => {
+            if let Some(sec) = bound.get("secret").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                options.get_or_insert_with(|| json!({}))["headers"]["X-Looker-Deploy-Secret"] =
+                    json!(sec);
             }
         }
         "publish_agent" => {

@@ -936,3 +936,49 @@ def test_alert_details() -> None:
             transport_options=None,
         )
 
+
+def test_deploy_webhook() -> None:
+    import pydantic_monty
+    from looker_sdk.rtl import serialize, transport
+
+    mock_auth = MagicMock()
+    mock_auth.settings.base_url = "https://example.looker.com/"
+    mock_transport = MagicMock()
+    mock_transport.request.return_value = transport.Response(
+        ok=True,
+        value=b'{"operations":[{"error":false}]}',
+        response_mode=transport.ResponseMode.STRING,
+    )
+    sdk = ExtendedLooker40SDK(
+        auth=mock_auth,
+        deserialize=cast(serialize.TDeserialize, serialize.deserialize40),
+        serialize=cast(serialize.TSerialize, serialize.serialize40),
+        transport=mock_transport,
+        api_version="4.0",
+    )
+
+    caller_opts: transport.TransportOptions = {
+        "timeout": 30,
+        "headers": {"X-Custom": "1"},
+    }
+    res = sdk.deploy_webhook("my project", "sec-123", transport_options=caller_opts)
+    assert res == {"operations": [{"error": False}]}
+    assert caller_opts == {"timeout": 30, "headers": {"X-Custom": "1"}}
+    mock_auth.authenticate.assert_not_called()
+    mock_transport.request.assert_called_once_with(
+        transport.HttpMethod.POST,
+        "https://example.looker.com/webhooks/projects/my%20project/deploy",
+        authenticator=None,
+        transport_options={
+            "timeout": 30,
+            "headers": {"X-Custom": "1", "X-Looker-Deploy-Secret": "sec-123"},
+        },
+    )
+
+    with pydantic_monty.Monty() as m, m.checkout() as session:
+        assert session.feed_run(
+            'return deploy_webhook("my project", "sec-123")',
+            external_lookup={"deploy_webhook": sdk.deploy_webhook},
+        ) == {"operations": [{"error": False}]}
+
+
