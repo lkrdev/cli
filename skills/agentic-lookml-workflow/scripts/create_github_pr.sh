@@ -15,6 +15,17 @@ fi
 HEAD_BRANCH=$(jq -r '.branch_name' "$DATA_JSON")
 BASE_BRANCH=$(jq -r '.production_branch // "main"' "$DATA_JSON")
 
+if [[ -d "$SESSION_DIR/lookml" && -f "$SESSION_DIR/input.sql" ]]; then
+  BASE_COMPARE_ARGS=()
+  [[ -d "./bronze" || -n "$(compgen -G './*.model.lkml' || true)" ]] && BASE_COMPARE_ARGS=(--base-path ".")
+  lkr parse sql-lookml-compare --offline --compact --check \
+    --sql-file "$SESSION_DIR/input.sql" \
+    --path "$SESSION_DIR/lookml" \
+    --data-file "$DATA_JSON" \
+    "${BASE_COMPARE_ARGS[@]}" \
+    --output "$SESSION_DIR/compare_post_refactor.json" >/dev/null
+fi
+
 if [[ -d "$SESSION_DIR/lookml" && ! -f "$SESSION_DIR/snapshot_check.json" ]]; then
   lkr parse lookml snapshot --path "$SESSION_DIR/lookml" --allow-additions --format json --output "$SESSION_DIR/snapshot_check.json" || true
 fi

@@ -30,6 +30,7 @@ from lkr.parse.sql import (
 )
 from lkr.parse.sql_to_lookml import (
     SqlToLookmlResult,
+    check_sql_lookml_compare,
     compact_sql_to_lookml,
     parse_sql_to_lookml,
 )
@@ -671,12 +672,36 @@ def sql_lookml_compare_command(
             help="Omit duplicate per-field cross-references, 0-indexed positions, and empty defaults",
         ),
     ] = False,
+    check: Annotated[
+        bool,
+        typer.Option(
+            "--check",
+            help="Exit non-zero on missing Quick Start match, target Explore fan/chasm traps, missing aggregate measures, or incomplete Bronze foundation",
+        ),
+    ] = False,
+    data_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-file",
+            exists=True,
+            help="Optional workflow data.json or inline_queries.json to verify Quick Start alignment against inline_query",
+        ),
+    ] = None,
+    base_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--base-path",
+            exists=True,
+            help="Optional baseline LookML directory to identify newly added Bronze views in --check",
+        ),
+    ] = None,
     manifest: ManifestOpt = None,
     constant: ConstantOpt = None,
 ) -> SqlToLookmlResult:
     """Compare and map SQL queries (--sql / --sql-file) to LookML views and fields (--path / --lookml-file / --lookml) with file and line numbers."""
     _validate_sql_args(sql, sql_file, "--sql-file")
     _validate_lookml_args(path, lookml_file, lookml, "--lookml-file", manifest=manifest)
+    consts = _parse_constant_overrides(constant)
     try:
         result = parse_sql_to_lookml(
             sql=sql,
@@ -693,11 +718,12 @@ def sql_lookml_compare_command(
             lkml_schema=lkml_schema,
             offline=offline,
             manifest=manifest,
-            constants=_parse_constant_overrides(constant),
+            constants=consts,
         )
     except ValueError as e:
         logger.error(str(e))
         raise typer.Exit(1)
+
     def _dump_compact(v: object, ind: int = 0) -> str:
         pad = " " * (ind + 1)
         if isinstance(v, dict) and any(isinstance(x, dict) or (isinstance(x, (list, tuple)) and any(isinstance(i, dict) for i in x)) for x in v.values()):
@@ -712,6 +738,21 @@ def sql_lookml_compare_command(
         else result.model_dump_json(indent=2, by_alias=True, exclude_none=True)
     )
     _write_or_echo(payload, output)
+    if check:
+        check_errors = check_sql_lookml_compare(
+            result,
+            path=path,
+            lookml_file=lookml_file,
+            lookml=lookml,
+            manifest=manifest,
+            constants=consts,
+            data_file=data_file,
+            base_path=base_path,
+        )
+        if check_errors:
+            for msg in check_errors:
+                logger.error(msg)
+            raise typer.Exit(1)
     return result
 
 

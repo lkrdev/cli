@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -547,5 +548,188 @@ def test_join_analysis_and_usages_resolve_extended_explore_and_join_sql() -> Non
         == "((${orders.user_id} = ${users.id}) AND ${users.deleted_at} IS NULL) AND ${users.verified} = TRUE"
     )
     assert usages_by_prop["join.sql_on"].line == 24
+
+
+def test_sql_lookml_compare_check_gate_and_ojof_exemption(tmp_path: Path) -> None:
+    from lkr.parse.sql_to_lookml import check_sql_lookml_compare
+
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    lkml_dir = tmp_path / "lookml"
+    (lkml_dir / "bronze" / "explores").mkdir(parents=True)
+    (lkml_dir / "gold" / "explores").mkdir(parents=True)
+    (lkml_dir / "tests" / "bronze").mkdir(parents=True)
+
+    (lkml_dir / "m.model.lkml").write_text(
+        'connection: "bq"\n'
+        'include: "/bronze/**/*.view.lkml"\n'
+        'include: "/bronze/explores/**/*.explore.lkml"\n'
+        'include: "/gold/**/*.view.lkml"\n'
+        'include: "/gold/explores/**/*.explore.lkml"\n'
+        'include: "/tests/**/*.test.lkml"\n'
+    )
+    (lkml_dir / "bronze" / "orders.view.lkml").write_text(
+        "view: orders {\n"
+        "  sql_table_name: `p.d.orders` ;;\n"
+        "  dimension: id { primary_key: yes type: number sql: ${TABLE}.id ;; }\n"
+        "  dimension: status { type: string sql: ${TABLE}.status ;; }\n"
+        "  dimension: sale_price { type: number sql: ${TABLE}.sale_price ;; }\n"
+        "  measure: total_revenue { type: sum sql: ${sale_price} ;; }\n"
+        "  measure: count { type: count }\n"
+        "}\n"
+    )
+    (lkml_dir / "bronze" / "explores" / "orders.explore.lkml").write_text(
+        'include: "/bronze/orders.view.lkml"\n'
+        "explore: orders {\n"
+        "  view_name: orders\n"
+        "  query: status_rev {\n"
+        "    dimensions: [orders.status]\n"
+        "    measures: [orders.total_revenue]\n"
+        '    filters: [orders.status: "-Cancelled"]\n'
+        "    sorts: [orders.total_revenue: desc]\n"
+        "    limit: 10\n"
+        "  }\n"
+        "}\n"
+    )
+    (lkml_dir / "tests" / "bronze" / "orders.test.lkml").write_text(
+        'include: "/bronze/explores/orders.explore.lkml"\n'
+        "test: orders_smoke {\n"
+        "  explore_source: orders { column: count { field: orders.count } }\n"
+        "  assert: ok { expression: ${orders.count} >= 0 ;; }\n"
+        "}\n"
+    )
+
+    sql_file = tmp_path / "input.sql"
+    sql_file.write_text(
+        "SELECT status, SUM(sale_price) AS rev FROM `p.d.orders` WHERE status != 'Cancelled' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;"
+    )
+    data_file = tmp_path / "data.json"
+    valid_iq = {
+        "model": "m",
+        "view": "orders",
+        "fields": ["orders.status", "orders.total_revenue"],
+        "filters": {"orders.status": "-Cancelled"},
+        "sorts": ["orders.total_revenue desc", "pct_share desc"],
+        "limit": "10",
+        "dynamic_fields": json.dumps([{"table_calculation": "pct_share", "expression": "${orders.total_revenue} / sum(${orders.total_revenue})"}]),
+    }
+    data_file.write_text(json.dumps({"queries": [{"query_index": 0, "inline_query": valid_iq}]}))
+
+    # 1. Valid project passes --check (with --data-file + --base-path)
+    ok_cli = runner.invoke(
+        app,
+        [
+            "parse",
+            "sql-lookml-compare",
+            "--offline",
+            "--compact",
+            "--check",
+            "--sql-file",
+            str(sql_file),
+            "--path",
+            str(lkml_dir),
+            "--data-file",
+            str(data_file),
+            "--base-path",
+            str(base_dir),
+        ],
+    )
+    assert ok_cli.exit_code == 0, ok_cli.output
+
+    # 2. Quick Start drift (inline_query patched without updating Quick Start query:) -> exits non-zero
+    drifted_data = tmp_path / "drifted.json"
+    drifted_data.write_text(
+        json.dumps({"queries": [{"query_index": 0, "inline_query": {**valid_iq, "limit": "25"}}]})
+    )
+    bad_qs = runner.invoke(
+        app,
+        [
+            "parse",
+            "sql-lookml-compare",
+            "--offline",
+            "--compact",
+            "--check",
+            "--sql-file",
+            str(sql_file),
+            "--path",
+            str(lkml_dir),
+            "--data-file",
+            str(drifted_data),
+        ],
+    )
+    assert bad_qs.exit_code == 1
+
+    # 3. Missing tests/bronze/orders.test.lkml on newly added Bronze view -> exits non-zero
+    (lkml_dir / "tests" / "bronze" / "orders.test.lkml").unlink()
+    bad_bronze = runner.invoke(
+        app,
+        [
+            "parse",
+            "sql-lookml-compare",
+            "--offline",
+            "--compact",
+            "--check",
+            "--sql-file",
+            str(sql_file),
+            "--path",
+            str(lkml_dir),
+            "--data-file",
+            str(data_file),
+            "--base-path",
+            str(base_dir),
+        ],
+    )
+    assert bad_bronze.exit_code == 1
+
+    # 4. Comma-join multi-fanout (pq.joins == []) fails with fan_trap & 0-measure errors, while 3-table OJOF ON FALSE passes
+    fan_lkml = """
+    model: m {
+      explore: bad_gold {
+        view_name: w
+        join: d1 { from: date_dim type: left_outer relationship: one_to_many sql_on: ${w.wk} = ${d1.wk} ;; }
+        join: d2 { from: date_dim type: left_outer relationship: many_to_many sql_on: ${w.wk} = ${d2.wk} ;; }
+        query: q { dimensions: [w.wk, d1.ratio] }
+      }
+      view: w { sql_table_name: p.d.w ;; dimension: wk { primary_key: yes sql: ${TABLE}.wk ;; } }
+      view: date_dim {
+        sql_table_name: p.d.date_dim ;;
+        dimension: wk { sql: ${TABLE}.wk ;; }
+        dimension: ratio { type: number sql: ${TABLE}.sales ;; }
+      }
+    }
+    """
+    comma_sql = "SELECT w.wk, SUM(d1.sales) FROM p.d.w w, p.d.date_dim d1 WHERE w.wk = d1.wk GROUP BY 1"
+    fan_res = parse_sql_to_lookml(sql=comma_sql, lookml=fan_lkml, offline=True)
+    fan_errs = check_sql_lookml_compare(fan_res, lookml=fan_lkml)
+    assert any("fan_trap" in e for e in fan_errs)
+    assert any("chasm_trap" in e for e in fan_errs)
+    assert any("zero LookML measures" in e for e in fan_errs)
+
+    ojof_lkml = """
+    model: m {
+      explore: multi_fact {
+        view_name: spine
+        join: orders { type: full_outer relationship: many_to_many sql_on: FALSE ;; }
+        join: targets { type: full_outer relationship: many_to_many sql_on: FALSE ;; }
+        query: q { dimensions: [orders.country] measures: [orders.total_rev, targets.total_target] }
+      }
+      view: spine { derived_table: { sql: SELECT 0 AS pk ;; } dimension: pk { primary_key: yes hidden: yes sql: ${TABLE}.pk ;; } }
+      view: orders {
+        sql_table_name: p.d.orders ;;
+        dimension: id { primary_key: yes sql: ${TABLE}.id ;; }
+        dimension: country { sql: ${TABLE}.country ;; }
+        measure: total_rev { type: sum sql: ${TABLE}.rev ;; }
+      }
+      view: targets {
+        sql_table_name: p.d.targets ;;
+        dimension: id { primary_key: yes sql: ${TABLE}.id ;; }
+        measure: total_target { type: sum sql: ${TABLE}.target ;; }
+      }
+    }
+    """
+    ojof_sql = "SELECT o.country, SUM(o.rev), SUM(t.target) FROM p.d.orders o FULL OUTER JOIN p.d.targets t ON o.country = t.country GROUP BY 1"
+    ojof_res = parse_sql_to_lookml(sql=ojof_sql, lookml=ojof_lkml, offline=True)
+    assert check_sql_lookml_compare(ojof_res, lookml=ojof_lkml) == []
+
 
 
