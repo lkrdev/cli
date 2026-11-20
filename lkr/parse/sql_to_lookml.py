@@ -3910,7 +3910,7 @@ def _quick_start_matches_iq(
                         out_s.append((_qualify_field_ref(ks, base_alias).lower(), str(v or "asc").strip().lower()))
             elif isinstance(item, str) and item.strip():
                 parts = item.replace(":", " ").split()
-                if parts[0].lower() not in skip:
+                if parts and parts[0].lower() not in skip:
                     d_ref = parts[1].lower() if len(parts) > 1 and parts[1].lower() in ("asc", "desc") else "asc"
                     out_s.append((_qualify_field_ref(parts[0], base_alias).lower(), d_ref))
         return out_s
@@ -3964,16 +3964,22 @@ def check_sql_lookml_compare(
 
     iq_by_idx: dict[int, dict[str, object]] = {}
     gen_bronze: set[str] = set()
-    if data_file is not None and isinstance(raw_data := json.loads(Path(data_file).read_text(encoding="utf-8")), dict):
-        if isinstance(q_list := raw_data.get("queries"), list):
-            for idx, item in enumerate(q_list):
-                if isinstance(item, dict) and isinstance(iq_obj := item.get("inline_query"), dict):
-                    q_i = item.get("query_index")
-                    iq_by_idx[int(q_i) if isinstance(q_i, int) else idx] = iq_obj
-        else:
-            iq_by_idx = {int(str(k)): v for k, v in raw_data.items() if str(k).isdigit() and isinstance(v, dict)}
-        if isinstance(gbs := raw_data.get("generated_bronze_files"), list):
-            gen_bronze = {str(gf).lstrip("./") for gf in gbs}
+    if data_file is not None:
+        try:
+            raw_data: object = json.loads(Path(data_file).read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"Failed to parse data-file JSON: {e}")
+            raw_data = None
+        if isinstance(raw_data, dict):
+            if isinstance(q_list := raw_data.get("queries"), list):
+                for idx, item in enumerate(q_list):
+                    if isinstance(item, dict) and isinstance(iq_obj := item.get("inline_query"), dict):
+                        q_i = item.get("query_index")
+                        iq_by_idx[int(q_i) if isinstance(q_i, int) else idx] = iq_obj
+            else:
+                iq_by_idx = {int(str(k)): v for k, v in raw_data.items() if str(k).isdigit() and isinstance(v, dict)}
+            if isinstance(gbs := raw_data.get("generated_bronze_files"), list):
+                gen_bronze = {str(gf).lstrip("./") for gf in gbs}
 
     c_queries = compact_sql_to_lookml(result).get("queries") or []
     all_modeled_tables = {

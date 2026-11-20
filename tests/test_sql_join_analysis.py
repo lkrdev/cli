@@ -731,5 +731,17 @@ def test_sql_lookml_compare_check_gate_and_ojof_exemption(tmp_path: Path) -> Non
     ojof_res = parse_sql_to_lookml(sql=ojof_sql, lookml=ojof_lkml, offline=True)
     assert check_sql_lookml_compare(ojof_res, lookml=ojof_lkml) == []
 
+    # 5. Malformed data-file JSON & colon-only sort strings report errors cleanly without crashing
+    bad_json = tmp_path / "bad.json"
+    bad_json.write_text("{not_json", encoding="utf-8")
+    bad_json_errs = check_sql_lookml_compare(ojof_res, lookml=ojof_lkml, data_file=bad_json)
+    assert any("Failed to parse data-file JSON" in e for e in bad_json_errs)
+    colon_sort_json = tmp_path / "colon_sort.json"
+    colon_sort_json.write_text(
+        json.dumps({"0": {"model": "m", "view": "multi_fact", "fields": ["orders.country"], "sorts": [":"]}}),
+        encoding="utf-8",
+    )
+    assert check_sql_lookml_compare(ojof_res, lookml=ojof_lkml, data_file=colon_sort_json) != []
+
 
 
