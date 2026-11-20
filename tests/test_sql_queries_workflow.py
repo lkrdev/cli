@@ -31,6 +31,7 @@ class _MontyValidationError(TypedDict, total=False):
 class _MontyResult(TypedDict, total=False):
     passed: bool
     committed: bool
+    deployed: bool
     all_queries_matched: bool
     generated_bronze_files: list[str]
     queries: list[_MontyQueryResult]
@@ -38,6 +39,9 @@ class _MontyResult(TypedDict, total=False):
     validation_errors: list[_MontyValidationError]
     test_query_results: dict[str, object]
     production_ref: str
+    model_name: str
+    model_file: str
+    connection_name: str
 
 
 def _run_monty(
@@ -553,8 +557,18 @@ def test_setup_repo_skip_preflight_and_opt_in_secrets_and_preflight_fast_path(tm
         (work_dir / ".agents" / "skills" / s).mkdir(parents=True, exist_ok=True)
         (work_dir / ".agents" / "skills" / s / "SKILL.md").write_text("", encoding="utf-8")
 
-    subprocess.run(["bash", str(SCRIPTS_DIR / "setup_repo.sh")], cwd=work_dir, env=env, check=True)
-    assert "gh secret" not in spy_log.read_text(encoding="utf-8")
+    res_no_sync = subprocess.run(
+        ["bash", str(SCRIPTS_DIR / "setup_repo.sh")],
+        cwd=work_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    spy_no_sync = spy_log.read_text(encoding="utf-8")
+    assert "gh secret set" not in spy_no_sync
+    assert "gh secret list" in spy_no_sync
+    assert "Warning: Missing GitHub Actions secrets/variables" in res_no_sync.stderr
     installed_wf = (work_dir / ".github" / "workflows" / "lookml-pr-checks.yml").read_text(encoding="utf-8")
     assert installed_wf == (SCRIPTS_DIR.parent / "examples" / "lookml-pr-checks.yml").read_text(encoding="utf-8")
 
@@ -716,7 +730,10 @@ def test_validate_and_commit_branch_checks_out_pr_branch_and_workflow_serializes
     yaml_mod = importlib.import_module("yaml")
     wf = yaml_mod.safe_load(wf_yml)
     jobs = wf["jobs"]
-    assert list(jobs) == ["snapshots", "validator", "data-tests", "query-parity"]
+    assert list(jobs) == ["snapshots", "validator", "data-tests", "query-parity", "deploy-production"]
+    assert jobs["snapshots"]["if"] == "github.event_name != 'push'"
+    assert jobs["validator"]["if"] == "github.event_name != 'push'"
+    assert "github.event_name == 'push'" in jobs["deploy-production"]["if"]
     assert "LOOKERSDK_" not in json.dumps(jobs["snapshots"])
     assert "needs" not in jobs["snapshots"]
     assert "needs" not in jobs["validator"]
@@ -1956,5 +1973,116 @@ def test_pre_gate_rejects_tpcds_q2_false_positives_and_aligns_unaliased_round() 
         },
     )
     assert res_dedup_ok["passed"] is True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX bash script test")
+def test_models_subdir_prod_deploy_and_query_pr_titles(tmp_path: Path) -> None:
+    from looker_sdk.error import SDKError
+
+    # 1. init_branch.py discovers models/tpcds.model.lkml in a subdirectory
+    res_init = _run_monty(
+        SCRIPTS_DIR / "init_branch.py",
+        {"project_id": "tpcds-proj", "ts_utc": "20261120_050000_000"},
+        {
+            "me": lambda: {"id": "7"},
+            "project": lambda **_kw: {"git_production_branch_name": "main", "git_remote_url": "git@github.com:o/r.git"},
+            "reset_project_to_production": lambda **_kw: None,
+            "create_developer_copy": lambda **_kw: None,
+            "find_git_branch": lambda **_kw: {"remote_ref": "sha_main"},
+            "git_branch": lambda **_kw: {"ref": "sha_main"},
+            "create_git_branch": lambda **_kw: {},
+            "all_project_files": lambda **_kw: [
+                {"path": "models/tpcds.model.lkml"},
+                {"path": "bronze/item.view.lkml"},
+            ],
+            "get_file_content": lambda file_path, **_kw: (
+                'connection: "bq_tpcds"\n' if file_path == "models/tpcds.model.lkml" else ""
+            ),
+        },
+    )
+    assert res_init["model_name"] == "tpcds"
+    assert res_init["model_file"] == "models/tpcds.model.lkml"
+    assert res_init["connection_name"] == "bq_tpcds"
+
+    # 2. setup_repo.sh updates models/tpcds.model.lkml in-place without creating a duplicate root .model.lkml
+    lookml_dir = tmp_path / "lookml"
+    (lookml_dir / "models").mkdir(parents=True)
+    (lookml_dir / "bronze").mkdir(parents=True)
+    (lookml_dir / "bronze" / "item.view.lkml").write_text("view: item {}", encoding="utf-8")
+    sub_model = lookml_dir / "models" / "tpcds.model.lkml"
+    sub_model.write_text('connection: "bq_tpcds"\n', encoding="utf-8")
+    subprocess.run(
+        ["bash", str(SCRIPTS_DIR / "setup_repo.sh"), "--skip-preflight"],
+        env={**os.environ, "LOOKML_DIR": str(lookml_dir), "MODEL_NAME": "tpcds", "CONNECTION_NAME": "bq_tpcds"},
+        check=True,
+    )
+    assert not (lookml_dir / "tpcds.model.lkml").exists()
+    assert 'include: "/bronze/**/*.view.lkml"' in sub_model.read_text(encoding="utf-8")
+
+    # 3. validate_and_commit_branch.py deploy_production="true" calls deploy_ref_to_production & verifies ref == remote_ref
+    dep_calls: list[tuple[str, dict[str, object]]] = []
+    res_dep_ok = _run_monty(
+        SCRIPTS_DIR / "validate_and_commit_branch.py",
+        {"project_id": "tpcds-proj", "branch_name": "main", "deploy_production": "true"},
+        {
+            "project": lambda **_kw: {"git_production_branch_name": "main"},
+            "deploy_ref_to_production": lambda **kw: dep_calls.append(("deploy_ref", kw)) or {},
+            "find_git_branch": lambda **_kw: {"ref": "sha_merged", "remote_ref": "sha_merged"},
+        },
+    )
+    assert res_dep_ok["passed"] is True and res_dep_ok["deployed"] is True
+    assert dep_calls == [("deploy_ref", {"project_id": "tpcds-proj", "branch": "main"})]
+
+    # Fallback when deploy_ref_to_production raises SDKError + failure when ref != remote_ref
+    fb_calls: list[str] = []
+
+    def fail_deploy_ref(**_kw: object) -> object:
+        raise SDKError("unsupported")
+
+    res_dep_stale = _run_monty(
+        SCRIPTS_DIR / "validate_and_commit_branch.py",
+        {"project_id": "tpcds-proj", "deploy_production": "true"},
+        {
+            "project": lambda **_kw: {"git_production_branch_name": "main"},
+            "deploy_ref_to_production": fail_deploy_ref,
+            "reset_project_to_remote": lambda **_kw: fb_calls.append("reset_remote"),
+            "reset_project_to_production": lambda **_kw: fb_calls.append("reset_prod"),
+            "update_git_branch": lambda **_kw: fb_calls.append("update_branch"),
+            "deploy_to_production": lambda **_kw: fb_calls.append("deploy_prod"),
+            "find_git_branch": lambda **_kw: {"ref": "sha_old", "remote_ref": "sha_merged"},
+        },
+    )
+    assert res_dep_stale["passed"] is False and res_dep_stale["deployed"] is False
+    assert "reset_remote" in fb_calls and "deploy_prod" in fb_calls
+
+    # 4. create_github_pr.sh builds query-aware PR titles from sql_files / query_label
+    sdir = tmp_path / "pr_run"
+    sdir.mkdir()
+    (sdir / "snapshot_check.json").write_text('{"requires_review": false}', encoding="utf-8")
+    (sdir / "data.json").write_text(
+        json.dumps({
+            "run_id": "20261120_050000_000_7",
+            "git_remote_url": "o/r",
+            "branch_name": "b1",
+            "sql_files": ["queries/query2.sql", "queries/query4.sql"],
+            "queries": [],
+        }),
+        encoding="utf-8",
+    )
+    gh_spy = tmp_path / "gh"
+    gh_spy.write_text(
+        "#!/usr/bin/env python3\nimport pathlib, sys\na = sys.argv[1:]\n"
+        "if a[1] == 'create':\n"
+        "    pathlib.Path(sys.argv[0] + '.title').write_text(a[a.index('--title') + 1])\n"
+        "    print('https://github.com/o/r/pull/101')\n",
+        encoding="utf-8",
+    )
+    gh_spy.chmod(0o755)
+    env_pr = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "GH_TOKEN": "tok"}
+    subprocess.check_output(["bash", str(SCRIPTS_DIR / "create_github_pr.sh"), str(sdir)], env=env_pr, text=True)
+    assert Path(f"{gh_spy}.title").read_text(encoding="utf-8") == (
+        "feat(lookml): refactor query2, query4 (20261120_050000_000_7)"
+    )
+
 
 

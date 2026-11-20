@@ -4803,6 +4803,151 @@ def test_sql_lookml_compare_extended_derived_table_and_sql_table_name() -> None:
     assert "proj.raw.orders" in {t.table for t in db_cmp.tables}
 
 
+def test_view_schema_collision_scd2_pk_and_cross_ndt_ratio_validation() -> None:
+    from typer.testing import CliRunner
+
+    from lkr.main import app
+    from lkr.parse.lookml_to_api import parse_lookml_to_api
+
+    bad_lkml = """
+    connection: "bq"
+    view: date_dim {
+      sql_table_name: `p.ds.date_dim` ;;
+      dimension: d_date_sk { primary_key: yes type: number sql: ${TABLE}.d_date_sk ;; }
+      dimension: d_year { type: number sql: ${TABLE}.d_year ;; }
+      dimension_group: d {
+        type: time
+        timeframes: [raw, date, year]
+        sql: ${TABLE}.d_date ;;
+      }
+    }
+    view: item {
+      sql_table_name: `p.ds.item` ;;
+      dimension: i_item_id { primary_key: yes type: string sql: ${TABLE}.i_item_id ;; }
+      dimension: i_item_sk { primary_key: yes type: number sql: ${TABLE}.i_item_sk ;; }
+      dimension: i_current_price { type: number sql: ${TABLE}.i_current_price ;; }
+      dimension: i_wholesale_cost { type: number sql: ${TABLE}.i_wholesale_cost ;; }
+      dimension: bad_sum_dim { type: number sql: SUM(${i_current_price}) ;; }
+    }
+    view: ndt_curr {
+      derived_table: { sql: SELECT 1 AS item_sk, 100.0 AS sales ;; }
+      dimension: item_sk { primary_key: yes type: number sql: ${TABLE}.item_sk ;; }
+      dimension: sales { type: number sql: ${TABLE}.sales ;; }
+    }
+    view: ndt_prev {
+      derived_table: { sql: SELECT 1 AS item_sk, 80.0 AS sales ;; }
+      dimension: item_sk { primary_key: yes type: number sql: ${TABLE}.item_sk ;; }
+      dimension: sales { type: number sql: ${TABLE}.sales ;; }
+    }
+    view: yoy_fields {
+      dimension: yoy_ratio {
+        type: number
+        sql: ${ndt_curr.sales} / NULLIF(${ndt_prev.sales}, 0) ;;
+      }
+      dimension: cross_phys_ratio {
+        type: number
+        sql: SAFE_DIVIDE(${item.i_current_price}, ${date_dim.d_year}) ;;
+      }
+    }
+    explore: item_yoy {
+      view_name: item
+      join: date_dim { sql_on: ${item.i_item_sk} = ${date_dim.d_date_sk} ;; relationship: many_to_one }
+      join: ndt_curr { sql_on: ${item.i_item_sk} = ${ndt_curr.item_sk} ;; relationship: one_to_one }
+      join: ndt_prev { sql_on: ${item.i_item_sk} = ${ndt_prev.item_sk} ;; relationship: one_to_one }
+      join: yoy_fields { sql: ;; relationship: one_to_one }
+    }
+    """
+    res_bad = parse_lookml_to_api(lookml=bad_lkml)
+    bad_errs = res_bad.lookml_model_explores["inline::item_yoy"].errors or []
+    err_types = {str(e["type"]) for e in bad_errs}
+    assert {
+        "field_name_collision",
+        "multiple_primary_keys",
+        "scd2_natural_key_primary_key",
+        "aggregate_in_dimension",
+        "cross_view_or_ndt_ratio_dimension",
+    } <= err_types
+    ratio_fields = {
+        str(e["field"])
+        for e in bad_errs
+        if e["type"] == "cross_view_or_ndt_ratio_dimension"
+    }
+    assert ratio_fields == {"yoy_fields.yoy_ratio", "yoy_fields.cross_phys_ratio"}
+
+    cli_bad = CliRunner().invoke(app, ["parse", "lookml-to-api", "--lookml", bad_lkml, "--validate"])
+    assert cli_bad.exit_code == 1
+
+    good_lkml = """
+    connection: "bq"
+    view: date_dim {
+      sql_table_name: `p.ds.date_dim` ;;
+      dimension: d_date_sk { primary_key: yes type: number sql: ${TABLE}.d_date_sk ;; }
+      dimension: d_year { type: number sql: ${TABLE}.d_year ;; }
+      dimension_group: d {
+        type: time
+        timeframes: [raw, date, month]
+        sql: ${TABLE}.d_date ;;
+      }
+    }
+    view: item {
+      sql_table_name: `p.ds.item` ;;
+      dimension: i_item_id { primary_key: no type: string sql: ${TABLE}.i_item_id ;; }
+      dimension: i_item_sk { primary_key: yes type: number sql: ${TABLE}.i_item_sk ;; }
+      dimension: i_current_price { type: number sql: ${TABLE}.i_current_price ;; }
+      dimension: i_wholesale_cost { type: number sql: ${TABLE}.i_wholesale_cost ;; }
+      dimension: row_margin_ratio {
+        type: number
+        sql: (${i_current_price} - ${i_wholesale_cost}) / NULLIF(${i_wholesale_cost}, 0) ;;
+      }
+      measure: total_price { type: sum sql: ${i_current_price} ;; }
+    }
+    view: ndt_curr {
+      derived_table: { sql: SELECT 1 AS item_sk, 100.0 AS sales, 10.0 AS returns ;; }
+      dimension: item_sk { primary_key: yes type: number sql: ${TABLE}.item_sk ;; }
+      dimension: sales { type: number sql: ${TABLE}.sales ;; }
+      dimension: returns { type: number sql: ${TABLE}.returns ;; }
+      dimension: return_rate_helper {
+        hidden: yes
+        type: number
+        sql: ${returns} / NULLIF(${sales}, 0) ;;
+      }
+      dimension: sales_dollars {
+        type: number
+        sql: ${sales} / 100.0 ;;
+      }
+      measure: total_sales { type: sum sql: ${sales} ;; }
+      measure: avg_return_rate { type: average sql: ${return_rate_helper} ;; }
+    }
+    view: ndt_prev {
+      derived_table: { sql: SELECT 1 AS item_sk, 80.0 AS sales ;; }
+      dimension: item_sk { primary_key: yes type: number sql: ${TABLE}.item_sk ;; }
+      dimension: sales { type: number sql: ${TABLE}.sales ;; }
+      measure: total_sales { type: sum sql: ${sales} ;; }
+    }
+    view: yoy_fields {
+      dimension: hidden_phys_helper {
+        hidden: yes
+        type: number
+        sql: ${item.i_current_price} / NULLIF(${date_dim.d_year}, 0) ;;
+      }
+      measure: yoy_ratio {
+        type: number
+        sql: ${ndt_curr.total_sales} / NULLIF(${ndt_prev.total_sales}, 0) ;;
+        tags: ["non_additive"]
+      }
+    }
+    explore: item_yoy {
+      view_name: item
+      join: date_dim { sql_on: ${item.i_item_sk} = ${date_dim.d_date_sk} ;; relationship: many_to_one }
+      join: ndt_curr { sql_on: ${item.i_item_sk} = ${ndt_curr.item_sk} ;; relationship: one_to_one }
+      join: ndt_prev { sql_on: ${item.i_item_sk} = ${ndt_prev.item_sk} ;; relationship: one_to_one }
+      join: yoy_fields { sql: ;; relationship: one_to_one }
+    }
+    """
+    res_good = parse_lookml_to_api(lookml=good_lkml)
+    assert not res_good.lookml_model_explores["inline::item_yoy"].errors
+
+
 
 
 

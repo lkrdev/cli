@@ -17,7 +17,7 @@ BASE_BRANCH=$(jq -r '.production_branch // "main"' "$DATA_JSON")
 
 if [[ -d "$SESSION_DIR/lookml" && -f "$SESSION_DIR/input.sql" ]]; then
   BASE_COMPARE_ARGS=()
-  [[ -d "./bronze" || -n "$(compgen -G './*.model.lkml' || true)" ]] && BASE_COMPARE_ARGS=(--base-path ".")
+  [[ -d "./bronze" || -d "./models" || -n "$(compgen -G './*.model.lkml' || compgen -G './models/*.model.lkml' || true)" ]] && BASE_COMPARE_ARGS=(--base-path ".")
   lkr parse sql-lookml-compare --offline --compact --check \
     --sql-file "$SESSION_DIR/input.sql" \
     --path "$SESSION_DIR/lookml" \
@@ -95,8 +95,12 @@ if (( ${#SUMMARY_BODY} > MAX_SUMMARY )); then
 fi
 PR_BODY="$PR_HEADER$SUMMARY_BODY$ARTIFACTS_SECTION"
 
+Q_LABEL=$(jq -r '(.query_label // ((.sql_files // []) | map(tostring | split("/")[-1] | sub("\\.sql$"; "")) | map(select(length > 0)) | if length == 0 then "" elif length <= 3 then join(", ") else "\(.[0]) +\(length - 1) more" end))' "$DATA_JSON")
+PR_TITLE="feat(lookml): SQL-to-LookML refactor ($RUN_ID)"
+[[ -n "$Q_LABEL" && "$Q_LABEL" != "null" ]] && PR_TITLE="feat(lookml): refactor $Q_LABEL ($RUN_ID)"
+
 PR_URL=$(gh pr create --repo "$REPO" --head "$HEAD_BRANCH" --base "$BASE_BRANCH" \
-  --title "feat(lookml): SQL-to-LookML refactor ($RUN_ID)" \
+  --title "$PR_TITLE" \
   --body "$PR_BODY" "${PR_EXTRA_ARGS[@]}")
 
 jq --arg pr "$PR_URL" '. + {pr_url: $pr}' "$DATA_JSON" > "$DATA_JSON.tmp" \

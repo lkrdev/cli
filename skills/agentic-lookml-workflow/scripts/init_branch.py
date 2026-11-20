@@ -45,10 +45,11 @@ def main():
     except Exception:
         files = []
     paths = [str(f.get("path") or f.get("id") or "").lstrip("/") for f in files if isinstance(f, dict)]
-    model_files = sorted(p for p in paths if p.endswith(".model.lkml") and "/" not in p)
+    model_files = sorted((p for p in paths if p.endswith(".model.lkml")), key=lambda p: (p.count("/"), p))
     conn_name = ""
     if model_files:
-        out["model_name"] = model_files[0][:-11]
+        out["model_name"] = model_files[0].rsplit("/", 1)[-1][:-11]
+        out["model_file"] = model_files[0]
         try:
             mc = get_file_content(project_id=project_id, file_path=model_files[0]) or ""  # ty: ignore[unresolved-reference]
         except Exception:

@@ -65,6 +65,31 @@ def main():
         s_tests = str(skip_tests).lower() in ("true", "1", "yes")  # ty: ignore[unresolved-reference]
     except NameError:
         s_tests = False
+    try:
+        d_prod = str(deploy_production).lower() in ("true", "1", "yes")  # ty: ignore[unresolved-reference]
+    except NameError:
+        d_prod = False
+
+    if d_prod:
+        proj = project(project_id=p_id) or {}  # ty: ignore[unresolved-reference]
+        prod_name = b_name or proj.get("git_production_branch_name") or "main"
+        if _try_call(deploy_ref_to_production, project_id=p_id, branch=prod_name) is False:  # ty: ignore[unresolved-reference]
+            _sync_remote_branch(p_id, prod_name, h_sha)
+            _try_call(reset_project_to_remote, project_id=p_id)  # ty: ignore[unresolved-reference]
+            deploy_to_production(project_id=p_id)  # ty: ignore[unresolved-reference]
+        pb = _try_call(find_git_branch, project_id=p_id, branch_name=prod_name) or {}  # ty: ignore[unresolved-reference]
+        ref_sha = pb.get("ref") if isinstance(pb, dict) else None
+        rem_sha = pb.get("remote_ref") if isinstance(pb, dict) else None
+        synced = bool(ref_sha and (not rem_sha or ref_sha == rem_sha))
+        return {
+            "passed": synced,
+            "deployed": synced,
+            "production_branch": prod_name,
+            "ref": ref_sha,
+            "remote_ref": rem_sha,
+            "errors": [] if synced else [{"message": f"Production ref ({ref_sha}) != remote_ref ({rem_sha})"}],
+            "failed_tests": [],
+        }
 
     if b_name and not c_msg:
         _sync_remote_branch(p_id, b_name, h_sha)

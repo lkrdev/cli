@@ -1,6 +1,14 @@
 name: LookML PR Checks
 
 on:
+  push:
+    branches: [main, master]
+    paths:
+      - "**/*.lkml"
+      - "**/*.lookml"
+      - "**/*.snap.json.md"
+      - "**/*.snap.strings.json"
+      - "**/*.snap.json"
   pull_request:
     paths:
       - "**/*.lkml"
@@ -27,6 +35,7 @@ env:
 jobs:
   snapshots:
     name: LookML Snapshots (Additive vs Breaking)
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -150,6 +159,7 @@ jobs:
 
   validator:
     name: LookML Project Validator
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -323,3 +333,54 @@ jobs:
             --var data_json="$(cat /tmp/data_payload.json)")
           echo "$OUT"
           echo "$OUT" | sed -n '/^{/,$p' | jq -e '.passed == true' >/dev/null
+
+  deploy-production:
+    name: Sync Looker Production Workspace
+    if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check Looker Credentials
+        id: creds
+        env:
+          LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
+          LOOKERSDK_CLIENT_ID: ${{ secrets.LOOKERSDK_CLIENT_ID }}
+          LOOKERSDK_CLIENT_SECRET: ${{ secrets.LOOKERSDK_CLIENT_SECRET }}
+          PROJECT_ID: ${{ secrets.LOOKER_PROJECT_NAME || vars.LOOKER_PROJECT_NAME }}
+        run: |
+          if [[ -z "${LOOKERSDK_BASE_URL:-}" || -z "${LOOKERSDK_CLIENT_ID:-}" || -z "${LOOKERSDK_CLIENT_SECRET:-}" || -z "${PROJECT_ID:-}" ]]; then
+            echo "::warning::LOOKERSDK_* or LOOKER_PROJECT_NAME secrets not configured; skipping Looker production sync."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        if: steps.creds.outputs.ready == 'true'
+      - uses: astral-sh/setup-uv@v7
+        if: steps.creds.outputs.ready == 'true'
+        with: { enable-cache: false }
+      - name: Install lkr-dev-cli
+        if: steps.creds.outputs.ready == 'true'
+        run: uv tool install "lkr-dev-cli[tools,code-mode]"
+
+      - name: Deploy Merged Branch to Looker Production
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          LOOKERSDK_BASE_URL: ${{ secrets.LOOKERSDK_BASE_URL }}
+          LOOKERSDK_CLIENT_ID: ${{ secrets.LOOKERSDK_CLIENT_ID }}
+          LOOKERSDK_CLIENT_SECRET: ${{ secrets.LOOKERSDK_CLIENT_SECRET }}
+          PROJECT_ID: ${{ secrets.LOOKER_PROJECT_NAME || vars.LOOKER_PROJECT_NAME }}
+        run: |
+          lkr --base-url="$LOOKERSDK_BASE_URL" --client-id="$LOOKERSDK_CLIENT_ID" --client-secret="$LOOKERSDK_CLIENT_SECRET" --dev auth add-access-token
+          SCRIPT_DIR=".agents/skills/agentic-lookml-workflow/scripts"
+          [[ ! -d "$SCRIPT_DIR" ]] && SCRIPT_DIR="skills/agentic-lookml-workflow/scripts"
+          OUT=$(lkr --base-url="$LOOKERSDK_BASE_URL" --dev code-mode sandbox \
+            --file="$SCRIPT_DIR/validate_and_commit_branch.py" \
+            --var project_id="$PROJECT_ID" \
+            --var branch_name="$BRANCH_NAME" \
+            --var head_sha="$HEAD_SHA" \
+            --var deploy_production="true")
+          echo "$OUT"
+          echo "$OUT" | sed -n '/^{/,$p' | jq -e '.passed == true and .deployed == true' >/dev/null
