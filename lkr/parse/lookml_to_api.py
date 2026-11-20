@@ -1465,6 +1465,157 @@ def _find_raw_sql_aggregate_errors(
     return errors
 
 
+def _find_view_schema_and_ratio_errors(
+    all_dims: list[ApiLookmlModelExploreField],
+    views_by_alias: dict[str, LookmlView],
+) -> list[dict[str, object]]:
+    errors: list[dict[str, object]] = []
+    dt_aliases = {va for va, vo in views_by_alias.items() if getattr(vo, "derived_table", None)}
+    for v_alias, v_obj in sorted(views_by_alias.items()):
+        decls: dict[str, list[str]] = {}
+        dim_map = {
+            dn: do for dn, do in (v_obj.dimension or {}).items() if isinstance(do, LookmlDimension)
+        }
+        for dn in dim_map:
+            decls.setdefault(dn, []).append(f"dimension:{dn}")
+        for dgn, dgo in (v_obj.dimension_group or {}).items():
+            if not isinstance(dgo, LookmlDimensionGroup):
+                continue
+            if (dgo.type or "time") == "duration":
+                for iv in dgo.intervals or DEFAULT_DURATION_INTERVALS:
+                    decls.setdefault(f"{iv.removesuffix('s')}s_{dgn}", []).append(f"dimension_group:{dgn}")
+            else:
+                for tf in dgo.timeframes or DEFAULT_TIMEFRAMES:
+                    decls.setdefault(dgn if tf == "yesno" else f"{dgn}_{tf}", []).append(f"dimension_group:{dgn}")
+        for mn, mo in (v_obj.measure or {}).items():
+            if not isinstance(mo, LookmlMeasure):
+                continue
+            if (mo.type or "string") == "time":
+                for tf in mo.timeframes or DEFAULT_TIMEFRAMES:
+                    decls.setdefault(mn if tf == "yesno" else f"{mn}_{tf}", []).append(f"measure:{mn}")
+            else:
+                decls.setdefault(mn, []).append(f"measure:{mn}")
+        f_map = v_obj.filter if isinstance(v_obj.filter, dict) else {}
+        for fln in f_map:
+            decls.setdefault(str(fln), []).append(f"filter:{fln}")
+        p_map = v_obj.parameter if isinstance(v_obj.parameter, dict) else {}
+        for pn in p_map:
+            decls.setdefault(str(pn), []).append(f"parameter:{pn}")
+        for col_name, srcs in sorted(decls.items()):
+            if len(srcs) > 1:
+                errors.append(
+                    {
+                        "type": "field_name_collision",
+                        "view": v_alias,
+                        "field": f"{v_alias}.{col_name}",
+                        "fields": sorted(srcs),
+                        "message": (
+                            f"Field name collision on view '{v_alias}': '{col_name}' is produced by "
+                            f"{sorted(srcs)}; rename the dimension_group or trim timeframes: [...] in a refinement."
+                        ),
+                    }
+                )
+        pk_dims = sorted(dn for dn, do in dim_map.items() if do.primary_key)
+        if len(pk_dims) > 1:
+            errors.append(
+                {
+                    "type": "multiple_primary_keys",
+                    "view": v_alias,
+                    "field": f"{v_alias}.{pk_dims[0]}",
+                    "fields": [f"{v_alias}.{p}" for p in pk_dims],
+                    "message": (
+                        f"View '{v_alias}' declares primary_key: yes on multiple dimensions {pk_dims}; "
+                        "set primary_key: no on non-unique keys in .refinement.lkml."
+                    ),
+                }
+            )
+        for dn in pk_dims:
+            if dn.endswith("_id") and (sk_cand := f"{dn[:-3]}_sk") in dim_map:
+                errors.append(
+                    {
+                        "type": "scd2_natural_key_primary_key",
+                        "view": v_alias,
+                        "field": f"{v_alias}.{dn}",
+                        "fields": [f"{v_alias}.{dn}", f"{v_alias}.{sk_cand}"],
+                        "message": (
+                            f"View '{v_alias}' marks natural key '{dn}' as primary_key: yes alongside surrogate key "
+                            f"'{sk_cand}'; set primary_key: no on '{dn}' and primary_key: yes on '{sk_cand}' in .refinement.lkml."
+                        ),
+                    }
+                )
+
+    for d in all_dims:
+        if d.dimension_group or d.sql_case:
+            continue
+        v_obj = views_by_alias.get(d.view)
+        raw_d = (v_obj.dimension or {}).get(d.name.split(".", 1)[-1]) if v_obj else None
+        if not isinstance(raw_d, LookmlDimension) or raw_d._sql_defaulted or not raw_d.sql:
+            continue
+        parsed = _parse_lookml_sql_expr(raw_d.sql)
+        if parsed is None:
+            continue
+        top_aggs = sorted(
+            {
+                (ag.name if isinstance(ag, exp.Anonymous) else ag.sql_name()).upper()
+                for ag in parsed.find_all(exp.AggFunc)
+                if not isinstance(ag.parent, exp.Window) and not ag.find_ancestor(exp.Subquery)
+            }
+        )
+        if top_aggs:
+            errors.append(
+                {
+                    "type": "aggregate_in_dimension",
+                    "view": d.view,
+                    "field": d.name,
+                    "functions": top_aggs,
+                    "message": f"Dimension '{d.name}' calls aggregate function(s) {top_aggs} in sql={raw_d.sql.strip()!r}; convert to a measure.",
+                }
+            )
+            continue
+        div_pairs: list[tuple[exp.Expr, exp.Expr]] = []
+        for node in parsed.walk():
+            if node.find_ancestor(exp.Subquery):
+                continue
+            if isinstance(node, exp.Div) and node.this is not None and node.expression is not None:
+                div_pairs.append((node.this, node.expression))
+            elif isinstance(node, exp.Func):
+                fn_u = (node.name if isinstance(node, exp.Anonymous) else node.sql_name()).upper()
+                if fn_u in ("SAFE_DIVIDE", "IEEE_DIVIDE"):
+                    args = list(node.expressions) if node.expressions else [x for x in (node.this, getattr(node, "expression", None)) if isinstance(x, exp.Expr)]
+                    if len(args) >= 2:
+                        div_pairs.append((args[0], args[1]))
+        bad_views: set[str] = set()
+        for num, den in div_pairs:
+            num_cols = list(num.find_all(exp.Column))
+            den_cols = list(den.find_all(exp.Column))
+            if not num_cols or not den_cols:
+                continue
+            pair_views = {
+                d.view if c.table in ("", "__tbl", "__self") else c.table
+                for c in (*num_cols, *den_cols)
+                if c.table != "common_helpers" and c.name.upper() != "SQL_TABLE_NAME"
+            }
+            if len(pair_views & dt_aliases) >= 2 or (
+                not d.hidden and ((pair_views & dt_aliases) or len(pair_views) >= 2)
+            ):
+                bad_views |= pair_views
+        if bad_views:
+            errors.append(
+                {
+                    "type": "cross_view_or_ndt_ratio_dimension",
+                    "view": d.view,
+                    "field": d.name,
+                    "fields": sorted(bad_views),
+                    "message": (
+                        f"Dimension '{d.name}' computes a field-to-field ratio across derived/joined views "
+                        f"{sorted(bad_views)} in sql={raw_d.sql.strip()!r}; model post-aggregation/cross-view ratios "
+                        "as measure: { type: number ... tags: ['non_additive'] } or a table_calculation."
+                    ),
+                }
+            )
+    return errors
+
+
 def _find_invalid_value_format_errors(
     all_dims: list[ApiLookmlModelExploreField],
     all_meas: list[ApiLookmlModelExploreField],
@@ -2293,6 +2444,7 @@ def _build_explore_from_assembled(
     ]
     dup_errors = [
         *join_errors,
+        *_find_view_schema_and_ratio_errors(all_dims, views_by_alias),
         *_find_duplicate_explore_fields(all_dims, all_meas, views_by_alias),
         *_find_raw_sql_aggregate_errors(all_meas),
         *_find_percent_scaling_errors(all_dims, all_meas, views_by_alias),

@@ -823,7 +823,7 @@ $ lkr parse lookml-to-api [OPTIONS]
 * `-m, --model <str>`: Optional LookML model name filter
 * `-e, --explore <str>`: Optional LookML explore name filter
 * `--exclude-hidden`: Exclude hidden explores and hidden fields from output
-* `--validate`: Fail with non-zero exit code on duplicate field logic, alias collisions, unknown value_format_name, &#x27;* 100&#x27; paired with literal &#x27;%&#x27; value_format, raw percentile/stddev/variance SQL in type: number measures, or raw SQL table names in derived_table.sql
+* `--validate`: Fail with non-zero exit code on field/dimension_group name collisions, alias collisions, duplicate field logic, SCD2 *_id vs *_sk PK mismatches, cross-view/NDT ratio dimensions, unknown value_format_name, &#x27;* 100&#x27; paired with literal &#x27;%&#x27; value_format, raw percentile/stddev/variance SQL in type: number measures, or raw SQL table names in derived_table.sql
 * `--base-path <path>`: Baseline LookML directory; --validate ignores pre-existing errors present in --base-path
 * `--manifest <path>`: Optional path to a manifest.lkml file for constant resolution
 * `-C, --constant <str>`: Constant override in KEY=VALUE format (repeatable)

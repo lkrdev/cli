@@ -14,8 +14,14 @@ sync_model_includes() {
     return 0
   fi
 
-  local model_file="$target_dir/${model_name}.model.lkml"
   mkdir -p "$target_dir"
+  local existing_model=""
+  existing_model=$(find "$target_dir" -maxdepth 3 -name "${model_name}.model.lkml" 2>/dev/null | head -n 1 || true)
+  local model_file="${existing_model:-$target_dir/${model_name}.model.lkml}"
+  if [[ -z "$existing_model" && -d "$target_dir/models" ]] && find "$target_dir/models" -maxdepth 1 -name "*.model.lkml" 2>/dev/null | grep -q .; then
+    model_file="$target_dir/models/${model_name}.model.lkml"
+  fi
+  mkdir -p "$(dirname "$model_file")"
   if [[ ! -f "$model_file" ]]; then
     echo "connection: \"$conn_name\"" > "$model_file"
     echo "Created LookML model file: $model_file"
@@ -136,4 +142,17 @@ if [[ " ${*:-} " == *" --sync-secrets "* || "${SYNC_GH_SECRETS:-}" == "true" || 
         || true
     fi
   done
+else
+  EXISTING_SECRETS=$(gh secret list --json name --jq '.[].name' 2>/dev/null || true)
+  EXISTING_VARS=$(gh variable list --json name --jq '.[].name' 2>/dev/null || true)
+  MISSING_CI=()
+  for req in LOOKERSDK_BASE_URL LOOKERSDK_CLIENT_ID LOOKERSDK_CLIENT_SECRET; do
+    echo "$EXISTING_SECRETS" | grep -qxF "$req" || MISSING_CI+=("$req")
+  done
+  if ! echo "$EXISTING_SECRETS" | grep -qxF "LOOKER_PROJECT_NAME" && ! echo "$EXISTING_VARS" | grep -qxF "LOOKER_PROJECT_NAME"; then
+    MISSING_CI+=("LOOKER_PROJECT_NAME")
+  fi
+  if [[ ${#MISSING_CI[@]} -gt 0 ]]; then
+    echo "Warning: Missing GitHub Actions secrets/variables (${MISSING_CI[*]}); live Looker PR checks will fail or skip until set (run setup_repo.sh --sync-secrets)." >&2
+  fi
 fi
