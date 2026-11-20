@@ -1591,7 +1591,7 @@ def _find_view_schema_and_ratio_errors(
             if not num_cols or not den_cols:
                 continue
             pair_views = {
-                d.view if c.table in ("", "__tbl", "__self") else c.table
+                d.view if not c.table or c.table in ("__tbl", "__self") else c.table
                 for c in (*num_cols, *den_cols)
                 if c.table != "common_helpers" and c.name.upper() != "SQL_TABLE_NAME"
             }

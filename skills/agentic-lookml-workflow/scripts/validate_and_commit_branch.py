@@ -75,6 +75,7 @@ def main():
         prod_name = b_name or proj.get("git_production_branch_name") or "main"
         if _try_call(deploy_ref_to_production, project_id=p_id, branch=prod_name) is False:  # ty: ignore[unresolved-reference]
             _sync_remote_branch(p_id, prod_name, h_sha)
+            _try_call(reset_project_to_remote, project_id=p_id)  # ty: ignore[unresolved-reference]
             deploy_to_production(project_id=p_id)  # ty: ignore[unresolved-reference]
         pb = _try_call(find_git_branch, project_id=p_id, branch_name=prod_name) or {}  # ty: ignore[unresolved-reference]
         ref_sha = pb.get("ref") if isinstance(pb, dict) else None

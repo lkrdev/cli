@@ -2053,7 +2053,7 @@ def test_models_subdir_prod_deploy_and_query_pr_titles(tmp_path: Path) -> None:
         },
     )
     assert res_dep_stale["passed"] is False and res_dep_stale["deployed"] is False
-    assert "deploy_prod" in fb_calls
+    assert "reset_remote" in fb_calls and "deploy_prod" in fb_calls
 
     # 4. create_github_pr.sh builds query-aware PR titles from sql_files / query_label
     sdir = tmp_path / "pr_run"
