@@ -529,12 +529,15 @@ class ExtendedLooker40SDK(Looker40SDK):
     ) -> dict[str, object]:
         """Trigger a Looker project deployment webhook (POST /webhooks/projects/{project_id}/deploy)."""
         url = f"{self.auth.settings.base_url.rstrip('/')}/webhooks/projects/{self.encode_path_param(project_id)}/deploy"
-        headers: dict[str, str] = dict((transport_options or {}).get("headers") or {})
+        opts = cast(
+            transport.TransportOptions,
+            dict(transport_options) if transport_options else {},
+        )
+        headers: dict[str, str] = dict(opts.get("headers") or {})
         if secret:
             headers["X-Looker-Deploy-Secret"] = secret
-        opts: transport.TransportOptions = {"headers": headers} if headers else {}
-        if transport_options and "timeout" in transport_options:
-            opts["timeout"] = transport_options["timeout"]
+        if headers:
+            opts["headers"] = headers
         response = self.transport.request(
             transport.HttpMethod.POST,
             url,
