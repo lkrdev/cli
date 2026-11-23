@@ -1,10 +1,11 @@
 # ruff: noqa: F821, BLE001
 """Unified pre-modeling and pre-test verification gate.
 
-Initializes SQL Runner queries from raw_sql, validates the LookML project,
-registers explore queries from inline_queries_json, checks query parity
-against SQL Runner, and optionally executes test_queries_json baseline
-slices in a single code-mode sandbox invocation.
+Initializes SQL Runner queries from raw_sql (when provided), validates the
+LookML project, registers explore queries from inline_queries_json, checks
+SQL-to-LookML parity (or verifies live Explore query execution on
+instruction-only runs without raw_sql), and optionally executes
+test_queries_json baseline slices in a single code-mode sandbox invocation.
 """
 
 import json
@@ -737,6 +738,15 @@ def main():
         val_errors.append({"message": iq_err, "severity": "error"})
         data["validation_errors"] = val_errors
 
+    if not sql_input and payloads and not any(isinstance(q, dict) and q.get("sql_query_id") for q in (data.get("queries") or [])):
+        prev_q = {str(q.get("query_index")): q for q in (data.get("queries") or []) if isinstance(q, dict)}
+        data["queries"] = [
+            prev_q.get(str(k))
+            or {"query_index": int(k) if str(k).isdigit() else str(k), "sql_query_id": None, "parity_status": "pending", "sql": ""}
+            for k, v in payloads.items()
+            if isinstance(v, dict)
+        ]
+
     all_matched = True
     exp_cache: dict[tuple[str, str], object] = {}
     queries_list = data.get("queries") or []
@@ -750,9 +760,8 @@ def main():
         if (
             not force_recheck_flag
             and inline_q
-            and q.get("parity_status") == "matched"
+            and q.get("parity_status") == ("matched" if q.get("sql_query_id") else "verified")
             and q.get("inline_query") == inline_q
-            and q.get("sql_query_id")
             and (q.get("query_id") or q.get("query_slug"))
             and exp_hash
             and q.get("explore_hash") == exp_hash
@@ -768,7 +777,38 @@ def main():
 
         sql_slug = q.get("sql_query_id")
         active_q = q.get("inline_query")
-        if not sql_slug or not (active_q or q.get("query_id")):
+        if not (active_q or q.get("query_id")):
+            continue
+        if not sql_slug:
+            try:
+                raw_v = (
+                    run_inline_query(result_format="json", body=active_q)  # ty: ignore[unresolved-reference]
+                    if active_q
+                    else run_query(query_id=q.get("query_id"), result_format="json")  # ty: ignore[unresolved-reference]
+                )
+                v_rows = json.loads(raw_v) if isinstance(raw_v, str) else raw_v
+                row0 = v_rows[0] if isinstance(v_rows, list) and len(v_rows) == 1 and isinstance(v_rows[0], dict) else {}
+                err_msg = (
+                    str(v_rows.get("message") or v_rows.get("errors") or v_rows)
+                    if isinstance(v_rows, dict)
+                    else str(row0.get("looker_error") or row0.get("errors") or "")
+                    if ("looker_error" in row0 or ("errors" in row0 and len(row0) == 1))
+                    else ""
+                )
+                if err_msg or not isinstance(v_rows, list):
+                    q["parity_status"] = "error"
+                    q["mismatches"] = [err_msg or f"Unexpected response: {raw_v}"]
+                    all_matched = False
+                else:
+                    q["row_count"] = len(v_rows)
+                    q["parity_status"] = "verified"
+                    q["mismatches"] = []
+                    if exp_hash:
+                        q["explore_hash"] = exp_hash
+            except Exception as e:
+                q["parity_status"] = "error"
+                q["mismatches"] = [str(e)]
+                all_matched = False
             continue
         try:
             q.pop("sql_rows", None)

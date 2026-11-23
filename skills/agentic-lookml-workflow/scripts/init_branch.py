@@ -63,7 +63,11 @@ def main():
         raw_parsed = parsed_sql_json  # ty: ignore[unresolved-reference]
     except NameError:
         raw_parsed = None
-    if not raw_parsed or not conn_name:
+    try:
+        raw_specs = table_specs  # ty: ignore[unresolved-reference]
+    except NameError:
+        raw_specs = None
+    if (not raw_parsed and not raw_specs) or not conn_name:
         return out
 
     try:
@@ -80,6 +84,10 @@ def main():
                 sch = f"{cat}.{db}" if (cat and db) else db
                 if tbl and sch and "*" not in tbl and tbl.lower() not in ctes:
                     wanted[(sch, tbl)] = None
+    for spec in str(raw_specs or "").split(","):
+        parts = [s.strip().strip("`\"'") for s in spec.strip().split(".") if s.strip().strip("`\"'")]
+        if len(parts) >= 2 and "*" not in parts[-1]:
+            wanted[(".".join(parts[:-1]), parts[-1])] = None
     existing_bronze = {
         p.rsplit("/", 1)[-1][:-10].lower() for p in paths if p.startswith("bronze/") and p.endswith(".view.lkml")
     }

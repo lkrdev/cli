@@ -18,6 +18,7 @@ on:
       - "**/*.snap.json"
       - "**/data.json"
       - "**/input.sql"
+      - "**/metrics.md"
   pull_request_review:
     types: [submitted]
   workflow_dispatch:
@@ -101,7 +102,7 @@ jobs:
           SQL_FILE=$(find ./data -name "input.sql" 2>/dev/null | head -n 1 || true)
           [[ -n "$SQL_FILE" && -s "$SQL_FILE" ]] && cp "$SQL_FILE" /tmp/compare_input.sql \
             || { [[ -s /tmp/compare_data.json ]] && jq -r '[.queries[]?.sql // empty | select(length > 0)] | join(";\n")' /tmp/compare_data.json > /tmp/compare_input.sql || true; }
-          if [[ -s /tmp/compare_input.sql ]]; then
+          if grep -q '[^[:space:]]' /tmp/compare_input.sql 2>/dev/null; then
             DATA_COMPARE_ARGS=()
             [[ -s /tmp/compare_data.json ]] && DATA_COMPARE_ARGS=(--data-file /tmp/compare_data.json)
             lkr parse sql-lookml-compare --offline --compact --check --sql-file /tmp/compare_input.sql --path "$LOOKML_DIR" "${DATA_COMPARE_ARGS[@]}" "${COMPARE_BASE_ARGS[@]}" >/dev/null

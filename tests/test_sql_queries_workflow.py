@@ -22,6 +22,7 @@ class _MontyQueryResult(TypedDict, total=False):
     sql_runner_url: str
     explore_url: str
     parity_status: str
+    mismatches: list[str]
 
 
 class _MontyValidationError(TypedDict, total=False):
@@ -2083,6 +2084,118 @@ def test_models_subdir_prod_deploy_and_query_pr_titles(tmp_path: Path) -> None:
     assert Path(f"{gh_spy}.title").read_text(encoding="utf-8") == (
         "feat(lookml): refactor query2, query4 (20261120_050000_000_7)"
     )
+
+
+def test_instruction_only_workflow_table_specs_live_explore_verify_and_pr(tmp_path: Path) -> None:
+    gen_calls: list[dict[str, object]] = []
+    res_branch = _run_monty(
+        SCRIPTS_DIR / "init_branch.py",
+        {
+            "project_id": "agentic-thelook",
+            "ts_utc": "20261123_170000_000",
+            "parsed_sql_json": "",
+            "table_specs": "`bigquery-public-data.thelook_ecommerce.orders`, bigquery-public-data.thelook_ecommerce.inventory_items",
+        },
+        {
+            "me": lambda: {"id": "7"},
+            "project": lambda **_kw: {"git_production_branch_name": "main", "git_remote_url": "o/r"},
+            "reset_project_to_production": lambda **_kw: None,
+            "create_developer_copy": lambda **_kw: None,
+            "find_git_branch": lambda **_kw: {"remote_ref": "sha1"},
+            "git_branch": lambda **_kw: {"ref": "sha1"},
+            "create_git_branch": lambda **_kw: {},
+            "all_project_files": lambda **_kw: [
+                {"path": "agentic_thelook.model.lkml"},
+                {"path": "bronze/orders.view.lkml"},
+            ],
+            "get_file_content": lambda **_kw: 'connection: "bq_conn"\n',
+            "create_project_directory": lambda **_kw: None,
+            "generate_lookml_with_new_files": lambda **kw: (
+                gen_calls.append(kw),
+                {"new_files": [{"path": "bronze/inventory_items.view.lkml"}]},
+            )[1],
+        },
+    )
+    assert res_branch["generated_bronze_files"] == ["bronze/inventory_items.view.lkml"]
+    assert gen_calls[0]["body"] == {
+        "tables": [{"schema": "bigquery-public-data.thelook_ecommerce", "table_name": "inventory_items", "base_view": True}]
+    }
+
+    inline_runs: list[str] = []
+    iq_json = json.dumps({"0": {"model": "m", "view": "orders", "fields": ["orders.status", "orders.net_retention"]}})
+    tq_json = json.dumps({
+        "orders_slice": {"model": "m", "view": "orders", "fields": ["orders.net_retention"], "filters": {"orders.created_date": "2024-01-01"}},
+    })
+    res_pg = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {
+            "raw_sql": "",
+            "connection_name": "bq_conn",
+            "data_json": '{"project_id": "p", "run_id": "r_inst"}',
+            "base_url": "https://example.looker.com",
+            "validate": "true",
+            "inline_queries_json": iq_json,
+            "explore_hashes_json": '{"orders": "hash_v1"}',
+            "test_queries_json": tq_json,
+        },
+        {
+            "validate_project": lambda **_kw: {"errors": []},
+            "create_query": lambda body: {"id": "77", "slug": "slug_77"},
+            "run_inline_query": lambda body, **_kw: (
+                inline_runs.append(str(body.get("filters") or "explore")),
+                '[{"orders.net_retention": 0.94}]'
+                if body.get("filters")
+                else '[{"orders.status": "Complete", "orders.net_retention": 0.92}]',
+            )[1],
+        },
+    )
+    assert res_pg["passed"] is True
+    assert res_pg["queries"][0]["parity_status"] == "verified"
+    assert res_pg["queries"][0]["explore_url"] == "https://example.looker.com/x/slug_77"
+    assert res_pg["test_query_results"] == {"orders_slice": [{"orders.net_retention": 0.94}]}
+    assert inline_runs == ["explore", "{'orders.created_date': '2024-01-01'}"]
+
+    inline_runs.clear()
+    res_cached = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {"raw_sql": "", "data_json": json.dumps(res_pg), "inline_queries_json": iq_json, "explore_hashes_json": '{"orders": "hash_v1"}'},
+        {
+            "create_query": lambda body: {"id": "77", "slug": "slug_77"},
+            "run_inline_query": lambda body, **_kw: (inline_runs.append("ran"), "[]")[1],
+        },
+    )
+    assert res_cached["passed"] is True and inline_runs == []
+
+    res_ci_err = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {"data_json": json.dumps(res_pg)},
+        {"run_inline_query": lambda **_kw: '[{"looker_error": "QuickQueryError: column foo not found"}]'},
+    )
+    assert res_ci_err["passed"] is False
+    assert res_ci_err["queries"][0]["parity_status"] == "error"
+    assert "column foo not found" in res_ci_err["queries"][0]["mismatches"][0]
+
+    if os.name != "nt":
+        sdir = tmp_path / "inst_run"
+        sdir.mkdir()
+        (sdir / "metrics.md").write_text("Net retention by order status")
+        (sdir / "schema_context.json").write_text('{"model": "m", "explores": {"orders": {}}}')
+        (sdir / "snapshot_check.json").write_text('{"requires_review": false}')
+        (sdir / "data.json").write_text(json.dumps({**res_pg, "git_remote_url": "o/r", "branch_name": "b_inst"}))
+        gh = tmp_path / "gh"
+        gh.write_text(
+            "#!/usr/bin/env python3\nimport pathlib, sys\na = sys.argv[1:]\n"
+            'pathlib.Path(sys.argv[0] + "." + a[1]).write_text(" ".join(a))\n'
+            'if a[1] == "create": print("https://github.com/o/r/pull/100")\n'
+        )
+        gh.chmod(0o755)
+        env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "GH_TOKEN": "tok"}
+        subprocess.check_output(["bash", str(SCRIPTS_DIR / "create_github_pr.sh"), str(sdir)], env=env, text=True)
+        pr_args = Path(f"{gh}.create").read_text()
+        comment_args = Path(f"{gh}.comment").read_text()
+        assert "feat(lookml): Agentic LookML update (r_inst)" in pr_args
+        assert "[Open Explore](https://example.looker.com/x/slug_77) | verified |" in pr_args
+        assert "LookML Diagnostics" in comment_args and "schema_context.json" in comment_args
 
 
 
