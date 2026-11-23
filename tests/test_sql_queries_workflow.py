@@ -2175,6 +2175,14 @@ def test_instruction_only_workflow_table_specs_live_explore_verify_and_pr(tmp_pa
     assert res_ci_err["queries"][0]["parity_status"] == "error"
     assert "column foo not found" in res_ci_err["queries"][0]["mismatches"][0]
 
+    res_scalar_errors_col = _run_monty(
+        SCRIPTS_DIR / "pre_gate.py",
+        {"data_json": json.dumps(res_pg)},
+        {"run_inline_query": lambda **_kw: '[{"errors": 0}]'},
+    )
+    assert res_scalar_errors_col["passed"] is True
+    assert res_scalar_errors_col["queries"][0]["parity_status"] == "verified"
+
     if os.name != "nt":
         sdir = tmp_path / "inst_run"
         sdir.mkdir()

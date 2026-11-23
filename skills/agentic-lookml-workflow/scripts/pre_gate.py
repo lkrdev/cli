@@ -792,7 +792,7 @@ def main():
                     str(v_rows.get("message") or v_rows.get("errors") or v_rows)
                     if isinstance(v_rows, dict)
                     else str(row0.get("looker_error") or row0.get("errors") or "")
-                    if ("looker_error" in row0 or ("errors" in row0 and len(row0) == 1))
+                    if ("looker_error" in row0 or ("errors" in row0 and len(row0) == 1 and isinstance(row0.get("errors"), (list, dict))))
                     else ""
                 )
                 if err_msg or not isinstance(v_rows, list):
