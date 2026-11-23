@@ -216,12 +216,12 @@ view: users{
 explore: multi_fact {
   # Fact/measure joins
   join: orders {
-    type: full_outer
+    type: outer_join
     relationship: one_to_one
     sql_on: FALSE ;;
   }
   join: users {
-    type: full_outer
+    type: outer_join
     relationship: one_to_one
     fields: [measures*]
     sql_on: FALSE ;;
@@ -245,7 +245,7 @@ explore: multi_fact {
       {% if orders._in_query %} orders.account_id, {% endif %}
       {% if users._in_query %} users.account_id, {% endif %}
       NULL
-    ) ;;
+    )
   }
 }
 ```
