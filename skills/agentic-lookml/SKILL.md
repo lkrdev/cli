@@ -1,20 +1,20 @@
 ---
 name: agentic-lookml
 description: >
-  Unified LookML engineering, SQL-to-LookML refactoring, and Medallion semantic modeling skill (`agentic-lookml`).
-  Combines the 14 SQL-to-LookML pattern playbooks (`lkr parse sql-lookml-compare`, Canonical Looker Query gate,
+  Model-agnostic LookML engineering, SQL-to-LookML refactoring, instruction/BI-spec modeling, and Medallion semantic modeling skill (`agentic-lookml`).
+  Combines the 14 modeling pattern playbooks (`lkr parse sql-lookml-compare`, `lkr schema context`, Canonical Looker Query gate,
   Query-layer Table Calculations and Custom Fields with `matches_filter`, and Bronze/Silver/Gold Medallion architecture)
   with the LookML writing reference skills from `looker-open-source/looker-skills` into a single reference set.
-  Use when authoring LookML models, views, explores, fields, refinements, Liquid, sets, access grants, or data tests,
-  or when refactoring SQL queries into LookML.
+  Use when authoring or scaling LookML models, views, explores, fields, refinements, Liquid, sets, access grants, or data tests
+  from SQL queries, arbitrary user instructions, business metric definitions (`metrics.md`), BI/Tableau formulas, or database schemas.
 ---
 
 # Agentic LookML (`agentic-lookml`)
 
 ## Overview and scope
 
-`agentic-lookml` combines:
-- The 14 SQL-to-LookML pattern playbooks in `references/`, paired with `lkr parse sql-lookml-compare`, the Canonical Looker Query translation gate, Query-layer triage, and the Bronze / Silver / Gold Medallion hierarchy.
+`agentic-lookml` is a **model-agnostic** LookML engineering skill (compatible with any LLM or agent harness via `lkr` CLI + Monty sandbox gates) that combines:
+- Grounding and modeling across **SQL query workloads**, **arbitrary user instructions / `metrics.md` / BI migrations**, and **database schemas**, paired with the 14 pattern playbooks in `references/`, the Canonical Looker Query translation gate, Query-layer triage, and the Bronze / Silver / Gold Medallion hierarchy.
 - The 9 LookML syntax reference sub-skills under [lookml](../lookml/SKILL.md) (`.agents/skills/lookml/sub-skills/*/SKILL.md`).
 
 **Scope boundaries:**
@@ -52,9 +52,12 @@ Standard `sum`/`average`/`min`/`max`/`count_distinct` measures strip outer `ROUN
 - **Filters & expressions:** [looker-filters](../looker-filters/SKILL.md) (single-field `filters:` string syntax, Custom Filters, and SDK filter keys; `type: string` filters only `^`-escape literal `"`, `%`, `_`, `,`, `^`, and leading `-`/space—`()`, `+`, `$`, `.`, `/`, and `&` need no escape; `"after YYYY/MM/DD"` is inclusive `>=` and `"before YYYY/MM/DD"` is exclusive `<`) and [looker-expressions](../looker-expressions/SKILL.md) (Looker expression formulas across post-query Table Calculations and `.test.lkml` `assert:` vs. SQL-pushdown Custom Fields, Custom Filters `filter_expression`, `matches_filter`, and NDT `expression_custom_filter:`). Skip reading both on standard LookML dimensions/measures, date/string `filters:` slices, `dynamic_fields` covered below, and `.test.lkml` equality/row-`index()` assertions—only open them for exotic filter/expression functions.
 - **LookML syntax (`../lookml/`, read-only upstream):** [lookml](../lookml/SKILL.md) (`lookml-model`, `lookml-view`, `lookml-explore`, `lookml-fields`, `lookml-refinements`, `lookml-liquid`, `lookml-ojof`, `lookml-sets`, `lookml-access-grants`, `lookml-tests`). `agentic-lookml` + `references/` are self-contained for views, refinements, explores, Quick Start `query:` blocks, and `.test.lkml`—only open `../lookml/` for specialized parameters (`html:`, `link:`, `access_grant:`, `map_layer:`), and `agentic-lookml` rules (Medallion paths; ephemeral Silver NDTs; no unrequested `drill_fields:` / `set: detail`; no inline `view: +name` refinements in `.explore.lkml`) always supersede `../lookml/`.
 
-## How `lkr parse sql-lookml-compare` drives refactoring
+## Input modes & deterministic grounding
 
-`lkr parse sql-lookml-compare` outputs per-query `parsed_query` ASTs, matched `views`/`fields` (`primary_key`, `timeframes`, `via`, `unmodeled_db_columns`), `explores` & `join_analysis` (`status`, `relationship`, `inferred_relationship`, `safety_warnings`, `precedents`), plus `tests`, `aggregate_tables`, and `explore_queries` (`coverage`).
+Ground LookML edits against the existing repository and warehouse catalog before authoring any LookML, regardless of input source:
+- **SQL query workloads (`1..N` queries; cluster large corpora first via `lkr parse sql-group`):** `lkr parse sql-lookml-compare` outputs per-query `parsed_query` ASTs, matched `views`/`fields` (`primary_key`, `timeframes`, `via`, `unmodeled_db_columns`), `explores` & `join_analysis` (`status`, `relationship`, `inferred_relationship`, `safety_warnings`, `precedents`), plus `tests`, `aggregate_tables`, and `explore_queries` (`coverage`).
+- **Arbitrary user instructions, business definitions (`metrics.md`), or BI/Tableau migrations (no SQL):** Run `lkr schema context -m <model> --path <lookml_dir> --prompt "<instructions>"` offline for BM25-ranked Explores, joins, views, visible dimensions/measures, and `candidate_merge_keys` (plus `lkr parse lookml-database-compare --path <lookml_dir> --validate-columns` when checking `unmodeled_in_lookml` warehouse tables/columns). Map external BI constructs onto the same 14 playbooks and Triage table below (e.g., Tableau `{ FIXED [entity] : AGG(...) }` $\rightarrow$ Playbook `07` Silver entity Rollup NDT; `WINDOW_*` / `LOOKUP` $\rightarrow$ Playbook `08` Table Calculation or NDT `derived_column:`; runtime parameters $\rightarrow$ Playbook `14` Gold `always_filter:`), and verify every new/updated Explore or metric via `inline_queries.json` (`parity_status: "verified"` in `pre_gate.py`).
+- **Database schemas & warehouse ACLs:** Generate or refresh 1:1 `bronze/:table.view.lkml` views via [generate-view-from-table](../generate-view-from-table/SKILL.md) (`lkr tools lookml create --folder bronze`, adding `--bq-security` on BigQuery Service Account connections to mirror IAM, Row Access Policies, Policy Tags, and Dynamic Data Masking into `security/*.refinement.lkml`).
 
 ## Canonical Looker Query translation gate
 

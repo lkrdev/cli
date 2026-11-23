@@ -137,17 +137,26 @@ uvx lkr-dev-cli code-mode sandbox --code="return me()"
 uvx lkr-dev-cli code-mode sandbox --file=./path/to/script.py
 ```
 
-### Agent skill (`lkr-code-mode`)
+For full options, MCP server configuration, and PKCE recovery, see the [Code Mode docs](./codemode.md).
 
-For AI coding agents (Gemini CLI, Claude Code, Cursor, Copilot), this repository includes an installable skill under [skills/lkr-code-mode](./skills/lkr-code-mode) (and [.agents/skills/lkr-code-mode](./.agents/skills/lkr-code-mode)) for running `lkr code-mode sandbox` non-interactively, including auth flags, CLI discovery commands, helper scripts, and Looker SDK recipes.
+## Automating LookML at Scale (Agent Skills)
 
-Install it into your agent environment with `npx skills`:
+This repository includes a model-agnostic suite of open `SKILL.md` skills under [`skills/`](./skills/README.md) (mirrored in [`.agents/skills/`](./.agents/skills)) for automating governed LookML creation at scale with **the LLM and coding-agent harness of your choosing** (Antigravity, Claude Code, Codex, Cursor, GitHub Copilot, or headless CI/ADK pipelines). Deterministic `lkr` CLI and Monty sandbox gates (`lkr parse`, `lkr schema`, `lkr tools lookml`, `lkr code-mode sandbox`) ground the model and verify output across three core workflows:
+
+1. **SQL query workloads at scale (`1..N` queries):** Deduplicate query logs (`lkr parse sql-group`), map SQL ASTs to existing LookML (`lkr parse sql-lookml-compare`), refactor into Medallion `bronze/`/`silver/`/`gold/` LookML ([`agentic-lookml`](./skills/agentic-lookml/SKILL.md) + [`agentic-lookml-workflow`](./skills/agentic-lookml-workflow/SKILL.md)), and enforce row-set parity between SQL Runner and Looker Explore API (`pre_gate.py`).
+2. **Arbitrary user instructions, business specs, & BI migrations:** Ground natural-language prompts, metric/term definitions (`metrics.md`), or BI/Tableau formulas offline via BM25 (`lkr schema context --prompt`) and `lkr parse lookml-database-compare`, model surgical Medallion LookML, and verify live Explore SQL execution (`/x/:id`) + `.test.lkml` assertions.
+3. **Database schemas, curation, & BigQuery governance:** Bootstrap projects ([`lkr-project-helper`](./skills/lkr-project-helper/SKILL.md)), autogenerate 1:1 Bronze views across schemas or Cloud Logging webhooks with BigQuery IAM/RLS/Policy Tag/Dynamic Masking mirroring ([`generate-view-from-table`](./skills/generate-view-from-table/SKILL.md) / `lkr tools lookml create --bq-security`), and curate field metadata ([`lookml-field-curation`](./skills/lookml-field-curation/SKILL.md), [`looker-field-profiler`](./skills/looker-field-profiler/SKILL.md)).
+
+Additive PRs pass automated CI checks without human review bottlenecks via `lkr parse lookml snapshot --allow-additions`, while material changes to existing measures, SQL, tests, connections, or PII/access controls automatically gate on `CODEOWNERS`.
 
 ```bash
+# Install skills into your coding agent with npx skills
+npx skills add lkrdev/cli --skill agentic-lookml-workflow
+npx skills add lkrdev/cli --skill agentic-lookml
 npx skills add lkrdev/cli --skill lkr-code-mode
 ```
 
-For full options, MCP server configuration, and PKCE recovery, see the [Code Mode docs](./codemode.md).
+See the full **[Skills README](./skills/README.md)** for the architecture, verification gates, and complete 10-skill catalog.
 
 ## Parse (`lkr parse`)
 
